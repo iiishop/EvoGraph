@@ -1,0 +1,138 @@
+.project-workspace {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  background: #fff;
+}
+.workspace-header {
+  padding: 23px 30px 0;
+  background: #fff;
+  flex-shrink: 0;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  color: #9aa69f;
+  height: 17px;
+}
+.breadcrumb > span {
+  color: #6d7d74;
+}
+.breadcrumb > .demo-tag {
+  font-size: 9px;
+  border: 1px solid #e4e9e3;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #96a292;
+  margin-left: 2px;
+}
+.breadcrumb > .header-local {
+  margin-left: auto;
+  color: #929f97;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 23px;
+  gap: 15px;
+}
+.title-row h1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.title-tag {
+  font-size: 10px;
+  letter-spacing: 0;
+  border-radius: 4px;
+  background: #f1f5f2;
+  padding: 5px 7px;
+  color: #90a095;
+  font-weight: 400;
+}
+.title-row p {
+  font-size: 11px;
+  color: #96a197;
+  margin-top: 8px;
+}
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+.version-strip {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 19px 0 16px;
+  font-size: 10px;
+  color: #95a097;
+  border-bottom: 1px solid var(--line);
+}
+.version-strip > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.version-strip strong {
+  font-weight: 500;
+  color: #617268;
+}
+.version-strip > i {
+  height: 12px;
+  width: 1px;
+  background: #e5eae6;
+  margin: 0 2px;
+}
+.version-letter {
+  font-family: monospace;
+  width: 15px;
+  height: 15px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 9px;
+}
+.version-letter.target {
+  color: #779381;
+  background: #edf3ee;
+}
+.version-letter.baseline {
+  color: #a6aa8c;
+  background: #f4f4ed;
+}
+.version-strip > .target-progress {
+  margin-left: auto;
+  gap: 8px;
+}
+.progress-track {
+  width: 70px;
+  height: 4px;
+  border-radius: 3px;
+  background: #edf2ee;
+  overflow: hidden;
+}
+.progress-track > span {
+  height: 100%;
+  background: #45a689;
+  display: block;
+}
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 30px 0;
+}
+.planning-region {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+}

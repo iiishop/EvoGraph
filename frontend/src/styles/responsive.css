@@ -1,0 +1,123 @@
+.spinning {
+  animation: spin 1.4s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4dfcf;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+@media (min-width: 1600px) {
+  .sidebar {
+    width: 248px;
+  }
+  .workspace-header {
+    padding: 26px 38px 0;
+  }
+  .workspace-body {
+    padding: 0 38px;
+  }
+  .chat-panel {
+    padding-bottom: 17px;
+  }
+  .chat-messages {
+    max-height: 125px;
+  }
+  .chat-composer textarea {
+    min-height: 66px;
+  }
+  .milestone-node {
+    width: 235px;
+  }
+}
+@media (max-width: 1150px) {
+  .sidebar {
+    width: 200px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .sidebar-footer {
+    margin: 0 -12px;
+    padding-left: 15px;
+  }
+  .brand {
+    gap: 7px;
+  }
+  .brand strong {
+    font-size: 18px;
+  }
+  .sidebar-decoration {
+    display: none;
+  }
+  .workspace-header {
+    padding: 20px 20px 0;
+  }
+  .workspace-body {
+    padding: 0 20px;
+  }
+  .header-local {
+    display: none !important;
+  }
+  .inspector {
+    width: 285px;
+  }
+  .canvas-caption {
+    display: none;
+  }
+  .settings-layout {
+    gap: 20px;
+  }
+  .settings-section-nav {
+    width: 120px;
+  }
+  .view-tabs {
+    gap: 18px;
+  }
+  .prerequisite-label {
+    display: none;
+  }
+}
+@media (max-height: 800px) {
+  .workspace-header {
+    padding-top: 15px;
+  }
+  .title-row {
+    margin-top: 17px;
+  }
+  .version-strip {
+    padding: 13px 0;
+  }
+  .graph-toolbar {
+    height: 44px;
+  }
+  .chat-panel {
+    padding-top: 10px;
+  }
+  .chat-messages {
+    max-height: 64px;
+  }
+  .chat-header {
+    margin-bottom: 9px;
+  }
+  .chat-composer textarea {
+    min-height: 45px;
+  }
+  .chat-panel.expanded .chat-messages {
+    max-height: 160px;
+  }
+}

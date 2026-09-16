@@ -1,0 +1,343 @@
+.inspector {
+  width: 315px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e2e9e0;
+  background: #fff;
+}
+.inspector > header {
+  padding: 12px 13px 0 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.inspector-scroll {
+  overflow: auto;
+  padding: 6px 18px 18px;
+  flex: 1;
+}
+.inspector h2 {
+  font-size: 17px;
+  line-height: 1.6;
+  margin: 1px 0 6px;
+}
+.inspector .intent {
+  font-size: 11px;
+  line-height: 1.9;
+  color: #7c8d7f;
+  margin: 12px 0 16px;
+}
+.inspector section {
+  border-top: 1px solid #edf1ea;
+  padding-top: 14px;
+  margin-top: 14px;
+}
+.inspector h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #738574;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+.inspector h4 > span {
+  margin-left: auto;
+  font-size: 10px;
+  color: #9db09b;
+}
+.scope-path {
+  display: block;
+  background: #f6f8f4;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: #8c9e88;
+  font-size: 10px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+.behavior-item {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #6f816d;
+  border-left: 2px solid #c7ddc7;
+  padding-left: 9px;
+  margin-bottom: 9px;
+}
+.behavior-item small {
+  display: block;
+  font-size: 9px;
+  color: #a0b19b;
+  overflow-wrap: anywhere;
+}
+.dependency-item {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  align-items: flex-start;
+  margin: 7px 0;
+}
+.dependency-item > button {
+  background: #edf5ed;
+  border: 0;
+  border-radius: 4px;
+  color: #65936b;
+  padding: 3px 5px;
+  white-space: nowrap;
+  font-size: 9px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.dependency-item > small {
+  font-size: 10px;
+  color: #99a791;
+  line-height: 1.7;
+}
+.obligation {
+  margin: 6px 0;
+}
+.obligation-toggle {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  border: 0;
+  background: none;
+  width: 100%;
+  padding: 5px 0;
+  font-size: 10px;
+  color: #768b72;
+  text-align: left;
+}
+.check-box {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #cbd7c5;
+  border-radius: 3px;
+  display: grid;
+  place-items: center;
+  color: #358355;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.check-box.checked {
+  background: #e7f4e7;
+  border-color: #a6cfac;
+}
+.obligation-toggle > small {
+  margin-left: auto;
+  font-size: 8px;
+  white-space: nowrap;
+  color: #aab9a2;
+}
+.obligation-edit {
+  padding: 4px 0 7px 20px;
+}
+.obligation-edit textarea {
+  font-size: 10px;
+  margin-bottom: 7px;
+  padding: 7px;
+}
+.obligation-edit > .text-button {
+  margin-left: 7px;
+  font-size: 9px;
+}
+.readiness-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  margin: 8px 0;
+  color: #8d9e86;
+}
+.readiness-row > strong {
+  font-weight: 500;
+  color: #b49a60;
+}
+.blockers {
+  padding-left: 15px;
+  font-size: 10px;
+  color: #a6a081;
+  line-height: 1.9;
+  margin: 9px 0;
+}
+.inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+}
+.inspector-actions > .button {
+  font-size: 10px;
+  padding: 0 8px;
+  height: 31px;
+}
+.verification-form > p {
+  font-size: 10px;
+  line-height: 1.8;
+  margin-bottom: 8px;
+}
+.verification-form textarea {
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  margin-bottom: 8px;
+}
+.verification-form > .text-button {
+  display: block;
+  text-align: center;
+  width: 100%;
+  margin-top: 7px;
+}
+.evidence-panel,
+.activity-panel {
+  padding: 23px;
+  overflow: auto;
+  flex: 1;
+  background: #fff;
+  min-width: 0;
+}
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 25px;
+}
+.panel-heading h3 {
+  font-size: 14px;
+  color: #526d55;
+}
+.panel-heading p {
+  font-size: 10px;
+  color: #94a58f;
+  margin-top: 8px;
+}
+.evidence-item {
+  border: 1px solid #e5ece0;
+  border-radius: 7px;
+  margin-bottom: 9px;
+}
+.evidence-item summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  padding: 13px;
+  font-size: 10px;
+  color: #77916f;
+}
+.evidence-item summary strong {
+  font-weight: 600;
+}
+.evidence-item summary small {
+  margin-left: auto;
+  font-size: 9px;
+  color: #a1b09a;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.result-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c79863;
+}
+.result-dot.pass {
+  background: #5caa75;
+}
+.result-dot.fail,
+.result-dot.error {
+  background: #c87864;
+}
+.evidence-body {
+  padding: 0 14px 13px;
+}
+.evidence-body > code {
+  font-size: 10px;
+  color: #76966c;
+  overflow-wrap: anywhere;
+}
+.evidence-body > p {
+  font-size: 9px;
+  margin: 9px 0;
+}
+.evidence-body pre {
+  font-size: 10px;
+  padding: 12px;
+  background: #f5f8f2;
+  border-radius: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 250px;
+  overflow: auto;
+}
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  margin-bottom: 13px;
+}
+.metric-row > div {
+  border-right: 1px solid #e7eddf;
+  padding-left: 12px;
+}
+.metric-row > div:last-child {
+  border: 0;
+}
+.metric-row > div > span {
+  font-size: 10px;
+  color: #94a689;
+}
+.metric-row strong {
+  display: block;
+  font-size: 25px;
+  font-weight: 500;
+  color: #5c7950;
+  margin-top: 8px;
+}
+.metric-row small {
+  font-size: 10px;
+  font-weight: 400;
+  color: #a5b297;
+  margin-left: 5px;
+}
+.metric-note {
+  font-size: 9px;
+  margin-bottom: 20px;
+}
+.timeline > article {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 12px 0;
+  border-top: 1px solid #eef2e7;
+}
+.timeline-icon {
+  width: 25px;
+  height: 25px;
+  background: #f0f6e9;
+  color: #92a878;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.timeline article > div {
+  flex: 1;
+  min-width: 0;
+}
+.timeline strong {
+  font-size: 11px;
+  font-weight: 500;
+  color: #758f5f;
+}
+.timeline p {
+  font-size: 10px;
+  line-height: 1.8;
+  color: #a0af8b;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.timeline time {
+  font-size: 9px;
+  color: #b0b99e;
+  white-space: nowrap;
+}

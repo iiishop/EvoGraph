@@ -1,0 +1,284 @@
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 54px;
+  flex-shrink: 0;
+  gap: 12px;
+}
+.view-tabs {
+  height: 100%;
+  display: flex;
+  gap: 25px;
+}
+.view-tabs > button {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 0 2px;
+  font-size: 11px;
+  color: #94a096;
+}
+.view-tabs > button.active {
+  border-bottom-color: var(--green);
+  color: #327e66;
+  font-weight: 600;
+}
+.view-tabs > button > span {
+  font-size: 9px;
+  border-radius: 4px;
+  background: #eff4f0;
+  color: #82a38f;
+  padding: 2px 5px;
+  margin-left: 1px;
+}
+.graph-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.prerequisite-label {
+  font-size: 9px;
+  color: #a4aea7;
+  padding-right: 8px;
+}
+.planning-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #e4ebe5;
+  border-radius: 9px;
+  overflow: hidden;
+  margin-bottom: 17px;
+  background: #fbfcfb;
+}
+.graph-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 220px;
+  position: relative;
+}
+.vue-flow {
+  background: #f9fbfa;
+}
+.vue-flow__controls {
+  border: 1px solid #e1e8e1;
+  box-shadow: 0 2px 6px #244d3a05;
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+  bottom: 10px;
+  left: 13px;
+}
+.vue-flow__controls-button {
+  width: 26px;
+  height: 27px;
+  border-bottom: 0 !important;
+  border-right: 1px solid #edf0eb;
+  background: #fff;
+  color: #7a8d80;
+  fill: #7a8d80;
+}
+.vue-flow__controls-button:last-child {
+  border-right: 0;
+}
+.vue-flow__controls-button svg {
+  max-width: 12px;
+  max-height: 12px;
+}
+.vue-flow__attribution {
+  display: none;
+}
+.canvas-caption {
+  position: absolute;
+  bottom: 18px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8px;
+  color: #99a89b;
+  pointer-events: none;
+}
+.legend-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #b6c5bb;
+}
+.legend-dot.green {
+  background: #52a183;
+  margin-left: 5px;
+}
+.caption-divider {
+  height: 9px;
+  width: 1px;
+  background: #dce5dc;
+  margin: 0 4px;
+}
+.milestone-node {
+  width: 235px;
+  padding: 13px 15px 0;
+  background: #fff;
+  border: 1px solid #dce6df;
+  border-radius: 8px;
+  box-shadow: 0 3px 9px #264c3710;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.milestone-node.selected {
+  border: 1.5px solid #26977a;
+  box-shadow: 0 0 0 3px #24977513;
+}
+.milestone-node.complete {
+  border-color: #b9d9c5;
+}
+.node-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.node-id {
+  font:
+    10px 'Cascadia Code',
+    Consolas,
+    monospace;
+  color: #809889;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.node-arrow {
+  color: #bac7be;
+}
+.milestone-node h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 9px;
+  letter-spacing: 0.15px;
+  color: #3f5447;
+}
+.node-scope {
+  font:
+    9px 'Cascadia Code',
+    Consolas,
+    monospace;
+  color: #9eaca1;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 13px;
+}
+.node-bottom {
+  border-top: 1px solid #edf1ec;
+  padding: 10px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.node-bottom > span {
+  font-size: 9px;
+  color: #a3b0a6;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  line-height: 15px;
+  color: #8d9f92;
+}
+.status-badge i {
+  width: 5px;
+  height: 5px;
+  background: #b3c3b7;
+  border-radius: 50%;
+}
+.status-badge.verified_complete,
+.status-badge.ready {
+  color: #338762;
+}
+.status-badge.verified_complete i,
+.status-badge.ready i {
+  background: #48a679;
+}
+.status-badge.in_progress {
+  color: #408ca8;
+}
+.status-badge.in_progress i {
+  background: #58a4bd;
+}
+.status-badge.revalidation_required {
+  color: #b28d3c;
+}
+.status-badge.revalidation_required i {
+  background: #c4a350;
+}
+.vue-flow__handle {
+  width: 6px;
+  height: 6px;
+  background: #fff;
+  border: 1.5px solid #b4cabb;
+  min-width: 6px;
+  min-height: 6px;
+}
+.empty-state {
+  height: 100%;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  color: #89a293;
+  text-align: center;
+  padding: 30px;
+}
+.empty-state h3 {
+  font-size: 15px;
+  color: #5a7865;
+}
+.empty-state p {
+  font-size: 11px;
+  color: #9ca99f;
+  line-height: 1.8;
+  max-width: 420px;
+}
+.empty-icon {
+  display: grid;
+  place-items: center;
+  background: #eef5f0;
+  width: 70px;
+  height: 70px;
+  border-radius: 18px;
+  margin-bottom: 4px;
+}
+.empty-state.compact {
+  min-height: 180px;
+}
+.loading-screen {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 20px;
+  color: #7a9b87;
+}
+.loading-screen h2 {
+  font-size: 17px;
+}
+.loading-screen p {
+  font-size: 12px;
+  color: #9aaa9d;
+}
