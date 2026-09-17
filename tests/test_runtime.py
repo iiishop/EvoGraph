@@ -1,8 +1,5 @@
-import asyncio
-import sys
-
 import pytest
-from conftest import apply_proposal, proposal
+from conftest import accept_external, apply_proposal, proposal
 from evograph.domain.models import Evidence, Milestone
 from evograph.domain.policies import (
     acceptance,
@@ -16,11 +13,7 @@ from evograph.infrastructure.database import ConflictError, Database
 
 def test_v1_v2_keeps_behavior_identity_and_invalidates_old_proof(app, planned, repository):
     app.execution.start(planned.id, "M01")
-    result = asyncio.run(
-        app.execution.verify(
-            planned.id, "M01", [sys.executable, "-c", "from auth import login; assert login()"]
-        )
-    )
+    result = accept_external(app, planned.id, "M01")
     assert result["result"] == "PASS"
     p = app.db.get(planned.id)
     old_behavior = p.behaviors[-1]
@@ -40,13 +33,7 @@ def test_v1_v2_keeps_behavior_identity_and_invalidates_old_proof(app, planned, r
     assert len(p.targets) == 2 and len(p.plans) == 2
     app.execution.resolve_obligation(p.id, "M02", "scope", True, "Reviewed email login change")
     app.execution.start(p.id, "M02")
-    asyncio.run(
-        app.execution.verify(
-            p.id,
-            "M02",
-            [sys.executable, "-c", "from auth import login; assert login('a@example.com')"],
-        )
-    )
+    accept_external(app, p.id, "M02")
     p = app.db.get(p.id)
     assert acceptance(p)["achieved"]
     assert len(p.evidence) == 2
@@ -70,28 +57,11 @@ def test_logical_ready_does_not_imply_safe_parallel_execution(app, planned):
 
 def test_stale_completed_work_does_not_hold_a_resource_lease(app, planned, repository):
     app.execution.start(planned.id, "M01")
-    asyncio.run(app.execution.verify(planned.id, "M01", [sys.executable, "-c", "assert True"]))
+    accept_external(app, planned.id, "M01")
     (repository / "new.py").write_text("value = 1")
     p = app.execution.refresh(planned.id)
     assert p.milestone("M01").status == "REVALIDATION_REQUIRED"
     assert not p.milestone("M01").lease_active
-
-
-def test_worktree_changes_during_verification_cannot_pass(app, planned):
-    app.execution.start(planned.id, "M01")
-    result = asyncio.run(
-        app.execution.verify(
-            planned.id,
-            "M01",
-            [
-                sys.executable,
-                "-c",
-                "from pathlib import Path; Path('auth.py').write_text('changed')",
-            ],
-        )
-    )
-    assert result["result"] == "ERROR"
-    assert not acceptance(app.db.get(planned.id))["achieved"]
 
 
 def test_fail_after_pass_is_not_valid_evidence(app, planned):

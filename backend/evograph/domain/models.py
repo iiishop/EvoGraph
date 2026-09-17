@@ -48,6 +48,8 @@ class Evidence(Model):
     result: Literal["PASS", "FAIL", "ERROR"]
     output: str
     duration: float
+    provider: str = "local"
+    request_id: str = ""
     created_at: str = Field(default_factory=now)
 
 
@@ -61,7 +63,16 @@ class Baseline(Model):
     created_at: str = Field(default_factory=now)
 
 
-Status = Literal["PLANNED", "IN_PROGRESS", "REVALIDATION_REQUIRED", "VERIFIED_COMPLETE"]
+Status = Literal[
+    "PLANNED", "IN_PROGRESS", "AWAITING_ACCEPTANCE", "REVALIDATION_REQUIRED", "VERIFIED_COMPLETE"
+]
+
+
+class MigrationStep(Model):
+    component_id: str
+    milestone_id: str
+    instruction: str = Field(min_length=1, max_length=2000)
+    from_revision: int = 0
 
 
 class Milestone(Model):
@@ -87,6 +98,7 @@ class Milestone(Model):
     position: dict[str, float] | None = None
     origin: Literal["plan", "source"] = "plan"
     source_refs: list[str] = Field(default_factory=list)
+    migration_steps: list[MigrationStep] = Field(default_factory=list)
 
 
 class ProposedBehavior(Model):
@@ -199,6 +211,44 @@ class ArchitectureSpec(Model):
     decisions: list[str] = Field(default_factory=list, max_length=30)
     diagram: Diagram
     research_ids: list[str] = Field(default_factory=list, max_length=30)
+    retirements: list[MigrationStep] = Field(default_factory=list)
+
+
+class AcceptanceRequest(Model):
+    id: str = Field(default_factory=uid)
+    milestone_id: str
+    baseline_id: str
+    fingerprint: str
+    behavior_revision_ids: list[str]
+    architecture_revision: int
+    consumed: bool = False
+
+
+class AcceptanceCheck(Model):
+    behavior_id: str
+    result: Literal["PASS", "FAIL", "ERROR"]
+    method: str = Field(min_length=1, max_length=4000)
+    evidence: str = Field(min_length=1, max_length=12000)
+
+
+class AcceptanceReport(Model):
+    request_id: str
+    provider: str = Field(min_length=1, max_length=200)
+    summary: str = Field(min_length=1, max_length=12000)
+    checks: list[AcceptanceCheck] = Field(min_length=1)
+
+
+class UmlDiagram(Model):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    title: str = Field(min_length=1, max_length=120)
+    kind: Literal["class", "sequence", "activity", "state"]
+    source: str = Field(min_length=1, max_length=100000)
+    scope: str = Field(min_length=1, max_length=1000)
+    origin: Literal["source", "design"] = "design"
+    source_refs: list[str] = Field(default_factory=list)
+    milestone_ids: list[str] = Field(default_factory=list)
+    revision: int = 0
+    baseline_id: str = ""
 
 
 class LightCheck(Model):
@@ -259,6 +309,8 @@ class Project(Model):
     source_fingerprint: str = ""
     light_checks: list[LightCheck] = Field(default_factory=list)
     research: list[ResearchSource] = Field(default_factory=list)
+    acceptance_requests: list[AcceptanceRequest] = Field(default_factory=list)
+    uml_diagrams: list[UmlDiagram] = Field(default_factory=list)
     metrics: dict[str, float] = Field(
         default_factory=lambda: {
             "planning_seconds": 0,

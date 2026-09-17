@@ -18,6 +18,9 @@ evograph = "evograph.__main__:main"
 [tool.setuptools.packages.find]
 where = ["backend"]
 
+[tool.setuptools.package-data]
+evograph = ["resources/*.md"]
+
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["tests"]

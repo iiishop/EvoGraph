@@ -4,9 +4,10 @@ import { Search, Network, Maximize2 } from 'lucide-vue-next';
 import type { Project } from '../../types';
 import DiagramView from './DiagramView.vue';
 import ComponentPassport from './ComponentPassport.vue';
+import UmlView from './UmlView.vue';
 import { architectureRole } from '../../lib/architectureRoles';
 const props = defineProps<{ project: Project }>();
-const view = ref('source'),
+const view = ref('current'),
   query = ref(''),
   focusedId = ref(''),
   relation = ref('all');
@@ -14,13 +15,21 @@ const graph = ref<InstanceType<typeof DiagramView>>();
 watch(
   () => props.project.architectures.length,
   () => {
-    if (!props.project.source_diagram) view.value = String(props.project.architectures.length - 1);
+    view.value = props.project.architectures.length ? 'current' : 'source';
   },
   { immediate: true },
 );
 const architecture = computed(() =>
-  view.value === 'source' ? null : props.project.architectures[Number(view.value)],
+  view.value === 'current'
+    ? props.project.architectures.at(-1)
+    : view.value === 'source' || view.value === 'class'
+      ? null
+      : props.project.architectures[Number(view.value)],
 );
+const classDiagram = computed(() =>
+  props.project.uml_diagrams?.filter((d) => d.kind === 'class').at(-1),
+);
+const historyOpen = ref(false);
 const diagram = computed(() =>
   view.value === 'source' ? props.project.source_diagram : architecture.value?.diagram,
 );
@@ -51,14 +60,59 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
           }}
         </p>
       </div>
-      <select v-model="view" aria-label="架构视图与版本">
-        <option value="source">SRC 源码现状</option>
-        <option v-for="(a, i) in project.architectures" :key="a.number" :value="String(i)">
-          设计 A{{ a.number }}{{ i === project.architectures.length - 1 ? ' · 当前' : '' }}
-        </option>
-      </select>
+      <button
+        class="button secondary"
+        :aria-expanded="historyOpen"
+        @click="historyOpen = !historyOpen"
+      >
+        版本记录 {{ project.architectures.length }}
+      </button>
     </header>
-    <template v-if="diagram">
+    <nav class="architecture-tabs" aria-label="架构视图">
+      <button
+        v-for="item in [
+          { id: 'current', label: '当前架构' },
+          { id: 'source', label: 'SRC 源码现状' },
+          { id: 'class', label: 'UML 类图' },
+        ]"
+        :key="item.id"
+        :aria-pressed="view === item.id"
+        @click="view = item.id"
+      >
+        {{ item.label }}
+      </button>
+    </nav>
+    <div v-if="historyOpen" class="version-track">
+      <button
+        v-for="(a, i) in project.architectures"
+        :key="a.number"
+        :aria-pressed="
+          view === String(i) || (view === 'current' && i === project.architectures.length - 1)
+        "
+        @click="view = String(i)"
+      >
+        <strong>A{{ a.number }}</strong
+        ><span>{{ a.summary }}</span
+        ><small>{{ i === project.architectures.length - 1 ? '当前版本' : '历史快照' }}</small>
+      </button>
+      <p v-if="!project.architectures.length">尚无架构版本</p>
+    </div>
+    <template v-if="view === 'class'"
+      ><UmlView v-if="classDiagram" :diagram="classDiagram" :project-id="project.id" />
+      <div v-else class="empty-state">
+        <h3>持续维护一张代码架构总览</h3>
+        <p>在下方要求 Agent 阅读源码并绘制类图。按职责分包，保留关键签名、数据契约与中文说明。</p>
+      </div></template
+    >
+    <template v-else-if="diagram">
+      <p v-if="view !== 'source' && view !== 'current'" class="history-banner">
+        正在查看 A{{ architecture?.number }} 快照。<button
+          class="text-button"
+          @click="view = 'current'"
+        >
+          回到当前架构
+        </button>
+      </p>
       <div class="architecture-tools">
         <label class="component-search"
           ><Search :size="16" /><input

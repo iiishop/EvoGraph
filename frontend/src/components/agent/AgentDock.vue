@@ -31,7 +31,8 @@ async function submit() {
 <template>
   <section class="agent-dock">
     <div class="agent-dock-heading">
-      <span class="agent-symbol"><Orbit :size="17" /></span><strong>描述变化，图会随之演化</strong
+      <span class="agent-symbol"><Orbit :size="17" /></span
+      ><strong>{{ project.question ? '需要你的判断' : '调整项目规划' }}</strong
       ><span class="agent-mode">{{ state.settings?.provider?.config.model || '未连接模型' }}</span
       ><span class="agent-live-status" role="status"
         ><i v-if="agent.state.running" class="live-dot"></i
@@ -46,9 +47,13 @@ async function submit() {
         :disabled="agent.state.running"
         @choose="content = $event"
       />
+      <label class="composer-label" for="agent-message">{{
+        project.question ? '你的回答' : '修改建议'
+      }}</label>
       <textarea
+        id="agent-message"
         v-model="content"
-        aria-label="修改项目的建议"
+        :aria-label="project.question ? '你的回答' : '修改项目的建议'"
         :disabled="agent.state.running"
         rows="2"
         maxlength="16000"

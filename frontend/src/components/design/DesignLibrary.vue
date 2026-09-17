@@ -2,7 +2,12 @@
 import type { Project } from '../../types';
 import DiagramView from './DiagramView.vue';
 import AssetPreview from '../attachments/AssetPreview.vue';
-defineProps<{ project: Project }>();
+import { computed } from 'vue';
+import UmlView from './UmlView.vue';
+const props = defineProps<{ project: Project }>();
+const uml = computed(() => [
+  ...new Map((props.project.uml_diagrams ?? []).map((d) => [d.id, d])).values(),
+]);
 </script>
 <template>
   <section class="design-panel">
@@ -30,6 +35,7 @@ defineProps<{ project: Project }>();
         />
       </div>
     </article>
+    <UmlView v-for="diagram in uml" :key="diagram.id" :diagram="diagram" :project-id="project.id" />
     <div class="asset-grid">
       <AssetPreview
         v-for="asset in project.attachments"
@@ -38,7 +44,10 @@ defineProps<{ project: Project }>();
         :project-id="project.id"
       />
     </div>
-    <div v-if="!project.attachments.length && !project.diagrams.length" class="empty-state">
+    <div
+      v-if="!project.attachments.length && !project.diagrams.length && !uml.length"
+      class="empty-state"
+    >
       <h3>把想法变成可参考的资料</h3>
       <p>支持文档提取、图片预览，以及随项目长期维护的结构化设计图。</p>
     </div>

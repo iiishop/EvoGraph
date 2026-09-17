@@ -9,3 +9,4 @@ __pycache__/
 test-results/
 .env
 *.log
+.tmp/

@@ -51,7 +51,7 @@ def test_provider_key_never_enters_sqlite_or_response(app):
 def test_type_validation_rejects_wrong_command_shape(app):
     result = asyncio.run(
         app.dispatch(
-            "milestone.verify", {"project_id": "p", "milestone_id": "M1", "command": "rm -rf"}
+            "verification.import", {"project_id": "p", "milestone_id": "M1", "report": "not a report"}
         )
     )
     assert not result["ok"] and result["error"]["code"] == "VALIDATION"

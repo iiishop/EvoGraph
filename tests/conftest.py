@@ -63,3 +63,32 @@ def planned(app, repository):
         p.id, "M01", "scope", True, "Reviewed auth.py and the executable acceptance script"
     )
     return app.db.get(p.id)
+
+
+def external_report(app, project_id, milestone_id, request_id, result="PASS"):
+    from evograph.domain.models import AcceptanceReport
+
+    m = app.db.get(project_id).milestone(milestone_id)
+    return AcceptanceReport(
+        request_id=request_id,
+        provider="External fixture",
+        summary="Checked contract",
+        checks=[
+            {
+                "behavior_id": bid,
+                "result": result,
+                "method": "fixture evaluation",
+                "evidence": "Observed expected fixture behavior",
+            }
+            for bid in m.behavior_revision_ids
+        ],
+    )
+
+
+def accept_external(app, project_id, milestone_id):
+    request = app.acceptance.prepare(project_id, milestone_id)
+    return app.acceptance.import_report(
+        project_id,
+        milestone_id,
+        external_report(app, project_id, milestone_id, request["request_id"]),
+    )

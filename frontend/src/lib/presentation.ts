@@ -1,10 +1,14 @@
 export const statusLabels: Record<string, string> = {
   PLANNED: '待开始',
   IN_PROGRESS: '进行中',
+  AWAITING_ACCEPTANCE: '等待验收',
   REVALIDATION_REQUIRED: '待重验证',
   VERIFIED_COMPLETE: '验收通过',
 };
 export const eventLabels: Record<string, string> = {
+  acceptance_prepared: '准备外部验收',
+  external_acceptance_imported: '导入外部验收报告',
+  uml_updated: '维护 UML 设计图',
   graph_edited: '修改里程碑图',
   architecture_updated: '更新架构设计',
   diagram_updated: '更新设计图',

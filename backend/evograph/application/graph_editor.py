@@ -141,6 +141,7 @@ class GraphEditor:
             architecture_revision=architecture.number if architecture else 0,
         )
         if old:
+            node.migration_steps = old.migration_steps
             unchanged = all(
                 getattr(old, f) == getattr(node, f)
                 for f in [

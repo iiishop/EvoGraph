@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import ConfigDict, ValidationError, validate_call
 
 from ..infrastructure.database import ConflictError, Database
+from .acceptance import AcceptanceService
 from .agent_runtime import AgentRuntime
 from .assurance import AssuranceService
 from .attachments import AttachmentService
@@ -19,6 +20,7 @@ from .planning import PlanningService
 from .projects import ProjectService
 from .research import ResearchService
 from .settings import SettingsService
+from .uml import UmlService
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +33,12 @@ class Application:
         self.research = ResearchService(self.db, self.settings.secrets)
         self.planning = PlanningService(self.db, self.settings)
         self.execution = ExecutionService(self.db)
+        self.acceptance = AcceptanceService(self.db, self.execution)
         self.assurance = AssuranceService(self.db, self.execution)
         self.graph = GraphEditor(self.db)
         self.attachments = AttachmentService(self.db)
         self.design = DesignService(self.db)
+        self.uml = UmlService(self.db)
         self.agent = AgentRuntime(self)
         self._locks = {}
         self._lock_guard = threading.Lock()
@@ -58,15 +62,17 @@ class Application:
             "attachments.formats": self.attachments.formats,
             "design.update": self.design.update,
             "design.diagram": self.design.save_diagram,
+            "uml.save": self.uml.save,
+            "uml.preview": self.uml.preview,
             "agent.chat": self.planning.chat,  # Legacy API compatibility; new UI uses streaming tools.
             "plan.apply": self.planning.apply,
             "plan.discard": self.planning.discard,
             "baseline.refresh": self.execution.refresh,
             "milestone.start": self.execution.start,
             "milestone.release": self.execution.release,
-            "milestone.verify": self.execution.verify,
-            "verification.export": self.assurance.handoff,
-            "verification.import": self.assurance.import_report,
+            "implementation.export": self.acceptance.implementation,
+            "verification.export": self.acceptance.prepare,
+            "verification.import": self.acceptance.import_report,
             "milestone.obligation": self.execution.resolve_obligation,
             "graph.positions": self.execution.positions,
         }
@@ -92,7 +98,7 @@ class Application:
         if action not in self.operations:
             return {"ok": False, "error": {"code": "UNKNOWN_ACTION", "message": "未知操作"}}
         lock = None
-        readonly = action in {"projects.list", "projects.get", "settings.get"}
+        readonly = action in {"projects.list", "projects.get", "settings.get", "uml.preview"}
         if not readonly:
             key = params.get("project_id", "__global__")
             with self._lock_guard:

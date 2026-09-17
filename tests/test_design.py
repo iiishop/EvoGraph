@@ -31,7 +31,7 @@ def test_architecture_revisions_require_review_and_valid_component_mapping(app, 
     app.graph.upsert(p.id, node, False)
     different = architecture()
     different.diagram.nodes[0].id = "removed"
-    with pytest.raises(ValueError, match="引用"):
+    with pytest.raises(ValueError, match="retirements"):
         app.design.update(p.id, different)
     assert len(app.db.get(p.id).architectures) == 1
 

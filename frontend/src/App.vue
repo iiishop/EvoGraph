@@ -6,6 +6,7 @@ import ProjectDialog from './components/projects/ProjectDialog.vue';
 import { navigation } from './lib/navigation';
 import { useWorkspace } from './composables/useWorkspace';
 import type { Project } from './types';
+import NotificationStack from './components/ui/NotificationStack.vue';
 const { state, init, dismiss, undoDelete } = useWorkspace();
 const activePage = computed(() => navigation.find((page) => page.id === state.page)!);
 const activeComponent = computed<Component>(() => activePage.value.component);
@@ -62,5 +63,6 @@ onMounted(init);
       </button>
     </div>
     <ProjectDialog v-if="dialogOpen" :project="editing" @close="dialogOpen = false" />
+    <NotificationStack />
   </div>
 </template>

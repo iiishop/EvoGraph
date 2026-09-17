@@ -28,6 +28,7 @@ class ToolExecutor:
                 await task
                 self.changed |= mutation
                 raise
+            mutation = mutation and result.get("status") != "NO_PROGRESS"
             self.changed |= mutation
             if mutation:
                 event = {

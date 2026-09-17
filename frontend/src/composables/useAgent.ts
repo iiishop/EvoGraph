@@ -2,6 +2,8 @@ import { reactive, readonly } from 'vue';
 import { agentStream } from '../api/agentStream';
 import { useWorkspace } from './useWorkspace';
 import type { AgentEvent } from '../types';
+import { useNotifications } from './useNotifications';
+import { changeSummary } from '../lib/changeSummary';
 
 const state = reactive({
   running: false,
@@ -17,6 +19,7 @@ let controller: AbortController | null = null;
 
 function receive(event: AgentEvent) {
   const workspace = useWorkspace();
+  const previous = workspace.state.project;
   if (event.project) workspace.applyProject(event.project);
   if (event.label) state.label = event.label;
   if (event.type === 'thinking') state.label = '正在理解目标与当前图…';
@@ -26,6 +29,7 @@ function receive(event: AgentEvent) {
     state.pulse++;
   }
   if (event.type === 'graph_changed') {
+    if (event.project) useNotifications().push(changeSummary(previous, event.project, event.label));
     const ids = event.node_ids ?? [];
     ids.forEach((id) => {
       state.updates[id] = (state.updates[id] ?? 0) + 1;

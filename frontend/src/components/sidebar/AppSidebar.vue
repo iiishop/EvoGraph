@@ -1,20 +1,24 @@
 <script setup lang="ts">
-import { Plus, ArrowUpRight, Orbit, PanelLeftClose } from 'lucide-vue-next';
+import { Plus, GitBranch, HardDrive } from 'lucide-vue-next';
+import { ref, computed } from 'vue';
 import ProjectItem from './ProjectItem.vue';
 import SidebarNavItem from './SidebarNavItem.vue';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { navigation } from '../../lib/navigation';
 const { state, selectProject, setPage } = useWorkspace();
+const query = ref('');
+const projects = computed(() =>
+  state.projects.filter((p) => p.name.toLowerCase().includes(query.value.toLowerCase())),
+);
 defineEmits<{ create: [] }>();
 </script>
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark"><Orbit :size="25" /></span
-      ><strong>EvoGraph<span>PROJECT EVOLUTION</span></strong
-      ><PanelLeftClose :size="17" class="muted sidebar-decoration" />
+      <span class="brand-mark"><GitBranch :size="25" /></span
+      ><strong>EvoGraph<span>项目演化工作台</span></strong>
     </div>
-    <div class="workspace-label">工作空间 <span>LOCAL</span></div>
+    <div class="workspace-label">工作空间</div>
     <nav aria-label="主导航">
       <SidebarNavItem
         v-for="item in navigation"
@@ -31,9 +35,10 @@ defineEmits<{ create: [] }>();
         <Plus :size="16" />
       </button>
     </div>
+    <input v-model="query" class="project-search" aria-label="筛选项目" placeholder="筛选项目…" />
     <div class="project-list">
       <ProjectItem
-        v-for="project in state.projects"
+        v-for="project in projects"
         :key="project.id"
         :project="project"
         :active="state.project?.id === project.id && state.page === 'projects'"
@@ -42,15 +47,9 @@ defineEmits<{ create: [] }>();
     </div>
     <button class="add-project" @click="$emit('create')"><Plus :size="15" /> 新建项目</button>
     <div class="sidebar-bottom">
-      <div class="local-card">
-        <span class="live-dot"></span>
-        <div>本地优先，持续演化<small>项目与证据保存在此设备</small></div>
-        <ArrowUpRight :size="15" />
-      </div>
       <div class="sidebar-footer">
-        <span class="avatar">E</span>
-        <div>个人工作空间<small>EvoGraph v0.1.0</small></div>
-        <span class="local-tag">本地</span>
+        <HardDrive :size="17" />
+        <div>本地工作空间<small>项目与证据保存在此设备</small></div>
       </div>
     </div>
   </aside>

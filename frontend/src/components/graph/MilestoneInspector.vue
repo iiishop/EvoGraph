@@ -1,79 +1,108 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { X, Play, Copy, ExternalLink, ShieldCheck } from 'lucide-vue-next';
+import { X } from 'lucide-vue-next';
 import type { Milestone, Project } from '../../types';
 import { useWorkspace } from '../../composables/useWorkspace';
 import StatusBadge from '../ui/StatusBadge.vue';
 import AssetPreview from '../attachments/AssetPreview.vue';
 import DiagramView from '../design/DiagramView.vue';
-import ObligationItem from './ObligationItem.vue';
-import AgentAssurance from './AgentAssurance.vue';
+import UmlView from '../design/UmlView.vue';
+import TaskWorkflow from './TaskWorkflow.vue';
 const props = defineProps<{ milestone: Milestone; project: Project }>();
-const { state, selectNode, perform } = useWorkspace();
-const commandInput = ref(''),
-  localError = ref(''),
-  copied = ref(false);
-const behaviors = computed(() =>
-  props.project.behaviors.filter((b) => props.milestone.behavior_revision_ids.includes(b.id)),
-);
-const readiness = computed(() => props.project.readiness[props.milestone.id]);
-const params = computed(() => ({
-  project_id: props.project.id,
-  milestone_id: props.milestone.id,
-}));
+const { selectNode } = useWorkspace();
+const tab = ref('flow');
 watch(
   () => props.milestone.id,
   () => {
-    localError.value = '';
-    copied.value = false;
+    tab.value = 'flow';
   },
 );
-async function verify() {
-  localError.value = '';
-  try {
-    const command = JSON.parse(commandInput.value);
-    if (!Array.isArray(command) || !command.length || command.some((c) => typeof c !== 'string'))
-      throw new Error('请填写 JSON 字符串数组，例如 ["python", "-m", "pytest", "-q"]');
-    await perform('milestone.verify', { ...params.value, command }, '验证记录已保存，请查看结果');
-  } catch (error) {
-    localError.value = String(error);
-  }
-}
-async function copyTask() {
-  try {
-    await navigator.clipboard.writeText(
-      `# ${props.milestone.id} ${props.milestone.title}\n${props.milestone.intent}\n\nScope:\n${props.milestone.scope.join('\n')}\n\nAcceptance:\n${behaviors.value.map((b) => b.statement).join('\n')}\n\nBaseline: ${props.milestone.pinned_baseline ?? 'not pinned'}\n\nImplement only this milestone. Run acceptance checks. Report changed files and results.`,
-    );
-    copied.value = true;
-  } catch {
-    localError.value = '剪贴板不可用，请手动复制节点详情。';
-  }
-}
+const behaviors = computed(() =>
+  props.project.behaviors.filter((b) => props.milestone.behavior_revision_ids.includes(b.id)),
+);
+const evidence = computed(() =>
+  props.project.evidence
+    .filter((e) => e.milestone_id === props.milestone.id)
+    .slice()
+    .reverse(),
+);
+const uml = computed(() =>
+  [...new Map((props.project.uml_diagrams ?? []).map((d) => [d.id, d])).values()].filter((d) =>
+    d.milestone_ids.includes(props.milestone.id),
+  ),
+);
 </script>
 <template>
   <aside class="inspector">
     <header>
-      <span class="eyebrow">MILESTONE / {{ milestone.id }}</span
+      <span>{{ milestone.id }}</span
       ><button class="icon-button" aria-label="关闭节点详情" @click="selectNode(null)">
-        <X :size="17" />
+        <X :size="18" />
       </button>
     </header>
-    <div class="inspector-scroll">
+    <div class="inspector-title">
       <h2>{{ milestone.title }}</h2>
       <StatusBadge :status="milestone.status" />
-      <p class="intent">{{ milestone.intent }}</p>
-      <AgentAssurance :project="project" :milestone="milestone" />
-      <section v-if="milestone.architecture_components.length">
-        <h4>架构组件</h4>
-        <code
-          v-for="component in milestone.architecture_components"
-          :key="component"
-          class="scope-path"
-          >{{ component }}</code
+      <p>{{ milestone.intent }}</p>
+    </div>
+    <nav class="detail-tabs" aria-label="任务详情">
+      <button
+        v-for="item in [
+          { id: 'flow', label: '任务流程' },
+          { id: 'design', label: '范围与设计' },
+          { id: 'history', label: '记录' },
+        ]"
+        :key="item.id"
+        :aria-pressed="tab === item.id"
+        @click="tab = item.id"
+      >
+        {{ item.label }}
+      </button>
+    </nav>
+    <div class="inspector-scroll">
+      <TaskWorkflow v-if="tab === 'flow'" :project="project" :milestone="milestone" />
+      <template v-else-if="tab === 'design'">
+        <section>
+          <h3>交付范围</h3>
+          <code v-for="scope in milestone.scope" :key="scope" class="scope-path">{{ scope }}</code>
+        </section>
+        <section>
+          <h3>行为要求</h3>
+          <ol class="behavior-contract">
+            <li v-for="b in behaviors" :key="b.id">
+              <p>{{ b.statement }}</p>
+              <small>{{ b.behavior_key }} · v{{ b.version }}</small>
+            </li>
+          </ol>
+        </section>
+        <section v-if="milestone.migration_steps?.length">
+          <h3>迁移与退役步骤</h3>
+          <article v-for="step in milestone.migration_steps" :key="step.component_id">
+            <strong
+              >{{ step.component_id }} <small>原架构 A{{ step.from_revision }}</small></strong
+            >
+            <p>{{ step.instruction }}</p>
+          </article>
+        </section>
+        <section v-if="milestone.architecture_components.length">
+          <h3>关联组件</h3>
+          <code v-for="id in milestone.architecture_components" :key="id" class="scope-path">{{
+            id
+          }}</code>
+        </section>
+        <section
+          v-for="diagram in project.diagrams.filter((d) => d.milestone_ids.includes(milestone.id))"
+          :key="diagram.id"
         >
-      </section>
-      <section v-if="milestone.attachment_ids.length">
-        <h4>设计参考</h4>
+          <h3>{{ diagram.title }}</h3>
+          <DiagramView :diagram="diagram" />
+        </section>
+        <UmlView
+          v-for="diagram in uml"
+          :key="diagram.id"
+          :diagram="diagram"
+          :project-id="project.id"
+        />
         <AssetPreview
           v-for="asset in project.attachments.filter((a) =>
             milestone.attachment_ids.includes(a.id),
@@ -82,116 +111,22 @@ async function copyTask() {
           :asset="asset"
           :project-id="project.id"
         />
-      </section>
-      <section
-        v-for="diagram in project.diagrams.filter((d) => d.milestone_ids.includes(milestone.id))"
-        :key="diagram.id"
+      </template>
+      <template v-else
+        ><p v-if="!evidence.length" class="muted">验收报告会保存在这里。</p>
+        <article v-for="item in evidence" :key="item.id" class="evidence-receipt">
+          <header>
+            <StatusBadge :status="item.result" /><time>{{
+              new Date(item.created_at).toLocaleString()
+            }}</time>
+          </header>
+          <p>{{ project.evidence_validity[item.id] }}</p>
+          <details>
+            <summary>查看验收报告</summary>
+            <pre>{{ item.output }}</pre>
+          </details>
+        </article></template
       >
-        <h4>{{ diagram.title }}</h4>
-        <DiagramView :diagram="diagram" />
-      </section>
-      <section>
-        <h4>变更范围</h4>
-        <code v-for="scope in milestone.scope" :key="scope" class="scope-path">{{ scope }}</code>
-      </section>
-      <section>
-        <h4><ShieldCheck :size="14" /> 行为验收</h4>
-        <article v-for="behavior in behaviors" :key="behavior.id" class="behavior-item">
-          <span>{{ behavior.statement }}</span
-          ><small
-            >{{ behavior.behavior_key }} · v{{ behavior.version
-            }}<span v-if="behavior.supersedes"> · 替代旧版本</span></small
-          >
-        </article>
-      </section>
-      <section v-if="milestone.dependencies.length">
-        <h4>前置依赖</h4>
-        <p v-for="dep in milestone.dependencies" :key="dep" class="dependency-item">
-          <button @click="selectNode(dep)">{{ dep }} <ExternalLink :size="11" /></button
-          ><small>{{ milestone.dependency_reasons[dep] }}</small>
-        </p>
-      </section>
-      <section>
-        <h4>
-          调查义务
-          <span
-            >{{ milestone.obligations.filter((o) => o.resolved).length }}/{{
-              milestone.obligations.length
-            }}</span
-          >
-        </h4>
-        <ObligationItem
-          v-for="obligation in milestone.obligations"
-          :key="`${milestone.id}-${obligation.id}`"
-          :obligation="obligation"
-          :project-id="project.id"
-          :milestone-id="milestone.id"
-        />
-      </section>
-      <section>
-        <h4>执行条件</h4>
-        <div class="readiness-row">
-          <span>逻辑就绪</span
-          ><strong :class="{ positive: readiness.logical_ready }">{{
-            readiness.logical_ready ? '已满足' : '待满足'
-          }}</strong>
-        </div>
-        <div class="readiness-row">
-          <span>可安全领取</span
-          ><strong :class="{ positive: readiness.safe_to_execute }">{{
-            readiness.safe_to_execute ? '是' : '否'
-          }}</strong>
-        </div>
-        <ul v-if="readiness.blockers.length" class="blockers">
-          <li v-for="blocker in readiness.blockers" :key="blocker">
-            {{ blocker }}
-          </li>
-        </ul>
-        <small class="muted"
-          >资源：{{ milestone.resources.join('、') || '未声明，按潜在冲突处理' }}</small
-        >
-      </section>
-      <div class="inspector-actions">
-        <button
-          class="button primary"
-          :disabled="
-            state.busy ||
-            !readiness.safe_to_execute ||
-            milestone.status === 'VERIFIED_COMPLETE' ||
-            milestone.status === 'IN_PROGRESS'
-          "
-          @click="perform('milestone.start', params, '已领取任务并锁定当前基线')"
-        >
-          <Play :size="14" />{{
-            milestone.status === 'REVALIDATION_REQUIRED' ? '重新绑定基线' : '领取里程碑'
-          }}</button
-        ><button class="button secondary" @click="copyTask">
-          <Copy :size="14" />{{ copied ? '已复制' : '复制执行任务' }}
-        </button>
-      </div>
-      <details
-        v-if="['IN_PROGRESS', 'REVALIDATION_REQUIRED'].includes(milestone.status)"
-        class="verification-form"
-      >
-        <summary>高级：手动正式验收</summary>
-        <p class="muted">将此命令结果作为以上行为的验收依据。命令会在项目目录执行，最长 120 秒。</p>
-        <textarea
-          v-model="commandInput"
-          rows="3"
-          aria-label="验收命令 JSON 参数数组"
-          spellcheck="false"
-        />
-        <p v-if="localError" class="inline-error">{{ localError }}</p>
-        <button class="button primary full-width" :disabled="state.busy" @click="verify">
-          {{ state.busy ? '正在处理…' : '运行并记录验收' }}</button
-        ><button
-          class="text-button"
-          :disabled="state.busy"
-          @click="perform('milestone.release', params, '已释放任务')"
-        >
-          释放任务
-        </button>
-      </details>
     </div>
   </aside>
 </template>

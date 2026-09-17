@@ -18,7 +18,7 @@
 | 调查规则 | `domain/policies.py` 的变更类别注册表 |
 | 连线外观 | `frontend/src/lib/edgeKinds.ts` |
 | 架构组件角色 | `frontend/src/lib/architectureRoles.ts` |
-| 轻量验收适配器 | `verification` 新增一个 `@adapter` 模块，自动发现，不改 Agent 工具或前端 |
+| 外部验收 | `AcceptanceService` 统一导出契约、导入报告和流转状态，外部 Agent 复用同一接口 |
 | 网页搜索服务 | `web_search` 新增一个 `@register` 模块，声明搜索/提取能力与配置字段，设置 UI 自动生成 |
 
 这些保证常见同类扩展不用重复改分派逻辑。新增跨层业务概念仍需调整模型与对应展示，不承诺任何需求都只改一行。
@@ -55,6 +55,6 @@ Agent 接收当前项目、当前架构、资料目录与用户选中的多模�
 
 `resolve_investigation` 要求引用本轮实际读取的文件与匹配的哈希、基线。它证明 Agent 使用了哪些输入，不机械证明结论一定正确；判断不足时应向用户提问。Agent 调查记录随基线变化失效。
 
-轻量验收按钮向本轮传递限定里程碑授权，追问时保留在 PendingQuestion 中。检查适配器从实际仓库发现候选；模型只能选择候选 ID，不能提供任意命令。执行前必须读取对应测试或脚本定义；每项检查 60 秒超时。仓库脚本本身可包含任意代码，因此按钮说明会执行本地测试。结果存入 LightCheck，不更新正式 Evidence 或节点完成状态。视觉检查仅记录选中图片的 REVIEW。
+验收由外部 Agent 执行：复制验收提示词、粘贴报告，全部行为通过后完成并释放。详见 verification-integration.md。历史 LightCheck 数据仅保留兼容。
 
 网页能力参考 [Hermes 的提供方注册结构](https://github.com/NousResearch/hermes-agent/blob/main/tools/web_tools.py)：工具与供应商解耦、按能力调用、明确配置、有限返回与可追溯来源。每轮最多四个不同请求，重复请求复用结果。Tavily 正文提取在远端进行，不由本应用抓取任意目标；公开引用禁止本地和私有 IP。SearXNG 地址是用户显式配置的服务端地址。

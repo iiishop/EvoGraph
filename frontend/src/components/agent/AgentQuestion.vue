@@ -4,8 +4,8 @@ defineProps<{ question: PendingQuestion; answer: string; disabled: boolean }>();
 defineEmits<{ choose: [answer: string] }>();
 </script>
 <template>
-  <div class="inline-question" role="status">
-    <strong>{{ question.prompt }}</strong>
+  <fieldset class="inline-question">
+    <legend>{{ question.prompt }}</legend>
     <p v-if="question.context">{{ question.context }}</p>
     <div class="question-options">
       <button
@@ -14,10 +14,11 @@ defineEmits<{ choose: [answer: string] }>();
         type="button"
         :disabled="disabled"
         :class="{ selected: answer === option }"
+        :aria-pressed="answer === option"
         @click="$emit('choose', option)"
       >
         {{ option }}
       </button>
     </div>
-  </div>
+  </fieldset>
 </template>

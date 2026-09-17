@@ -1,9 +1,5 @@
-import asyncio
-
-from ..domain.models import Evidence
 from ..domain.policies import readiness
 from ..infrastructure.repository import snapshot
-from ..infrastructure.verifier import run_verifier
 from .source_index import populate
 
 
@@ -71,56 +67,14 @@ class ExecutionService:
     def release(self, project_id: str, milestone_id: str):
         p = self.db.get(project_id)
         m = p.milestone(milestone_id)
-        if m.status not in {"IN_PROGRESS", "REVALIDATION_REQUIRED"}:
+        if m.status not in {"IN_PROGRESS", "REVALIDATION_REQUIRED", "AWAITING_ACCEPTANCE"}:
             raise ValueError("只有在途或待重验证节点可以释放")
         m.status, m.pinned_baseline = "PLANNED", None
         m.lease_active = False
+        for request in p.acceptance_requests:
+            if request.milestone_id == m.id:
+                request.consumed = True
         return self.db.save(p, "execution_released", milestone_id)
-
-    async def verify(self, project_id: str, milestone_id: str, command: list[str]):
-        # Pin verification to the latest filesystem state, then reject drift during the run.
-        self.refresh(project_id)
-        p = self.db.get(project_id)
-        m = p.milestone(milestone_id)
-        if m.status not in {"IN_PROGRESS", "REVALIDATION_REQUIRED"}:
-            raise ValueError("请先领取里程碑")
-        if not p.baseline.complete:
-            raise ValueError("扫描未覆盖完整仓库，不能创建有效验收证据")
-        # Revalidation may verify an old prerequisite; resource conflicts still matter.
-        state = readiness(p, milestone_id)
-        if state["conflicts"] or any(not o.resolved for o in m.obligations):
-            raise ValueError("请先解决资源冲突和调查义务")
-        baseline = p.baseline
-        result = await asyncio.to_thread(run_verifier, p.repository, command)
-        after = await asyncio.to_thread(snapshot, p.repository, len(p.baselines) + 1)
-        if (
-            after.fingerprint != baseline.fingerprint
-            or after.commit != baseline.commit
-            or not after.complete
-        ):
-            result["result"] = "ERROR"
-            result["output"] = (
-                "验证过程中仓库发生变化或扫描不完整；结果不能支持当前基线。\n" + result["output"]
-            )
-        p.evidence.append(
-            Evidence(
-                milestone_id=milestone_id,
-                behavior_revision_ids=m.behavior_revision_ids,
-                baseline_id=baseline.id,
-                fingerprint=baseline.fingerprint,
-                architecture_revision=m.architecture_revision,
-                command=command,
-                **result,
-            )
-        )
-        p.metrics["verification_seconds"] += result["duration"]
-        m.status = "VERIFIED_COMPLETE" if result["result"] == "PASS" else "REVALIDATION_REQUIRED"
-        m.lease_active = result["result"] != "PASS"
-        m.pinned_baseline = baseline.id
-        # CAS rejects any concurrent update. It never blesses a result against a newer plan.
-        self.db.save(p, "verification_finished", f"{milestone_id}: {result['result']}")
-        self.refresh(project_id)
-        return result
 
     def positions(self, project_id: str, positions: dict):
         p = self.db.get(project_id)

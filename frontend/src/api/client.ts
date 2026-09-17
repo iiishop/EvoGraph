@@ -40,8 +40,17 @@ export async function readyTransport() {
   // desktop startup does not fall through to fetch('/api/command') from file://.
   // Wait for the real method, not the placeholder object, or the first call lands
   // in that gap and throws "api.command is not a function".
-  const browserPorts = ['5173', '8765', '4173'];
-  if (browserPorts.includes(location.port) || bridgeReady()) return;
+  if (bridgeReady()) return;
+  // Browser mode supports arbitrary configured ports. A pywebview asset server
+  // has no API health route, so it still waits for its injected bridge.
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    try {
+      const response = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
+      if (response.ok && (await response.json()).status === 'ok') return;
+    } catch {
+      /* Continue waiting for the desktop bridge. */
+    }
+  }
   await new Promise<void>((resolve, reject) => {
     const started = Date.now();
     let timer = 0;
@@ -59,7 +68,11 @@ export async function readyTransport() {
         settle();
       } else if (Date.now() - started > 15000) {
         window.clearInterval(timer);
-        reject(new Error('桌面桥接未就绪，请确认已使用 uv run evograph 启动应用，而不是直接打开 dist/index.html'));
+        reject(
+          new Error(
+            '桌面桥接未就绪，请确认已使用 uv run evograph 启动应用，而不是直接打开 dist/index.html',
+          ),
+        );
       }
     }, 50);
   });

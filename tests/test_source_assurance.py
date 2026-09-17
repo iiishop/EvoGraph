@@ -49,35 +49,6 @@ def test_investigation_requires_actual_reads_and_invalidates(app, planned, repos
     assert not p.milestone("M01").obligations[0].resolved
 
 
-def test_light_checks_run_actual_test_without_blessing_node(app, planned, repository):
-    (repository / "test_auth.py").write_text("def test_login_contract():\n    assert 1 + 1 == 2\n")
-    options = app.assurance.catalog(planned.id, "M01")
-    selected = next(c for c in options if "test_auth" in c["id"])
-    ctx = ToolContext(planned.id, app)
-    with pytest.raises(ValueError, match="按钮"):
-        app.assurance.run(
-            ctx, "M01", selected["id"], "测试仅用于验证工具执行链路，不作为完整登录行为的验收"
-        )
-    ctx.verification_milestone = "M01"
-    read_repository_file(ctx, ReadFile(path="test_auth.py"))
-    result = app.assurance.run(
-        ctx, "M01", selected["id"], "测试仅用于验证工具执行链路，不作为完整登录行为的验收"
-    )
-    assert result["report"]["result"] == "PASS", result
-    p = app.db.get(planned.id)
-    assert p.milestone("M01").status == "PLANNED"
-    assert not p.evidence
-    assert len(p.light_checks) == 1
-    packet = app.assurance.handoff(p.id, "M01")
-    assert packet["schema"] == "evograph.verification.v1"
-    with pytest.raises(ValueError, match="基线"):
-        app.assurance.import_report(p.id, "M01", "old", "report", "PASS", "external")
-    external = app.assurance.import_report(
-        p.id, "M01", packet["baseline"]["fingerprint"], "full report", "PASS", "external"
-    )
-    assert external.result == "REVIEW"
-
-
 def test_search_settings_credentials_and_results(app, planned, monkeypatch):
     from evograph.web_search import providers
 
@@ -108,24 +79,10 @@ def test_search_settings_credentials_and_results(app, planned, monkeypatch):
         public_url("http://127.0.0.1/private")
 
 
-def test_new_tools_discovered_and_visual_requires_image(app, planned):
+def test_planner_tools_cannot_execute_acceptance():
     registry = tools()
-    assert {
-        "web_search",
-        "web_extract",
-        "run_light_check",
-        "resolve_investigation",
-    } <= registry.keys()
-    spec = registry["record_visual_review"]
-    with pytest.raises(ValueError, match="实际截图"):
-        spec.handler(
-            ToolContext(planned.id, app),
-            spec.parameters(
-                milestone_id="M01",
-                attachment_id="fake",
-                findings="不能根据不存在的图像声称已经完成视觉验收。",
-            ),
-        )
+    assert {"web_search", "web_extract", "resolve_investigation", "save_uml"} <= registry.keys()
+    assert not {"run_light_check", "discover_checks", "record_visual_review"} & registry.keys()
 
 
 def test_verification_question_preserves_permission(app, planned):
@@ -137,7 +94,14 @@ def test_verification_question_preserves_permission(app, planned):
         nonlocal calls
         calls += 1
         if calls == 1:
-            async for event in tool_chunks("ask_user", {"prompt": "需要选择哪种检查范围？", "category": "decision", "options": ["测试范围", "验收范围"]}):
+            async for event in tool_chunks(
+                "ask_user",
+                {
+                    "prompt": "需要选择哪种检查范围？",
+                    "category": "decision",
+                    "options": ["测试范围", "验收范围"],
+                },
+            ):
                 yield event
         else:
             yield {"type": "text", "text": "done"}
@@ -156,10 +120,30 @@ def test_questions_have_admission_gate_and_separate_answers(app, planned):
 
     ctx = ToolContext(planned.id, app)
     with pytest.raises(ValueError):
-        ask_user(ctx, AskUser(prompt="请告诉我邮箱还是用户名？", category="decision", options=["邮箱", "用户名"]))
+        ask_user(
+            ctx,
+            AskUser(
+                prompt="请告诉我邮箱还是用户名？", category="decision", options=["邮箱", "用户名"]
+            ),
+        )
     with pytest.raises(ValueError, match="选项"):
-        ask_user(ctx, AskUser(prompt="使用哪种登录方式？选项：邮箱、用户名", category="decision", options=["邮箱", "用户名"]))
-    result = ask_user(ctx, AskUser(prompt="登录方式采用哪种身份标识？", category="decision", options=["邮箱", "用户名"], context="这会影响认证接口和行为契约。"))
+        ask_user(
+            ctx,
+            AskUser(
+                prompt="使用哪种登录方式？选项：邮箱、用户名",
+                category="decision",
+                options=["邮箱", "用户名"],
+            ),
+        )
+    result = ask_user(
+        ctx,
+        AskUser(
+            prompt="登录方式采用哪种身份标识？",
+            category="decision",
+            options=["邮箱", "用户名"],
+            context="这会影响认证接口和行为契约。",
+        ),
+    )
     question = app.db.get(planned.id).question
     assert result["question"]["prompt"] == "登录方式采用哪种身份标识？"
     assert question.options == ["邮箱", "用户名"]

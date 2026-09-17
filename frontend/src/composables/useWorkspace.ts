@@ -2,6 +2,7 @@ import { computed, reactive, shallowReadonly } from 'vue';
 import { command, readyTransport } from '../api/client';
 import type { Project, ProjectSummary, Settings } from '../types';
 import type { PageId } from '../lib/navigation';
+import { useNotifications } from './useNotifications';
 
 const state = reactive({
   projects: [] as ProjectSummary[],
@@ -52,7 +53,7 @@ async function perform<T>(
   try {
     const result = await command<T>(action, params);
     await refresh();
-    state.notice = notice;
+    useNotifications().push(notice);
     return result;
   } catch (error) {
     state.error = error instanceof Error ? error.message : '操作未完成';

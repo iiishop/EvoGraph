@@ -70,7 +70,8 @@ const edges = computed(() =>
       type: 'architecture',
       label: e.label,
       data: {
-        returnLane: Math.max(...[...positions.value.values()].map((p) => p.y + 150), 150) + 65 + index * 18,
+        returnLane:
+          Math.max(...[...positions.value.values()].map((p) => p.y + 150), 150) + 65 + index * 18,
       },
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 18, height: 18 },
       style: {

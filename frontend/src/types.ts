@@ -26,6 +26,7 @@ export interface Obligation {
   note: string;
 }
 export interface Milestone {
+  migration_steps: { component_id: string; instruction: string; from_revision: number }[];
   origin: 'plan' | 'source';
   source_refs: string[];
   id: string;
@@ -116,6 +117,7 @@ export interface Architecture {
   diagram: Diagram;
 }
 export interface Project extends ProjectSummary {
+  uml_diagrams: UmlDiagram[];
   source_milestones: Milestone[];
   source_diagram: Diagram | null;
   source_summary: string;
@@ -205,4 +207,16 @@ export interface Settings {
     config: Record<string, string>;
     has_key: boolean;
   } | null;
+}
+export interface UmlDiagram {
+  id: string;
+  title: string;
+  kind: 'class' | 'sequence' | 'activity' | 'state';
+  source: string;
+  scope: string;
+  origin: 'source' | 'design';
+  source_refs: string[];
+  milestone_ids: string[];
+  revision: number;
+  baseline_id: string;
 }

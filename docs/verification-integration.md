@@ -1,43 +1,30 @@
-# 外部验收 Agent 集成 v1
+# 外部验收集成
 
-HTTP 和 pywebview 共用命令入口。HTTP 本地服务使用 `POST /api/command`，请求体为 `{ "action": "...", "params": {...} }`。桌面端使用 `pywebview.api.command(action, params)`。
+EvoGraph 负责流程，不执行仓库测试。HTTP 的 POST /api/command 与桌面桥接共用命令注册表。
 
-## 导出任务
+1. baseline.refresh 检查基线，milestone.start 校验前置条件并领取、锁定资源。
+2. implementation.export 返回 prompt，用户复制给外部制作 Agent。
+3. 制作结束调用 verification.export，刷新基线并生成一次性 request_id 与验收 prompt，进入 AWAITING_ACCEPTANCE。
+4. 外部 Agent 按行为检查后，用户粘贴 JSON，通过 verification.import 导入。
+5. 全部条目 PASS 才生成外部 Evidence、完成任务并释放资源；FAIL/ERROR 保留领取状态，返回制作阶段。
 
-`verification.export` 参数：`project_id`、`milestone_id`。节点详情也提供导出 JSON 按钮。
-
-返回 `schema=evograph.verification.v1`、仓库绝对路径、完整 baseline（id/fingerprint/commit）、里程碑、行为契约、最新架构、已执行轻量检查。集成方应在独立工作流运行完整验收，报告使用该 fingerprint。
-
-## 导入报告
-
-`verification.import` 参数：
-
+导入参数：
 ```json
 {
-  "project_id": "实际项目 ID",
+  "project_id": "项目 ID",
   "milestone_id": "M01",
-  "fingerprint": "导出任务中的基线指纹",
-  "provider": "external-agent-name",
-  "result": "PASS",
-  "output": "测试覆盖范围、命令、产物路径、失败与限制"
+  "report": {
+    "request_id": "提示词中的请求 ID",
+    "provider": "外部 Agent 名称",
+    "summary": "结论与覆盖限制",
+    "checks": [{"behavior_id": "行为修订 ID", "result": "PASS", "method": "实际检查方式", "evidence": "真实结果"}]
+  }
 }
 ```
 
-导入会刷新基线并拒绝过期 fingerprint。报告存为 `REVIEW`，显示外部声明的 PASS/FAIL/ERROR；不会信任任意 JSON 的 PASS 而自动完成里程碑。后续融合时可在 AssuranceService 中接入外部 Agent 的证据真实性与覆盖判定，复用版本/基线约束。
+每条行为必须恰好覆盖一次。报告绑定基线、行为修订、架构版本及任务，重放、释放后的请求和过期契约均拒绝。
+重新生成提示词会作废前一次请求。验收期间修改源码后必须重新生成提示词并验收。
+报告是外部提供的证据声明，EvoGraph 校验归属、新鲜度、结构与覆盖，不证明报告真实性。
 
-## 新增本地检查能力
-
-在 `backend/evograph/verification` 添加一个模块：
-
-```python
-from . import Candidate, adapter
-
-@adapter("my-check")
-def discover(root, milestone):
-    # 从真实仓库发现检查，不运行文件；files 必须列出 Agent 需先读的定义。
-    return [Candidate("my-check:smoke", "Smoke", ["tool", "test"], ["test.config"], "覆盖限制")]
-```
-
-运行器自动发现并提供给 `discover_checks` / `run_light_check`，无需改设置表单、工具分派或图组件。现有 Python 适配器选择测试文件，Node 适配器发现显式 test:unit/test:smoke/typecheck/lint/test 脚本，过滤明显持续运行的 watch 模式；超时统一终止进程树。
-
-视觉能力当前是上传截图 + 模型审阅接口，不能证明截图新鲜度或真实交互结果。完整浏览器视觉验收可由外部 Agent 提供，再用上述接口回传证据。
+将其他完整验收 Agent 接入时，复用这两个 verification 命令即可，不需要修改节点组件或运行器。
+旧 LightCheck 数据保留以兼容历史项目；本地轻量检查、视觉检查和正式命令执行入口已移除。
