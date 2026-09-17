@@ -13,6 +13,7 @@ class DesktopBridge:
         self._window = None
         self._streams = {}
         self._guard = threading.Lock()
+        self._cancelled = set()
 
     def command(self, action: str, params: dict):
         return asyncio.run(self._application.dispatch(action, params))
@@ -21,13 +22,20 @@ class DesktopBridge:
         from .http import AgentRequest
 
         request = AgentRequest.model_validate(params)
+        with self._guard:
+            if request_id in self._streams:
+                raise ValueError("重复的流请求")
+            self._streams[request_id] = None
 
         def run():
             async def consume():
                 loop, task = asyncio.get_running_loop(), asyncio.current_task()
                 with self._guard:
                     self._streams[request_id] = (loop, task)
+                    cancelled = request_id in self._cancelled
                 try:
+                    if cancelled:
+                        return
                     async for event in self._application.agent.stream(**request.model_dump()):
                         detail = json.dumps(
                             {"request_id": request_id, "event": event}, ensure_ascii=True
@@ -35,8 +43,11 @@ class DesktopBridge:
                         self._window.evaluate_js(
                             f"window.dispatchEvent(new CustomEvent('evograph:agent', {{detail: {detail}}}))"
                         )
+                except asyncio.CancelledError:
+                    pass
                 finally:
                     with self._guard:
+                        self._cancelled.discard(request_id)
                         self._streams.pop(request_id, None)
 
             asyncio.run(consume())
@@ -47,6 +58,8 @@ class DesktopBridge:
     def cancel_agent(self, request_id: str):
         with self._guard:
             stream = self._streams.get(request_id)
+            if request_id in self._streams:
+                self._cancelled.add(request_id)
         if stream:
             loop, task = stream
             loop.call_soon_threadsafe(task.cancel)
@@ -61,6 +74,8 @@ def launch(application: Application, dist: Path):
     if not index.exists():
         raise SystemExit("前端尚未构建。请先运行 npm install 和 npm run build。")
     bridge = DesktopBridge(application)
+    # Pass the absolute file path; pywebview's http_server serves it through its
+    # local origin and injects the bridge before the Vue app starts.
     window = webview.create_window(
         "EvoGraph · 项目演化工作台",
         str(index),

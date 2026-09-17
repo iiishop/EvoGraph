@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+import AgentQuestion from './AgentQuestion.vue';
+import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import { ArrowUp, Orbit, Square, CornerDownLeft } from 'lucide-vue-next';
 import { useAgent } from '../../composables/useAgent';
 import { useWorkspace } from '../../composables/useWorkspace';
@@ -8,18 +10,22 @@ const props = defineProps<{ project: Project }>();
 const agent = useAgent();
 const { state, setPage } = useWorkspace();
 const content = ref('');
+const attachmentIds = ref<string[]>([]);
+watch(
+  () => props.project.id,
+  () => {
+    content.value = '';
+    attachmentIds.value = [];
+  },
+);
 async function submit() {
-  if (
-    !content.value.trim() ||
-    agent.state.running ||
-    state.busy ||
-    !state.settings?.provider ||
-    props.project.question
-  )
+  if (!content.value.trim() || agent.state.running || state.busy || !state.settings?.provider)
     return;
   const text = content.value;
   content.value = '';
-  await agent.send(props.project.id, text);
+  const ids = [...attachmentIds.value];
+  attachmentIds.value = [];
+  await agent.send(props.project.id, text, props.project.question?.id, ids);
 }
 </script>
 <template>
@@ -33,19 +39,27 @@ async function submit() {
       >
     </div>
     <form class="agent-input" @submit.prevent="submit">
+      <AgentQuestion
+        v-if="project.question"
+        :question="project.question"
+        :answer="content"
+        :disabled="agent.state.running"
+        @choose="content = $event"
+      />
       <textarea
         v-model="content"
         aria-label="修改项目的建议"
-        :disabled="agent.state.running || !!project.question"
+        :disabled="agent.state.running"
         rows="2"
         maxlength="16000"
         :placeholder="
           project.question
-            ? '请先回答画布中的问题，再继续修改。'
+            ? '在这里回答，或选择上方选项…'
             : '例如：增加邮箱验证，把登录方式改成邮箱 + 密码…'
         "
         @keydown.enter.exact.prevent="submit"
       />
+      <AttachmentPicker :project="project" v-model="attachmentIds" />
       <div class="agent-input-footer">
         <span><CornerDownLeft :size="12" /> Enter 发送 · Shift + Enter 换行</span
         ><button
@@ -61,9 +75,7 @@ async function submit() {
           v-else
           class="send-button"
           aria-label="发送修改建议"
-          :disabled="
-            !content.trim() || !state.settings?.provider || state.busy || !!project.question
-          "
+          :disabled="!content.trim() || !state.settings?.provider || state.busy"
         >
           <ArrowUp :size="19" />
         </button>

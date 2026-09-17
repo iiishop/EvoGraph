@@ -55,7 +55,13 @@ function receive(event: AgentEvent) {
         : '本轮结束';
 }
 
-async function send(projectId: string, content: string, questionId?: string) {
+async function send(
+  projectId: string,
+  content: string,
+  questionId?: string,
+  attachmentIds: string[] = [],
+  verificationMilestone?: string,
+) {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return;
   state.running = true;
@@ -68,7 +74,13 @@ async function send(projectId: string, content: string, questionId?: string) {
   controller = new AbortController();
   try {
     await agentStream(
-      { project_id: projectId, content, ...(questionId ? { question_id: questionId } : {}) },
+      {
+        project_id: projectId,
+        content,
+        attachment_ids: attachmentIds,
+        verification_milestone: verificationMilestone,
+        ...(questionId ? { question_id: questionId } : {}),
+      },
       receive,
       controller.signal,
     );

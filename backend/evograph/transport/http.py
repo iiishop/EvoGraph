@@ -20,6 +20,8 @@ class AgentRequest(BaseModel):
     project_id: str
     content: str = Field(min_length=1, max_length=16000)
     question_id: str | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=6)
+    verification_milestone: str | None = None
 
 
 def create_app(application: Application, dist: Path | None = None):
@@ -38,9 +40,10 @@ def create_app(application: Application, dist: Path | None = None):
                 "http://localhost:5173",
                 "http://127.0.0.1:8765",
                 "http://localhost:8765",
+                str(request.base_url).rstrip("/"),
             }:
                 return JSONResponse({"detail": "Invalid origin"}, status_code=403)
-            if int(request.headers.get("content-length", "0")) > 1_000_000:
+            if int(request.headers.get("content-length", "0")) > 12_000_000:
                 return JSONResponse({"detail": "Request too large"}, status_code=413)
         return await call_next(request)
 

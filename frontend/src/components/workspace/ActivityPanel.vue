@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Activity } from 'lucide-vue-next';
-import { eventLabels, formatTime } from '../../lib/presentation';
+import { eventLabels, formatTime, eventDetail } from '../../lib/presentation';
 import type { Project } from '../../types';
 defineProps<{ project: Project }>();
 </script>
@@ -34,11 +34,7 @@ defineProps<{ project: Project }>();
         <div>
           <strong>{{ eventLabels[event.kind] ?? event.kind }}</strong>
           <p>
-            {{
-              event.detail.length > 250
-                ? event.detail.slice(0, 250) + '…'
-                : event.detail || '状态已保存到本地数据库'
-            }}
+            {{ eventDetail(event) }}
           </p>
         </div>
         <time>{{ formatTime(event.created_at) }}</time>

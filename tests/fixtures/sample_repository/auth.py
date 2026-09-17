@@ -2,4 +2,4 @@
 
 
 def login(email: str) -> bool:
-    return '@' in email
+    return "@" in email

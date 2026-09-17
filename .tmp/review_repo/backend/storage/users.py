@@ -1,0 +1,1 @@
+def find_user(email): return {"email": email}

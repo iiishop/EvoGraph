@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { Network, ListChecks, History, Maximize, RotateCcw } from 'lucide-vue-next';
+import { workspaceViews } from '../../lib/workspaceViews';
+import { Maximize, RotateCcw } from 'lucide-vue-next';
 defineProps<{ tab: string; count: number }>();
 defineEmits<{ tab: [tab: string]; fit: []; reset: [] }>();
-const tabs = [
-  { id: 'graph', label: '里程碑图', icon: Network },
-  { id: 'evidence', label: '验证证据', icon: ListChecks },
-  { id: 'activity', label: '演化记录', icon: History },
-];
+const tabs = workspaceViews;
 </script>
 <template>
   <div class="graph-toolbar">

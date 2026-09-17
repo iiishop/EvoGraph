@@ -129,7 +129,10 @@ export function useWorkspace() {
       }
     },
     selected: computed(
-      () => state.project?.milestones.find((m) => m.id === state.selectedId) ?? null,
+      () =>
+        [...(state.project?.milestones ?? []), ...(state.project?.source_milestones ?? [])].find(
+          (m) => m.id === state.selectedId,
+        ) ?? null,
     ),
     selectNode: (id: string | null) => {
       state.selectedId = id;

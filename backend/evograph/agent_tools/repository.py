@@ -24,7 +24,19 @@ class ReadFile(Model):
 def read_project(ctx, args):
     p = ctx.application.db.get(ctx.project_id)
     return p.model_dump(
-        include={"name", "description", "targets", "milestones", "behaviors", "baselines"}
+        include={
+            "name",
+            "description",
+            "targets",
+            "milestones",
+            "behaviors",
+            "baselines",
+            "architectures",
+            "source_diagram",
+            "source_summary",
+            "light_checks",
+            "research",
+        }
     )
 
 
@@ -40,7 +52,7 @@ def inspect_repository(ctx, args):
 
 @tool(
     "read_repository_file",
-    "Read a bounded source/test file relative to the repository. At most 6 distinct files per turn; secrets, symlinks and outside paths are forbidden. Repeating a read returns NO_PROGRESS.",
+    "Read a bounded source/test file relative to the repository. Secrets, symlinks and outside paths are forbidden. Repeating a read returns NO_PROGRESS.",
     ReadFile,
     label="检查源码证据",
 )
@@ -60,12 +72,13 @@ def read_repository_file(ctx, args):
     key = str(path)
     if key in ctx.inspected:
         return {"status": "NO_PROGRESS", "reason": "此文件已经检查过"}
-    if len(ctx.inspected) >= 6 or path.stat().st_size > 100000:
-        raise ValueError("本次调查已达到文件预算，或文件过大")
+    if path.stat().st_size > 100000:
+        raise ValueError("文件过大")
     data = path.read_bytes()
     if b"\0" in data:
         raise ValueError("不支持读取二进制文件")
     ctx.inspected.add(key)
+    ctx.receipts[path.relative_to(root).as_posix()] = hashlib.sha256(data).hexdigest()
     text = data.decode("utf-8", errors="replace")
     return {
         "path": args.path,

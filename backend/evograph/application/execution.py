@@ -4,6 +4,7 @@ from ..domain.models import Evidence
 from ..domain.policies import readiness
 from ..infrastructure.repository import snapshot
 from ..infrastructure.verifier import run_verifier
+from .source_index import populate
 
 
 class ExecutionService:
@@ -19,9 +20,16 @@ class ExecutionService:
             and p.baseline.commit == baseline.commit
             and p.baseline.complete == baseline.complete
         ):
+            if p.source_fingerprint != baseline.fingerprint:
+                populate(p)
+                return self.db.save(p, "source_indexed", p.source_summary)
             return p
         p.baselines.append(baseline)
+        populate(p)
         for m in p.milestones:
+            for obligation in m.obligations:
+                if obligation.fingerprint and obligation.fingerprint != baseline.fingerprint:
+                    obligation.resolved = False
             if m.status in {"IN_PROGRESS", "VERIFIED_COMPLETE"}:
                 m.status = "REVALIDATION_REQUIRED"
         return self.db.save(
@@ -100,6 +108,7 @@ class ExecutionService:
                 behavior_revision_ids=m.behavior_revision_ids,
                 baseline_id=baseline.id,
                 fingerprint=baseline.fingerprint,
+                architecture_revision=m.architecture_revision,
                 command=command,
                 **result,
             )
@@ -116,6 +125,6 @@ class ExecutionService:
     def positions(self, project_id: str, positions: dict):
         p = self.db.get(project_id)
         for mid, pos in positions.items():
-            m = p.milestone(mid)
+            m = next((n for n in p.source_milestones if n.id == mid), None) or p.milestone(mid)
             m.position = {"x": float(pos["x"]), "y": float(pos["y"])}
         return self.db.save(p, "layout_updated")

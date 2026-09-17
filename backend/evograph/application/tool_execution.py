@@ -13,8 +13,6 @@ class ToolExecutor:
         self.seen_results = set()
 
     async def invoke(self, name: str, arguments: str) -> dict:
-        if self.calls_used >= 24:
-            raise ValueError("本轮工具预算已用完；已完成的修改已保留")
         self.calls_used += 1
         spec = self.registry.get(name)
         try:
@@ -33,7 +31,9 @@ class ToolExecutor:
             self.changed |= mutation
             if mutation:
                 event = {
-                    "type": "graph_changed", **result, "label": spec.label,
+                    "type": "graph_changed",
+                    **result,
+                    "label": spec.label,
                     "project": self.context.application.projects.get(self.context.project_id),
                 }
             elif spec.effect == "question":
@@ -45,9 +45,20 @@ class ToolExecutor:
                 not isinstance(result, dict) or result.get("status") != "NO_PROGRESS"
             )
             self.seen_results.add(key)
-            return {"events": [event], "progress": progress, "payload": {"ok": True, "result": result}}
+            return {
+                "events": [event],
+                "progress": progress,
+                "payload": {"ok": True, "result": result},
+            }
         except (ValueError, OSError) as exc:
             return {
-                "events": [{"type": "tool_failed", "label": spec.label if spec else "未知工具", "message": str(exc)[:300]}],
-                "progress": False, "payload": {"ok": False, "error": str(exc)[:1500]},
+                "events": [
+                    {
+                        "type": "tool_failed",
+                        "label": spec.label if spec else "未知工具",
+                        "message": str(exc)[:300],
+                    }
+                ],
+                "progress": False,
+                "payload": {"ok": False, "error": str(exc)[:1500]},
             }

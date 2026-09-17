@@ -3,6 +3,7 @@
 from ..domain.models import (
     BehaviorRevision,
     Milestone,
+    Obligation,
     PlanningRevision,
     PlanProposal,
     ProposedMilestone,
@@ -34,6 +35,7 @@ class GraphEditor:
                             "title",
                             "intent",
                             "scope",
+                            "architecture_components",
                             "dependencies",
                             "dependency_reasons",
                             "resources",
@@ -53,6 +55,10 @@ class GraphEditor:
 
     def _save(self, project, summary, before):
         self._check(project)
+        old_topology = [(m["id"], m["dependencies"]) for m in before]
+        if old_topology != [(m.id, m.dependencies) for m in project.milestones]:
+            for node in project.milestones:
+                node.position = None
         project.proposal = None
         project.proposal_revision = None
         project.plans.append(
@@ -79,6 +85,8 @@ class GraphEditor:
         )
 
     def upsert(self, project_id: str, proposed: ProposedMilestone, create: bool):
+        if proposed.id.startswith("SRC_"):
+            raise ValueError("SRC_ 是源码观察节点的保留命名空间，请为交付节点使用独立 ID")
         p = self.db.get(project_id)
         old = next((m for m in p.milestones if m.id == proposed.id), None)
         if create == bool(old):
@@ -89,6 +97,15 @@ class GraphEditor:
             )
         if old and old.lease_active:
             raise ValueError("该节点已领取，请先释放后修改")
+        architecture = p.architectures[-1] if p.architectures else None
+        if set(proposed.architecture_components) - (
+            {n.id for n in architecture.diagram.nodes} if architecture else set()
+        ):
+            raise ValueError("引用的架构组件不存在，请先更新架构设计")
+        if architecture and not proposed.architecture_components:
+            raise ValueError("请为里程碑关联至少一个架构组件")
+        if set(proposed.attachment_ids) - {a.id for a in p.attachments}:
+            raise ValueError("引用的资料不存在")
         before = [m.model_dump() for m in p.milestones]
         bids = []
         for behavior in proposed.behaviors:
@@ -121,12 +138,14 @@ class GraphEditor:
             behavior_revision_ids=bids,
             obligations=obligations(proposed.change_types),
             position=old.position if old else None,
+            architecture_revision=architecture.number if architecture else 0,
         )
         if old:
             unchanged = all(
                 getattr(old, f) == getattr(node, f)
                 for f in [
                     "scope",
+                    "architecture_components",
                     "resources",
                     "change_types",
                     "dependencies",
@@ -145,6 +164,12 @@ class GraphEditor:
             p.milestones[p.milestones.index(old)] = node
         else:
             p.milestones.append(node)
+        if architecture and not any(o.id == "architecture" for o in node.obligations):
+            node.obligations.append(
+                Obligation(
+                    id="architecture", label=f"审查架构 A{architecture.number} 与当前里程碑的一致性"
+                )
+            )
         self._save(p, f"{'创建' if create else '更新'} {node.id} · {node.title}", before)
         return {"node_ids": [node.id], "effect": "created" if create else "updated"}
 

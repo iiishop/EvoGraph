@@ -26,9 +26,13 @@ export interface Obligation {
   note: string;
 }
 export interface Milestone {
+  origin: 'plan' | 'source';
+  source_refs: string[];
   id: string;
   title: string;
   intent: string;
+  architecture_components: string[];
+  attachment_ids: string[];
   scope: string[];
   dependencies: string[];
   dependency_reasons: Record<string, string>;
@@ -81,7 +85,46 @@ export interface Proposal {
     behaviors: { key: string; statement: string }[];
   }[];
 }
+export interface Attachment {
+  id: string;
+  name: string;
+  media_type: string;
+  size: number;
+  excerpt: string;
+}
+export interface Diagram {
+  id: string;
+  title: string;
+  kind: string;
+  nodes: {
+    id: string;
+    label: string;
+    description: string;
+    role?: string;
+    source_refs?: string[];
+  }[];
+  edges: { source: string; target: string; label: string }[];
+  milestone_ids: string[];
+  attachment_ids: string[];
+}
+export interface Architecture {
+  research_ids: string[];
+  number: number;
+  summary: string;
+  technologies: { area: string; choice: string; rationale: string }[];
+  decisions: string[];
+  diagram: Diagram;
+}
 export interface Project extends ProjectSummary {
+  source_milestones: Milestone[];
+  source_diagram: Diagram | null;
+  source_summary: string;
+  source_fingerprint: string;
+  light_checks: LightCheck[];
+  research: { id: string; title: string; url: string; excerpt: string; created_at: string }[];
+  attachments: Attachment[];
+  diagrams: Diagram[];
+  architectures: Architecture[];
   question: PendingQuestion | null;
   repository: string;
   revision: number;
@@ -111,9 +154,22 @@ export interface Project extends ProjectSummary {
   events: { id: string; kind: string; detail: string; created_at: string }[];
   metrics: Record<string, number>;
 }
+export interface LightCheck {
+  id: string;
+  milestone_id: string;
+  fingerprint: string;
+  kind: string;
+  rationale: string;
+  result: string;
+  output: string;
+  command: string[];
+  duration: number;
+  created_at: string;
+}
 export interface PendingQuestion {
   id: string;
   prompt: string;
+  category: 'missing_design_input' | 'agent_blocked' | 'decision';
   context: string;
   options: string[];
 }

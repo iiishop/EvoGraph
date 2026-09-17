@@ -1,7 +1,13 @@
 import type { AgentEvent } from '../types';
 
 export async function agentStream(
-  params: { project_id: string; content: string; question_id?: string },
+  params: {
+    project_id: string;
+    content: string;
+    question_id?: string;
+    attachment_ids?: string[];
+    verification_milestone?: string;
+  },
   receive: (event: AgentEvent) => void,
   signal: AbortSignal,
 ) {

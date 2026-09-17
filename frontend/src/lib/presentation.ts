@@ -5,6 +5,15 @@ export const statusLabels: Record<string, string> = {
   VERIFIED_COMPLETE: '验收通过',
 };
 export const eventLabels: Record<string, string> = {
+  graph_edited: '修改里程碑图',
+  architecture_updated: '更新架构设计',
+  diagram_updated: '更新设计图',
+  attachment_uploaded: '上传项目资料',
+  agent_turn_finished: '结束本轮规划',
+  target_committed: '更新目标',
+  agent_answer: '补充需求',
+  project_deleted: '移出项目列表',
+  project_restored: '恢复项目',
   plan_applied: '应用规划',
   plan_proposed: '生成草案',
   conversation: 'Agent 对话',
@@ -25,4 +34,16 @@ export function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+export function eventDetail(event: { kind: string; detail: string }) {
+  if (event.kind === 'graph_edited') {
+    try {
+      return JSON.parse(event.detail).summary;
+    } catch {
+      return '图已更新';
+    }
+  }
+  if (event.kind === 'agent_turn_finished') return '本轮已结束，已完成的修改已保存';
+  return event.detail.slice(0, 250) || '状态已保存到本地数据库';
 }

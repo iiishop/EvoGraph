@@ -4,10 +4,13 @@ import { X, Play, Copy, ExternalLink, ShieldCheck } from 'lucide-vue-next';
 import type { Milestone, Project } from '../../types';
 import { useWorkspace } from '../../composables/useWorkspace';
 import StatusBadge from '../ui/StatusBadge.vue';
+import AssetPreview from '../attachments/AssetPreview.vue';
+import DiagramView from '../design/DiagramView.vue';
 import ObligationItem from './ObligationItem.vue';
+import AgentAssurance from './AgentAssurance.vue';
 const props = defineProps<{ milestone: Milestone; project: Project }>();
 const { state, selectNode, perform } = useWorkspace();
-const commandInput = ref('["python", "-m", "pytest", "-q"]'),
+const commandInput = ref(''),
   localError = ref(''),
   copied = ref(false);
 const behaviors = computed(() =>
@@ -59,6 +62,34 @@ async function copyTask() {
       <h2>{{ milestone.title }}</h2>
       <StatusBadge :status="milestone.status" />
       <p class="intent">{{ milestone.intent }}</p>
+      <AgentAssurance :project="project" :milestone="milestone" />
+      <section v-if="milestone.architecture_components.length">
+        <h4>架构组件</h4>
+        <code
+          v-for="component in milestone.architecture_components"
+          :key="component"
+          class="scope-path"
+          >{{ component }}</code
+        >
+      </section>
+      <section v-if="milestone.attachment_ids.length">
+        <h4>设计参考</h4>
+        <AssetPreview
+          v-for="asset in project.attachments.filter((a) =>
+            milestone.attachment_ids.includes(a.id),
+          )"
+          :key="asset.id"
+          :asset="asset"
+          :project-id="project.id"
+        />
+      </section>
+      <section
+        v-for="diagram in project.diagrams.filter((d) => d.milestone_ids.includes(milestone.id))"
+        :key="diagram.id"
+      >
+        <h4>{{ diagram.title }}</h4>
+        <DiagramView :diagram="diagram" />
+      </section>
       <section>
         <h4>变更范围</h4>
         <code v-for="scope in milestone.scope" :key="scope" class="scope-path">{{ scope }}</code>
@@ -138,11 +169,11 @@ async function copyTask() {
           <Copy :size="14" />{{ copied ? '已复制' : '复制执行任务' }}
         </button>
       </div>
-      <section
+      <details
         v-if="['IN_PROGRESS', 'REVALIDATION_REQUIRED'].includes(milestone.status)"
         class="verification-form"
       >
-        <h4>运行本地验收</h4>
+        <summary>高级：手动正式验收</summary>
         <p class="muted">将此命令结果作为以上行为的验收依据。命令会在项目目录执行，最长 120 秒。</p>
         <textarea
           v-model="commandInput"
@@ -160,7 +191,7 @@ async function copyTask() {
         >
           释放任务
         </button>
-      </section>
+      </details>
     </div>
   </aside>
 </template>

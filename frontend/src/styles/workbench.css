@@ -1,0 +1,551 @@
+:root {
+  --ink: #20324b;
+  --text-secondary: #53647b;
+  --canvas: #f6f8fc;
+  --accent: #355ad6;
+  --source: #087e91;
+  --decision: #7751c4;
+  --green: #355ad6;
+  --green-dark: #2948ad;
+  --muted: #53647b;
+  --line: #dce3ee;
+  color: var(--ink);
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+}
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.button {
+  min-height: 40px;
+}
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.button.primary:hover {
+  background: var(--green-dark);
+}
+.button.secondary {
+  color: var(--ink);
+}
+.breadcrumb,
+.breadcrumb > span,
+.title-row p,
+.header-local,
+.agent-dock-note,
+.agent-input-footer > span,
+.muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.sidebar {
+  background: #edf2fa;
+  border-right-color: var(--line);
+}
+.workspace-header {
+  padding-top: 18px;
+}
+.title-row {
+  margin-top: 16px;
+}
+.title-row h1 {
+  color: var(--ink);
+}
+.planning-content {
+  border-color: var(--line);
+  background: var(--canvas);
+  border-radius: 12px;
+}
+.vue-flow {
+  background: var(--canvas);
+}
+.view-tabs {
+  gap: 20px;
+}
+.view-tabs > button {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.view-tabs > button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.milestone-node {
+  width: 236px;
+  height: 150px;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: 11px;
+  box-shadow: 0 4px 14px #20324b0b;
+}
+.milestone-node.selected {
+  border: 1px solid var(--accent);
+  border-top: 3px solid var(--accent);
+  box-shadow: 0 0 0 3px #355ad625;
+}
+.milestone-node.source-node {
+  border-top-color: var(--source);
+  background: #f4fbfd;
+}
+.milestone-node.complete {
+  border-top-color: #18765c;
+}
+.milestone-node h3 {
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node-id,
+.node-scope,
+.node-bottom > span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  background: #dff2f6;
+  color: #086d7d;
+  border: 1px solid #b1dce5;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.vue-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: #6982b4;
+  border: 2px solid white;
+}
+.vue-flow__handle-left {
+  left: 0;
+  top: 50%;
+}
+.vue-flow__handle-right {
+  right: 0;
+  top: 50%;
+}
+.vue-flow__controls-button {
+  width: 36px;
+  height: 36px;
+  color: var(--ink);
+}
+.edge-legend {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.agent-input {
+  border-color: #cbd7ec;
+  box-shadow: 0 3px 16px #355ad608;
+}
+.agent-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #355ad614;
+}
+.agent-input textarea {
+  font-size: 14px;
+  color: var(--ink);
+}
+.send-button {
+  background: var(--accent);
+}
+.agent-dock-heading strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.attachment-add,
+.attachment-chip,
+.attachment-picker small {
+  font-size: 12px;
+}
+.attachment-add,
+.attachment-chip {
+  min-height: 32px;
+}
+.architecture-workbench {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: white;
+}
+.architecture-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px 12px;
+}
+.architecture-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 20px;
+}
+.architecture-heading p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 7px;
+}
+.architecture-heading select {
+  width: auto;
+  min-width: 165px;
+}
+.architecture-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 22px 12px;
+  flex-wrap: wrap;
+}
+.architecture-tools select {
+  width: auto;
+  max-width: 230px;
+}
+.component-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--canvas);
+  padding-left: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  flex: 1;
+  min-width: 150px;
+}
+.component-search input {
+  border: 0;
+  background: transparent;
+  min-width: 0;
+}
+.architecture-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0 22px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.architecture-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.architecture-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.architecture-legend small {
+  margin-left: auto;
+  font-size: 12px;
+}
+.architecture-stage {
+  display: flex;
+  flex: 1;
+  min-height: 300px;
+  position: relative;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.architecture-stage > .design-diagram {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  min-height: 300px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.architecture-node {
+  position: relative;
+  width: 236px;
+  height: 150px;
+  padding: 14px 16px;
+  border: 1px solid var(--role-color);
+  border-left: 4px solid var(--role-color);
+  border-radius: 10px;
+  background: white;
+  box-shadow: 0 4px 12px #20324b0a;
+  transition:
+    opacity 150ms,
+    box-shadow 150ms;
+}
+.architecture-node.selected {
+  box-shadow:
+    0 0 0 4px var(--role-tint),
+    0 4px 12px #20324b16;
+  background: var(--role-tint);
+}
+.architecture-node.dimmed {
+  opacity: 0.2;
+}
+.architecture-node-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--role-color);
+  height: 20px;
+}
+.architecture-node strong {
+  display: block;
+  margin: 8px 0 5px;
+  font-size: 15px;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.architecture-node p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  height: 36px;
+  overflow: hidden;
+}
+.architecture-node > small {
+  color: var(--role-color);
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+}
+.architecture-node .vue-flow__handle {
+  background: var(--role-color);
+}
+.design-diagram .vue-flow__edge-text {
+  font-size: 11px;
+  fill: var(--text-secondary);
+}
+.design-diagram .vue-flow__edge-textbg {
+  fill: white;
+  fill-opacity: 0.95;
+}
+.component-passport {
+  width: 290px;
+  flex-shrink: 0;
+  padding: 16px;
+  border-left: 1px solid var(--line);
+  background: white;
+  overflow: auto;
+  max-height: 500px;
+}
+.component-passport header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.component-passport h3 {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.component-passport h4 {
+  margin: 22px 0 10px;
+  font-size: 13px;
+}
+.component-passport p {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.relationship-row {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+  background: white;
+  gap: 5px;
+  font-size: 12px;
+}
+.relationship-row:hover {
+  color: var(--accent);
+}
+.source-summary {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  padding: 10px 22px;
+}
+.architecture-foundation {
+  padding: 14px 22px;
+}
+summary {
+  cursor: pointer;
+}
+.architecture-foundation summary {
+  font-size: 14px;
+  font-weight: 600;
+}
+.architecture-foundation summary span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  margin-left: 10px;
+}
+.architecture-foundation > p {
+  margin: 15px 0;
+  line-height: 1.7;
+}
+.technology-grid p,
+.technology-grid small {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.research-link {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+}
+.agent-assurance {
+  border-radius: 9px;
+  padding: 13px;
+  background: #f1f4fc;
+}
+.agent-assurance > p,
+.agent-assurance > small {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  display: block;
+}
+.assurance-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.assurance-buttons .button {
+  font-size: 12px;
+  min-height: 44px;
+}
+.agent-assurance .text-button {
+  margin: 12px 0 0;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.light-check {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.light-check summary b {
+  margin-right: 8px;
+}
+.check-pass {
+  color: #18765c;
+}
+.check-fail,
+.check-error {
+  color: #be4564;
+}
+.check-review {
+  color: var(--decision);
+}
+.light-check pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 200px;
+  overflow: auto;
+  background: white;
+  padding: 8px;
+}
+.light-check code {
+  overflow-wrap: anywhere;
+  display: block;
+  margin-top: 8px;
+}
+.research-form {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  margin: 22px 0;
+  display: grid;
+  gap: 16px;
+}
+.research-form h2 {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 19px;
+}
+.research-form p,
+.research-form small {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.research-form label {
+  display: grid;
+  gap: 8px;
+}
+.research-form .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.checkbox-label input {
+  width: 17px;
+  height: 17px;
+}
+.inspector .scope-path {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+@media (max-width: 1100px) {
+  .component-passport {
+    width: 250px;
+  }
+  .architecture-heading,
+  .architecture-tools {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}
+@media (max-width: 700px) {
+  .architecture-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .architecture-stage {
+    flex-direction: column;
+  }
+  .component-passport {
+    width: 100%;
+    max-height: 250px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .architecture-stage > .design-diagram {
+    height: 350px;
+    flex: none;
+  }
+  .architecture-foundation summary span {
+    display: block;
+    margin: 7px 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .architecture-node {
+    transition: none;
+  }
+}

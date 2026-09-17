@@ -1,37 +1,69 @@
+import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
+import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Milestone } from '../types';
-
-export function layout(milestones: Milestone[]) {
-  const byId = new Map(milestones.map((m) => [m.id, m]));
-  const downstream = new Map<string, number>();
-  function distance(id: string): number {
-    if (downstream.has(id)) return downstream.get(id)!;
-    downstream.set(id, 0);
-    const children = milestones.filter((m) => m.dependencies.includes(id));
-    const value = children.length ? 1 + Math.max(...children.map((m) => distance(m.id))) : 0;
-    downstream.set(id, value);
-    return value;
-  }
-  milestones.forEach((m) => distance(m.id));
-  const remaining = new Set(byId.keys());
-  const placed = new Set<string>();
-  const positions = new Map<string, { x: number; y: number }>();
-  let column = 0;
-  // Two lanes keep small plans readable. Only edges, not columns, imply dependency.
-  while (remaining.size) {
-    const ready = [...remaining]
-      .filter((id) => byId.get(id)!.dependencies.every((dep) => placed.has(dep)))
-      .sort((a, b) => downstream.get(b)! - downstream.get(a)! || a.localeCompare(b))
-      .slice(0, 2);
-    if (!ready.length) break;
-    ready.forEach((id, row) => {
-      positions.set(id, {
-        x: column * 285 + 20,
-        y: row * 165 + (ready.length === 1 ? 82.5 : 0) + 24,
-      });
-      remaining.delete(id);
-      placed.add(id);
-    });
-    column++;
-  }
-  return positions;
+const elk = new ELK();
+export const NODE_WIDTH = 236,
+  NODE_HEIGHT = 150;
+export interface Point {
+  x: number;
+  y: number;
+}
+export interface LayoutResult {
+  direction: 'RIGHT' | 'DOWN';
+  positions: Map<string, Point>;
+  routes: Map<string, Point[]>;
+}
+export const edgeId = (source: string, target: string) => JSON.stringify([source, target]);
+export async function layout(
+  milestones: Pick<Milestone, 'id' | 'dependencies'>[],
+): Promise<LayoutResult> {
+  const direction = 'RIGHT' as const;
+  const vertical = false;
+  const result = await elk.layout<ElkNode>({
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': direction,
+      'elk.edgeRouting': 'ORTHOGONAL',
+      'elk.spacing.nodeNode': '70',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '110',
+      'elk.layered.spacing.edgeNodeBetweenLayers': '32',
+      'elk.spacing.edgeNode': '30',
+      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+      'elk.padding': '[top=60,left=30,bottom=50,right=30]',
+    },
+    children: milestones.map((m) => ({
+      id: m.id,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
+      ports: [
+        { id: m.id + '-in', x: vertical ? 118 : 0, y: vertical ? 0 : 75, width: 0, height: 0 },
+        {
+          id: m.id + '-out',
+          x: vertical ? 118 : NODE_WIDTH,
+          y: vertical ? NODE_HEIGHT : 75,
+          width: 0,
+          height: 0,
+        },
+      ],
+    })),
+    edges: milestones.flatMap((m) =>
+      m.dependencies.map((dep) => ({
+        id: edgeId(dep, m.id),
+        sources: [dep + '-out'],
+        targets: [m.id + '-in'],
+      })),
+    ),
+  });
+  return {
+    direction,
+    positions: new Map(result.children?.map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0 }]) ?? []),
+    routes: new Map(
+      result.edges?.map((e) => [
+        e.id,
+        e.sections?.flatMap((s) => [s.startPoint, ...(s.bendPoints ?? []), s.endPoint]) ?? [],
+      ]) ?? [],
+    ),
+  };
 }

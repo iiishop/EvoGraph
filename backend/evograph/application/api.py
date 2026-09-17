@@ -10,10 +10,14 @@ from pydantic import ConfigDict, ValidationError, validate_call
 
 from ..infrastructure.database import ConflictError, Database
 from .agent_runtime import AgentRuntime
+from .assurance import AssuranceService
+from .attachments import AttachmentService
+from .design import DesignService
 from .execution import ExecutionService
 from .graph_editor import GraphEditor
 from .planning import PlanningService
 from .projects import ProjectService
+from .research import ResearchService
 from .settings import SettingsService
 
 logger = logging.getLogger(__name__)
@@ -24,9 +28,13 @@ class Application:
         self.db = Database(data_dir / "evograph.sqlite3")
         self.projects = ProjectService(self.db)
         self.settings = SettingsService(self.db, secrets)
+        self.research = ResearchService(self.db, self.settings.secrets)
         self.planning = PlanningService(self.db, self.settings)
         self.execution = ExecutionService(self.db)
+        self.assurance = AssuranceService(self.db, self.execution)
         self.graph = GraphEditor(self.db)
+        self.attachments = AttachmentService(self.db)
+        self.design = DesignService(self.db)
         self.agent = AgentRuntime(self)
         self._locks = {}
         self._lock_guard = threading.Lock()
@@ -43,13 +51,22 @@ class Application:
             "settings.get": self.settings.get,
             "settings.save": self.settings.save,
             "settings.test": self.settings.test,
-            "agent.chat": self.planning.chat,
+            "research.settings": self.research.settings,
+            "research.configure": self.research.configure,
+            "attachments.upload": self.attachments.upload,
+            "attachments.read": self.attachments.read,
+            "attachments.formats": self.attachments.formats,
+            "design.update": self.design.update,
+            "design.diagram": self.design.save_diagram,
+            "agent.chat": self.planning.chat,  # Legacy API compatibility; new UI uses streaming tools.
             "plan.apply": self.planning.apply,
             "plan.discard": self.planning.discard,
             "baseline.refresh": self.execution.refresh,
             "milestone.start": self.execution.start,
             "milestone.release": self.execution.release,
             "milestone.verify": self.execution.verify,
+            "verification.export": self.assurance.handoff,
+            "verification.import": self.assurance.import_report,
             "milestone.obligation": self.execution.resolve_obligation,
             "graph.positions": self.execution.positions,
         }

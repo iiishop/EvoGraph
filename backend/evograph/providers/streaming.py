@@ -52,10 +52,28 @@ def anthropic_messages(messages):
                 )
             item = {"role": "assistant", "content": blocks}
         else:
-            item = {
-                "role": role,
-                "content": [{"type": "text", "text": message["content"] or "Continue."}],
-            }
+            content = message["content"]
+            blocks = []
+            for block in (
+                content
+                if isinstance(content, list)
+                else [{"type": "text", "text": content or "Continue."}]
+            ):
+                if block["type"] == "image_url":
+                    header, data = block["image_url"]["url"].split(",", 1)
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": header[5:].split(";")[0],
+                                "data": data,
+                            },
+                        }
+                    )
+                else:
+                    blocks.append(block)
+            item = {"role": role, "content": blocks}
         if converted and converted[-1]["role"] == item["role"]:
             converted[-1]["content"].extend(item["content"])
         else:

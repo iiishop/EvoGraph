@@ -29,20 +29,38 @@ export async function command<T>(action: string, params: object = {}): Promise<T
   return response.data;
 }
 
+// pywebview creates window.pywebview.api as an empty object a few milliseconds
+// before it attaches the method stubs, so the api object alone is not ready.
+function bridgeReady() {
+  return typeof window.pywebview?.api?.command === 'function';
+}
+
 export async function readyTransport() {
-  // pywebview injects the API asynchronously; the browser server always uses its fixed port.
+  // pywebview may inject its bridge before Vue mounts. Poll as well as listening so
+  // desktop startup does not fall through to fetch('/api/command') from file://.
+  // Wait for the real method, not the placeholder object, or the first call lands
+  // in that gap and throws "api.command is not a function".
   const browserPorts = ['5173', '8765', '4173'];
-  if (!browserPorts.includes(location.port) && !window.pywebview?.api) {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 5000);
-      window.addEventListener(
-        'pywebviewready',
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
-    });
-  }
+  if (browserPorts.includes(location.port) || bridgeReady()) return;
+  await new Promise<void>((resolve, reject) => {
+    const started = Date.now();
+    let timer = 0;
+    const settle = () => {
+      window.clearInterval(timer);
+      window.removeEventListener('pywebviewready', listener);
+      resolve();
+    };
+    const listener = () => {
+      if (bridgeReady()) settle();
+    };
+    window.addEventListener('pywebviewready', listener, { once: true });
+    timer = window.setInterval(() => {
+      if (bridgeReady()) {
+        settle();
+      } else if (Date.now() - started > 15000) {
+        window.clearInterval(timer);
+        reject(new Error('桌面桥接未就绪，请确认已使用 uv run evograph 启动应用，而不是直接打开 dist/index.html'));
+      }
+    }, 50);
+  });
 }

@@ -1,50 +1,137 @@
 <script setup lang="ts">
-import { computed, nextTick, watch } from 'vue';
+import { computed, nextTick, watch, shallowRef } from 'vue';
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { GitBranch } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
 import PrerequisiteEdge from './PrerequisiteEdge.vue';
-import { layout } from '../../composables/useGraphLayout';
+import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
+import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
+import GoalMarker from './GoalMarker.vue';
 import FollowAgentButton from './FollowAgentButton.vue';
-import AgentQuestion from '../agent/AgentQuestion.vue';
+
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
+const allMilestones = computed(() => [
+  ...(props.project.source_milestones ?? []),
+  ...props.project.milestones,
+]);
 const flowId = `milestones-${props.project.id}`;
 const { fitView, setCenter, findNode } = useVueFlow(flowId);
 const { state, selectNode, perform } = useWorkspace();
 const agent = useAgent();
 const follows = computed(() => agent.state.follow[props.project.id] !== false);
-const positions = computed(() => layout(props.project.milestones));
+const computedLayout = shallowRef<LayoutResult>({
+  direction: 'RIGHT',
+  positions: new Map(),
+  routes: new Map(),
+});
+let layoutGeneration = 0;
+const topology = computed(() =>
+  JSON.stringify(allMilestones.value.map((m) => [m.id, m.dependencies])),
+);
+watch(
+  topology,
+  async () => {
+    const generation = ++layoutGeneration;
+    try {
+      const result = await layout(props.project.milestones);
+      const source = props.project.source_milestones ?? [];
+      const columns = Math.min(3, source.length);
+      const shelfHeight = columns ? Math.ceil(source.length / columns) * 200 + 80 : 0;
+      result.positions = new Map(
+        [...result.positions].map(([id, point]) => [id, { x: point.x, y: point.y + shelfHeight }]),
+      );
+      source.forEach((node, index) =>
+        result.positions.set(node.id, {
+          x: 30 + (index % columns) * 280,
+          y: 90 + Math.floor(index / columns) * 200,
+        }),
+      );
+      if (generation === layoutGeneration) computedLayout.value = result;
+    } catch (error) {
+      console.error('Graph layout failed', error);
+    }
+  },
+  { immediate: true },
+);
+const positions = computed(() => computedLayout.value.positions);
+const boxes = computed(() =>
+  separateBoxes(
+    allMilestones.value
+      .filter((m) => positions.value.has(m.id))
+      .map((m) => ({
+        id: m.id,
+        ...(m.position ?? positions.value.get(m.id)!),
+        width: 236,
+        height: 150,
+      })),
+  ),
+);
+const displayPositions = computed(
+  () => new Map(boxes.value.map((b) => [b.id, { x: b.x, y: b.y }])),
+);
+function route(source: string, target: string) {
+  const a = displayPositions.value.get(source),
+    b = displayPositions.value.get(target);
+  if (!a || !b) return [];
+  if (!props.project.milestones.some((m) => m.position))
+    return computedLayout.value.routes.get(edgeId(source, target));
+  return computedLayout.value.direction === 'DOWN'
+    ? routeAroundBoxes({ x: a.x + 118, y: a.y + 150 }, { x: b.x + 118, y: b.y }, boxes.value)
+    : routeAroundBoxes({ x: a.x + 236, y: a.y + 75 }, { x: b.x, y: b.y + 75 }, boxes.value);
+}
+async function dragged({ node }: { node: { id: string; position: { x: number; y: number } } }) {
+  const arranged = separateBoxes(
+    boxes.value
+      .filter((b) => b.id !== node.id)
+      .concat({ id: node.id, ...node.position, width: 236, height: 150 }),
+  );
+  await perform('graph.positions', {
+    project_id: props.project.id,
+    positions: Object.fromEntries(arranged.map((b) => [b.id, { x: b.x, y: b.y }])),
+  });
+}
 const nodes = computed(() =>
-  props.project.milestones.map((m) => ({
-    id: m.id,
-    type: 'milestone',
-    position: m.position ?? positions.value.get(m.id)!,
-    selected: state.selectedId === m.id,
-    data: {
-      milestone: m,
-      ready: props.project.readiness[m.id]?.safe_to_execute,
-      agentFocused: agent.state.projectId === props.project.id && agent.state.focusId === m.id,
-      agentActive: agent.state.running,
-      updateTick: agent.state.projectId === props.project.id ? (agent.state.updates[m.id] ?? 0) : 0,
-    },
-  })),
+  allMilestones.value
+    .filter((m) => positions.value.has(m.id))
+    .map((m) => ({
+      id: m.id,
+      type: 'milestone',
+      position: displayPositions.value.get(m.id)!,
+      selected: state.selectedId === m.id,
+      data: {
+        milestone: m,
+        vertical: computedLayout.value.direction === 'DOWN',
+        ready: props.project.readiness[m.id]?.safe_to_execute,
+        agentFocused: agent.state.projectId === props.project.id && agent.state.focusId === m.id,
+        agentActive: agent.state.running,
+        updateTick:
+          agent.state.projectId === props.project.id ? (agent.state.updates[m.id] ?? 0) : 0,
+      },
+    })),
 );
 const edges = computed(() =>
   props.project.milestones.flatMap((m) =>
     m.dependencies.map((dep) => ({
-      id: `${dep}-${m.id}`,
+      id: edgeId(dep, m.id),
       source: dep,
       target: m.id,
+      sourceHandle: 'out',
+      targetHandle: 'in',
       type: 'prerequisite',
       markerEnd: { type: MarkerType.ArrowClosed, color: edgeKind(m.dependency_types?.[dep]).color },
       style: { stroke: edgeKind(m.dependency_types?.[dep]).color, strokeWidth: 1.7 },
-      data: { kind: m.dependency_types?.[dep] ?? 'implementation' },
+      data: {
+        kind: m.dependency_types?.[dep] ?? 'implementation',
+        routeKind: props.project.milestones.some((n) => n.position) ? 'waypoints' : 'spline',
+        reason: m.dependency_reasons[dep],
+        route: route(dep, m.id),
+      },
     })),
   ),
 );
@@ -52,11 +139,14 @@ function fit() {
   agent.freeView(props.project.id);
   fitView({ padding: 0.17, duration: 250 });
 }
+function initialized() {
+  if (!agent.state.running && follows.value) fitView({ padding: 0.22, duration: 0 });
+}
 async function follow() {
   if (!follows.value || agent.state.projectId !== props.project.id) return;
   await nextTick();
   const node = findNode(agent.state.focusId);
-  if (node) setCenter(node.position.x + 118, node.position.y + 65, { zoom: 0.95, duration: 450 });
+  if (node) setCenter(node.position.x + 118, node.position.y + 75, { zoom: 0.95, duration: 450 });
 }
 function moved({ event }: { event: unknown }) {
   if (event) agent.freeView(props.project.id);
@@ -70,10 +160,12 @@ async function reset() {
   fit();
 }
 watch(() => agent.state.pulse, follow);
+watch(computedLayout, follow);
 defineExpose({ fit, reset });
 </script>
 <template>
   <div class="graph-canvas">
+    <GoalMarker :project="project" />
     <VueFlow
       v-if="nodes.length"
       :id="flowId"
@@ -85,17 +177,12 @@ defineExpose({ fit, reset });
       :nodes-draggable="!agent.state.running"
       :delete-key-code="null"
       fit-view-on-init
+      @nodes-initialized="initialized"
       @move-start="moved"
       @node-drag-start="agent.freeView(project.id)"
       @node-click="({ node }) => selectNode(node.id)"
       @pane-click="selectNode(null)"
-      @node-drag-stop="
-        ({ node }) =>
-          perform('graph.positions', {
-            project_id: project.id,
-            positions: { [node.id]: node.position },
-          })
-      "
+      @node-drag-stop="dragged"
       ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
         :show-interactive="false"
         position="bottom-left"
@@ -113,12 +200,5 @@ defineExpose({ fit, reset });
       >
     </div>
     <FollowAgentButton v-if="!follows" @resume="agent.resumeFollow(project.id)" />
-    <div v-if="project.question" class="question-overlay">
-      <AgentQuestion
-        :key="project.question.id"
-        :question="project.question"
-        :project-id="project.id"
-      />
-    </div>
   </div>
 </template>

@@ -1,0 +1,1 @@
+<script>import {login} from "../api/auth";</script>

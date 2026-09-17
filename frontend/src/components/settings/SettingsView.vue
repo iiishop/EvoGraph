@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ChevronRight, Settings2, Database, ShieldCheck } from 'lucide-vue-next';
 import ProviderForm from './ProviderForm.vue';
+import ResearchForm from './ResearchForm.vue';
 </script>
 <template>
   <main class="settings-view">
@@ -16,6 +17,7 @@ import ProviderForm from './ProviderForm.vue';
       </div>
       <div class="settings-content">
         <ProviderForm />
+        <ResearchForm />
         <div class="settings-note">
           <Database :size="20" />
           <div>

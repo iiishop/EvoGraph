@@ -63,7 +63,7 @@ def test_questions_pause_persist_and_resume_in_same_graph(app, planned):
         rounds += 1
         if rounds == 1:
             async for event in tool_chunks(
-                "ask_user", {"prompt": "使用哪种登录方式？", "options": ["邮箱", "用户名"]}
+                "ask_user", {"prompt": "使用哪种登录方式？", "category": "decision", "options": ["邮箱", "用户名"]}
             ):
                 yield event
         elif rounds == 2:
@@ -118,7 +118,7 @@ def test_new_plugin_is_discovered_without_runtime_dispatch_changes(app, planned,
                 yield event
         else:
             # A question is intentional: read-only work does not silently imply a graph edit.
-            async for event in tool_chunks("ask_user", {"prompt": "需要继续修改什么？"}):
+            async for event in tool_chunks("ask_user", {"prompt": "还缺少哪些设计目标或验收边界？", "category": "missing_design_input"}):
                 yield event
 
     app.settings.stream = stream

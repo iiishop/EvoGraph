@@ -11,6 +11,11 @@ class ToolContext:
     project_id: str
     application: object
     inspected: set[str] = field(default_factory=set)
+    receipts: dict[str, str] = field(default_factory=dict)
+    verification_milestone: str | None = None
+    checks_run: int = 0
+    visual_attachments: set[str] = field(default_factory=set)
+    web_cache: dict[str, dict] = field(default_factory=dict)
     paused: bool = False
 
 

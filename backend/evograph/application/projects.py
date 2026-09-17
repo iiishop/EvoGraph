@@ -14,6 +14,12 @@ def project_view(project, db):
             and e.baseline_id == project.baseline.id
             and project.baseline.complete
             and e.fingerprint == project.baseline.fingerprint
+            and any(
+                m.id == e.milestone_id
+                and m.architecture_revision == e.architecture_revision
+                and set(e.behavior_revision_ids) <= set(m.behavior_revision_ids)
+                for m in project.milestones
+            )
             else "STALE"
         )
         for e in project.evidence
@@ -168,9 +174,9 @@ class ProjectService:
             ),
             (
                 "M07",
-                "真实端到端集成",
-                "连通 GUI、状态管理与真实 API，验证完整用户路径。",
-                ["tests/e2e/"],
+                "认证页面接入真实服务",
+                "实现前端 API 适配器，接入会话服务并提交真实链路回归测试。",
+                ["frontend/api/auth.ts", "tests/e2e/"],
                 ["M03", "M04", "M05", "M06"],
                 ["integration:auth"],
                 ["auth"],

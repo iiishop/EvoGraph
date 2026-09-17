@@ -1,0 +1,331 @@
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.attachment-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px 9px;
+  max-height: 100px;
+  overflow: auto;
+}
+.attachment-add,
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 5px 8px;
+  border: 1px solid #e0e8e3;
+  border-radius: 6px;
+  background: #f9fbfa;
+  color: #6b8277;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip.selected {
+  background: #e7f3ed;
+  border-color: #74b397;
+  color: #207959;
+}
+.attachment-picker small {
+  font-size: 9px;
+  color: #8a9f93;
+}
+.inline-question {
+  margin: 12px 14px 0;
+  padding: 10px 12px;
+  border-left: 3px solid #61ad90;
+  border-radius: 4px;
+  background: #f1f8f4;
+  max-height: 140px;
+  overflow: auto;
+}
+.inline-question strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.inline-question p {
+  font-size: 11px;
+  line-height: 1.6;
+  margin-top: 5px;
+  color: #718479;
+}
+.inline-question .question-options {
+  margin: 8px 0 0;
+}
+.inline-question .question-options button {
+  padding: 5px 10px;
+}
+.goal-marker {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  left: 14px;
+  max-width: min(470px, 65%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 13px;
+  background: #ffffffed;
+  border: 1px solid #dce9e3;
+  border-radius: 10px;
+  box-shadow: 0 4px 18px #1f554608;
+  color: #5c8575;
+}
+.goal-marker div {
+  min-width: 0;
+}
+.goal-marker small {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+}
+.goal-marker strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+}
+.goal-marker > span {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.goal-marker.achieved {
+  border-color: #65b08d;
+  background: #edf9f1;
+}
+.design-panel {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 28px;
+  background: linear-gradient(155deg, #f8fbfa, #fff 55%);
+}
+.design-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+.design-heading small {
+  color: #719c88;
+  letter-spacing: 1.8px;
+  font-size: 9px;
+}
+.design-heading h2 {
+  font-size: 21px;
+  font-weight: 550;
+  margin-top: 8px;
+  color: #385647;
+}
+.design-heading select {
+  width: auto;
+  font-size: 11px;
+}
+.design-summary {
+  font-size: 12px;
+  line-height: 1.9;
+  color: #7a8d82;
+  margin-bottom: 20px;
+}
+.design-diagram {
+  height: 340px;
+  border: 1px solid #dfeae4;
+  border-radius: 12px;
+  background: #fafcfb;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.design-node {
+  width: 236px;
+  height: 150px;
+  padding: 18px;
+  border: 1px solid #c6dcd2;
+  border-top: 3px solid #70a78f;
+  border-radius: 10px;
+  background: #fff;
+  box-sizing: border-box;
+  box-shadow: 0 5px 18px #2550440a;
+}
+.design-node small {
+  color: #9aafa3;
+  font-size: 9px;
+}
+.design-node strong {
+  display: block;
+  font-size: 14px;
+  margin: 8px 0;
+  color: #385b4c;
+}
+.design-node p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #849b8e;
+  max-height: 52px;
+  overflow: auto;
+}
+.technology-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.technology-grid article {
+  padding: 17px;
+  border: 1px solid #e1eae5;
+  border-radius: 10px;
+  background: white;
+}
+.technology-grid small {
+  color: #8c9e92;
+  font-size: 10px;
+}
+.technology-grid h3 {
+  margin: 8px 0;
+  font-size: 15px;
+  color: #3e6956;
+}
+.technology-grid p {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #819287;
+}
+.design-panel > h3 {
+  font-size: 13px;
+  margin: 20px 0 12px;
+}
+.decision-list {
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 2;
+  color: #75897c;
+}
+.architecture-mappings p {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  border-bottom: 1px solid #edf1ee;
+  padding: 10px 0;
+  font-size: 11px;
+}
+.architecture-mappings b {
+  font-weight: 500;
+}
+.architecture-mappings span {
+  color: #81a18e;
+}
+.diagram-card {
+  margin: 20px 0;
+}
+.diagram-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.diagram-card h3 {
+  font-size: 14px;
+}
+.diagram-card header span {
+  font-size: 10px;
+  color: #8a9d92;
+}
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+.asset-preview {
+  margin: 0;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e1eae4;
+  background: white;
+  border-radius: 10px;
+}
+.asset-preview img {
+  width: 100%;
+  max-height: 330px;
+  object-fit: contain;
+  border-radius: 7px;
+  background: #f7f9f8;
+}
+.asset-preview figcaption {
+  font-size: 11px;
+  color: #6c8475;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.asset-preview pre {
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 250px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #829087;
+}
+.view-tabs button,
+.milestone-node,
+.attachment-chip {
+  transition:
+    background 0.18s,
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.view-tabs {
+  flex-wrap: wrap;
+}
+.graph-toolbar {
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.agent-input textarea {
+  height: 54px;
+  min-height: 54px;
+}
+.agent-dock {
+  padding: 10px 0;
+}
+.agent-dock-heading {
+  margin-bottom: 7px;
+}
+.attachment-picker {
+  padding-bottom: 5px;
+}
+@media (max-height: 800px) {
+  .workspace-header {
+    padding-top: 16px;
+  }
+  .title-row {
+    margin-top: 12px;
+  }
+  .version-strip {
+    padding: 12px 0;
+  }
+  .agent-dock-note {
+    margin-top: 5px;
+  }
+  .agent-input-footer {
+    padding-bottom: 6px;
+  }
+}

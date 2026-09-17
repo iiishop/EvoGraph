@@ -69,6 +69,11 @@ def validate_plan(plan: PlanProposal) -> None:
         visited.add(mid)
 
     for mid in nodes:
+        node = nodes[mid]
+        if len(node.dependencies) != len(set(node.dependencies)):
+            raise ValueError("同一前置依赖不能重复")
+        if set(node.dependency_reasons) - set(node.dependencies):
+            raise ValueError("依赖理由引用了不存在的连线")
         if set(nodes[mid].change_types) - CHANGE_POLICIES.keys():
             raise ValueError("未知变更类别，请使用提供的 change_types")
         visit(mid)
@@ -78,12 +83,16 @@ def current_evidence(project: Project, behavior_id: str):
     baseline = project.baseline
     if baseline is None or not baseline.complete:
         return None
+    active = {m.id: m for m in project.milestones}
     matching = [
         e
         for e in project.evidence
         if behavior_id in e.behavior_revision_ids
         and e.fingerprint == baseline.fingerprint
         and e.baseline_id == baseline.id
+        and e.milestone_id in active
+        and behavior_id in active[e.milestone_id].behavior_revision_ids
+        and e.architecture_revision == active[e.milestone_id].architecture_revision
     ]
     return matching[-1] if matching and matching[-1].result == "PASS" else None
 

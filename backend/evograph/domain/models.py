@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def uid() -> str:
@@ -24,6 +24,8 @@ class Obligation(Model):
     label: str
     resolved: bool = False
     note: str = ""
+    fingerprint: str = ""
+    investigator: str = "human"
 
 
 class BehaviorRevision(Model):
@@ -41,6 +43,7 @@ class Evidence(Model):
     behavior_revision_ids: list[str]
     baseline_id: str
     fingerprint: str
+    architecture_revision: int = 0
     command: list[str]
     result: Literal["PASS", "FAIL", "ERROR"]
     output: str
@@ -65,6 +68,9 @@ class Milestone(Model):
     id: str
     title: str
     intent: str
+    architecture_components: list[str] = Field(default_factory=list)
+    architecture_revision: int = 0
+    attachment_ids: list[str] = Field(default_factory=list)
     scope: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     dependency_reasons: dict[str, str] = Field(default_factory=dict)
@@ -79,6 +85,8 @@ class Milestone(Model):
     pinned_baseline: str | None = None
     lease_active: bool = False
     position: dict[str, float] | None = None
+    origin: Literal["plan", "source"] = "plan"
+    source_refs: list[str] = Field(default_factory=list)
 
 
 class ProposedBehavior(Model):
@@ -93,6 +101,8 @@ class ProposedMilestone(Model):
     scope: list[str] = Field(min_length=1, max_length=30)
     dependencies: list[str] = Field(default_factory=list, max_length=24)
     dependency_reasons: dict[str, str] = Field(default_factory=dict)
+    architecture_components: list[str] = Field(default_factory=list, max_length=30)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     behaviors: list[ProposedBehavior] = Field(min_length=1, max_length=12)
     resources: list[str] = Field(default_factory=list, max_length=30)
     change_types: list[str] = Field(default_factory=list)
@@ -122,8 +132,100 @@ class PlanningRevision(Model):
 class PendingQuestion(Model):
     id: str = Field(default_factory=uid)
     prompt: str
+    category: Literal["missing_design_input", "agent_blocked", "decision"]
     options: list[str] = Field(default_factory=list)
     context: str = ""
+    verification_milestone: str | None = None
+    created_at: str = Field(default_factory=now)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_legacy_category(cls, data: Any) -> Any:
+        """Questions persisted before `category` existed infer one from their options.
+
+        Without this, one stored question without the field makes the whole project
+        list unreadable and the app reports a connection failure on startup.
+        """
+        if isinstance(data, dict) and not data.get("category"):
+            inferred = "decision" if data.get("options") else "missing_design_input"
+            return {**data, "category": inferred}
+        return data
+
+
+class Attachment(Model):
+    id: str = Field(default_factory=uid)
+    name: str
+    media_type: str
+    size: int
+    excerpt: str = ""
+    created_at: str = Field(default_factory=now)
+
+
+class DiagramNode(Model):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    label: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1500)
+    role: Literal["frontend", "backend", "database", "security", "cloud", "message", "external"] = (
+        "backend"
+    )
+    source_refs: list[str] = Field(default_factory=list, max_length=40)
+
+
+class DiagramEdge(Model):
+    source: str
+    target: str
+    label: str = Field(min_length=1, max_length=120)
+
+
+class Diagram(Model):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    title: str = Field(min_length=1, max_length=120)
+    kind: Literal["architecture", "state", "workflow", "ui"] = "architecture"
+    nodes: list[DiagramNode] = Field(min_length=1, max_length=40)
+    edges: list[DiagramEdge] = Field(default_factory=list, max_length=100)
+    milestone_ids: list[str] = Field(default_factory=list)
+    attachment_ids: list[str] = Field(default_factory=list)
+
+
+class Technology(Model):
+    area: str = Field(min_length=1, max_length=100)
+    choice: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(min_length=1, max_length=1500)
+
+
+class ArchitectureSpec(Model):
+    summary: str = Field(min_length=1, max_length=4000)
+    technologies: list[Technology] = Field(min_length=1, max_length=30)
+    decisions: list[str] = Field(default_factory=list, max_length=30)
+    diagram: Diagram
+    research_ids: list[str] = Field(default_factory=list, max_length=30)
+
+
+class LightCheck(Model):
+    id: str = Field(default_factory=uid)
+    milestone_id: str
+    baseline_id: str
+    fingerprint: str
+    kind: str
+    rationale: str
+    result: Literal["PASS", "FAIL", "ERROR", "REVIEW"]
+    output: str
+    command: list[str] = Field(default_factory=list)
+    duration: float = 0
+    created_at: str = Field(default_factory=now)
+
+
+class ResearchSource(Model):
+    id: str = Field(default_factory=uid)
+    title: str
+    url: str
+    excerpt: str
+    query: str
+    created_at: str = Field(default_factory=now)
+
+
+class ArchitectureRevision(ArchitectureSpec):
+    number: int
     created_at: str = Field(default_factory=now)
 
 
@@ -148,6 +250,15 @@ class Project(Model):
     proposal: PlanProposal | None = None
     proposal_revision: int | None = None
     question: PendingQuestion | None = None
+    attachments: list[Attachment] = Field(default_factory=list)
+    diagrams: list[Diagram] = Field(default_factory=list)
+    architectures: list[ArchitectureRevision] = Field(default_factory=list)
+    source_milestones: list[Milestone] = Field(default_factory=list)
+    source_diagram: Diagram | None = None
+    source_summary: str = ""
+    source_fingerprint: str = ""
+    light_checks: list[LightCheck] = Field(default_factory=list)
+    research: list[ResearchSource] = Field(default_factory=list)
     metrics: dict[str, float] = Field(
         default_factory=lambda: {
             "planning_seconds": 0,

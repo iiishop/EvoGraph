@@ -27,7 +27,7 @@ def main():
         from .transport.http import create_app
 
         # Agent updates use HTTP streaming, so no optional WebSocket backend is needed.
-        uvicorn.run(create_app(app, dist), host="127.0.0.1", port=args.port, ws='none')
+        uvicorn.run(create_app(app, dist), host="127.0.0.1", port=args.port, ws="none")
     else:
         from .transport.desktop import launch
 

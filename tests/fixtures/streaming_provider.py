@@ -5,6 +5,7 @@ Use http://127.0.0.1:9876/v1, model=fixture, no API key in an isolated workspace
 """
 
 import json
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -31,7 +32,40 @@ class Handler(BaseHTTPRequestHandler):
             return
         messages = body["messages"]
         latest = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-        if messages[-1]["role"] == "tool":
+        if isinstance(latest, list):
+            latest = " ".join(b.get("text", "") for b in latest)
+        user_index = max(i for i, m in enumerate(messages) if m["role"] == "user")
+        stage = sum(m["role"] == "tool" for m in messages[user_index + 1 :])
+        milestone = re.search(r"里程碑 (M\d+)", latest)
+        if milestone and "轻量验收" in latest:
+            sequence = [
+                ("discover_checks", {"milestone_id": milestone[1]}),
+                ("read_repository_file", {"path": "tests/test_auth.py"}),
+                (
+                    "run_light_check",
+                    {
+                        "milestone_id": milestone[1],
+                        "candidate_id": "pytest:tests/test_auth.py",
+                        "rationale": "这是隔离测试项目的协议回归检查，仅验证验收执行链路，不证明真实登录功能正确。",
+                    },
+                ),
+            ]
+            calls = sequence[stage : stage + 1]
+        elif milestone and "调查" in latest:
+            sequence = [
+                ("read_repository_file", {"path": "frontend/views/Login.vue"}),
+                (
+                    "resolve_investigation",
+                    {
+                        "milestone_id": milestone[1],
+                        "obligation_id": "scope",
+                        "paths": ["frontend/views/Login.vue"],
+                        "conclusion": "隔离测试文件包含前端认证调用导入，本轮仅记录已读取文件的调查依据，不代表登录业务已实现。",
+                    },
+                ),
+            ]
+            calls = sequence[stage : stage + 1]
+        elif messages[-1]["role"] == "tool":
             calls = []
         elif "提问" in latest:
             calls = [
@@ -39,6 +73,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ask_user",
                     {
                         "prompt": "新登录功能应使用哪种身份？",
+                        "category": "decision",
                         "options": ["邮箱", "用户名"],
                         "context": "这个选择会改变登录行为的验收条件。",
                     },
@@ -123,4 +158,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", 9876), Handler).serve_forever()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=9876)
+    args = parser.parse_args()
+    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
