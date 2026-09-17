@@ -2,9 +2,11 @@
 import { ChevronRight, GitBranch, SlidersHorizontal, RefreshCw, Folder } from 'lucide-vue-next';
 import type { Project } from '../../types';
 import { useWorkspace } from '../../composables/useWorkspace';
+import { useBaseline } from '../../composables/useBaseline';
 defineProps<{ project: Project }>();
 defineEmits<{ edit: [] }>();
-const { state, perform } = useWorkspace();
+const { state } = useWorkspace();
+const baseline = useBaseline();
 </script>
 <template>
   <header class="workspace-header">
@@ -25,7 +27,7 @@ const { state, perform } = useWorkspace();
           class="button secondary"
           :disabled="state.busy || !project.repository"
           :title="project.repository ? '扫描仓库并更新基线' : '请先在项目设置中连接仓库'"
-          @click="perform('baseline.refresh', { project_id: project.id }, '仓库基线已刷新')"
+          @click="baseline.refresh(project)"
         >
           <RefreshCw :size="15" :class="{ spinning: state.busy }" />
           刷新基线</button

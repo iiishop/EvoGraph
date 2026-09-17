@@ -60,11 +60,21 @@ class DesignService:
             raise ValueError("引用的网页依据不存在，请先搜索或读取网页")
         if specification.diagram.kind != "architecture":
             raise ValueError("架构设计必须使用 architecture 图类型")
+        if (
+            p.architectures
+            and p.architectures[-1].model_dump(exclude={"number", "created_at"})
+            == specification.model_dump()
+        ):
+            return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS"}
         old_ids = {n.id for n in p.architectures[-1].diagram.nodes} if p.architectures else set()
         removed = old_ids - component_ids
         retired = {step.component_id for step in specification.retirements}
+        if len(retired) != len(specification.retirements):
+            raise ValueError("每个退役组件只能安排一次迁移处置")
         if removed != retired:
-            raise ValueError("删除的旧组件必须在 retirements 中逐项安排到迁移里程碑；当前图只保留最新组件")
+            raise ValueError(
+                "删除的旧组件必须在 retirements 中逐项安排到迁移里程碑；当前图只保留最新组件"
+            )
         for step in specification.retirements:
             owner = p.milestone(step.milestone_id)
             if owner.status == "VERIFIED_COMPLETE":
@@ -73,12 +83,6 @@ class DesignService:
             raise ValueError("里程碑引用未知架构组件")
         if any(m.lease_active for m in p.milestones):
             raise ValueError("有里程碑正在执行，请先释放再修改架构")
-        if (
-            p.architectures
-            and p.architectures[-1].model_dump(exclude={"number", "created_at"})
-            == specification.model_dump()
-        ):
-            return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS"}
         version = ArchitectureRevision(
             **specification.model_dump(), number=len(p.architectures) + 1
         )
@@ -87,7 +91,9 @@ class DesignService:
             step = step.model_copy(update={"from_revision": version.number - 1})
             p.milestone(step.milestone_id).migration_steps.append(step)
         for m in p.milestones:
-            m.architecture_components = [cid for cid in m.architecture_components if cid in component_ids]
+            m.architecture_components = [
+                cid for cid in m.architecture_components if cid in component_ids
+            ]
             # Architecture and stack constraints can affect even previously unmapped work.
             m.architecture_revision = version.number
             m.obligations = [o for o in m.obligations if o.id != "architecture"] + [

@@ -29,6 +29,8 @@ export interface Milestone {
   migration_steps: { component_id: string; instruction: string; from_revision: number }[];
   origin: 'plan' | 'source';
   source_refs: string[];
+  source_behaviors?: { key: string; statement: string; source_refs: string[] }[];
+  source_baseline_id?: string;
   id: string;
   title: string;
   intent: string;
@@ -122,6 +124,8 @@ export interface Project extends ProjectSummary {
   source_diagram: Diagram | null;
   source_summary: string;
   source_fingerprint: string;
+  source_analysis_baseline_id: string;
+  source_analysis_summary: string;
   light_checks: LightCheck[];
   research: { id: string; title: string; url: string; excerpt: string; created_at: string }[];
   attachments: Attachment[];

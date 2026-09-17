@@ -1,5 +1,6 @@
 """Incremental graph edits, checked and persisted before broadcasting to the UI."""
 
+from ..domain.dependencies import reduce_dependencies
 from ..domain.models import (
     BehaviorRevision,
     Milestone,
@@ -102,7 +103,11 @@ class GraphEditor:
             {n.id for n in architecture.diagram.nodes} if architecture else set()
         ):
             raise ValueError("引用的架构组件不存在，请先更新架构设计")
-        if architecture and not proposed.architecture_components:
+        if (
+            architecture
+            and not proposed.architecture_components
+            and not (old and old.migration_steps)
+        ):
             raise ValueError("请为里程碑关联至少一个架构组件")
         if set(proposed.attachment_ids) - {a.id for a in p.attachments}:
             raise ValueError("引用的资料不存在")
@@ -221,8 +226,22 @@ class GraphEditor:
         self.db.save(p, "target_editing", statement)
         return {"node_ids": [], "effect": "target"}
 
-    def finalize(self, project_id: str):
+    def normalize(self, project_id: str):
+        import json
+
         p = self.db.get(project_id)
+        removed = reduce_dependencies(p.milestones)
+        if removed:
+            for milestone in p.milestones:
+                milestone.position = None
+            self.db.save(p, "dependencies_reduced", json.dumps(removed, ensure_ascii=False))
+        return removed
+
+    def finalize(self, project_id: str):
+        removed = self.normalize(project_id)
+        p = self.db.get(project_id)
+        if not p.milestones and not p.targets and not p.target_draft:
+            return removed
         required = [bid for m in p.milestones for bid in m.behavior_revision_ids]
         statement = p.target_draft or (
             p.targets[-1].statement if p.targets else p.description or p.name
@@ -244,3 +263,4 @@ class GraphEditor:
         elif p.target_draft is not None:
             p.target_draft = None
             self.db.save(p, "target_unchanged", statement)
+        return removed

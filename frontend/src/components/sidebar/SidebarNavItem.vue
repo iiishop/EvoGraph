@@ -9,8 +9,13 @@ defineProps<{
 defineEmits<{ select: [] }>();
 </script>
 <template>
-  <button class="nav-item" :class="{ active }" @click="$emit('select')">
-    <component :is="icon" :size="18" /><span>{{ label }}</span
+  <button
+    class="nav-item"
+    :class="{ active }"
+    :aria-current="active ? 'page' : undefined"
+    @click="$emit('select')"
+  >
+    <component :is="icon" :size="18" aria-hidden="true" /><span>{{ label }}</span
     ><span v-if="count !== undefined" class="nav-count">{{ count }}</span>
   </button>
 </template>

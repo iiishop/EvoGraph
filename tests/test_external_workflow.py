@@ -77,6 +77,8 @@ def test_architecture_retirement_becomes_step_preserving_history(app, planned):
     assert p.architectures[0].diagram.nodes[0].id == "api"
     assert p.architectures[-1].diagram.nodes[0].id == "next_api"
     assert p.milestone("M01").migration_steps[0].from_revision == 1
+    assert app.design.update(planned.id, change)["status"] == "NO_PROGRESS"
+    assert len(app.db.get(planned.id).milestone("M01").migration_steps) == 1
 
 
 SOURCE = """@startuml
@@ -133,3 +135,19 @@ def test_plantuml_compiles_member_relations_locally():
     if not shutil.which("java") or not Path(".tools/plantuml.jar").is_file():
         pytest.skip("Optional local PlantUML runtime is not installed")
     assert b"<svg" in render(SOURCE)
+
+
+def test_waiting_acceptance_cannot_be_reclaimed_or_overwritten(app, planned):
+    from conftest import proposal
+
+    app.execution.start(planned.id, "M01")
+    app.acceptance.prepare(planned.id, "M01")
+    with pytest.raises(ValueError, match="已经领取"):
+        app.execution.start(planned.id, "M01")
+    p = app.db.get(planned.id)
+    p.proposal = proposal()
+    p.proposal_revision = p.revision + 1
+    p = app.db.save(p, "fixture_proposal")
+    with pytest.raises(ValueError, match="释放"):
+        app.planning.apply(p.id, p.revision)
+    assert app.db.get(p.id).milestone("M01").status == "AWAITING_ACCEPTANCE"

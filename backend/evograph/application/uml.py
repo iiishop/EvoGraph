@@ -5,8 +5,8 @@ import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
 from functools import lru_cache
+from pathlib import Path
 
 from ..domain.models import UmlDiagram
 from ..infrastructure.repository import readable, root_path
@@ -119,11 +119,17 @@ class UmlService:
         diagram.source = re.sub(r"(?im)^' (Commit|Scope|Origin):.*\n?", "", diagram.source)
         first, _, body = diagram.source.partition("\n")
         commit = p.baseline.commit if p.baseline else "unbound"
-        diagram.source = first + f"\n' Commit: {commit}\n' Scope: {diagram.scope.replace(chr(10), ' ')}\n' Origin: {diagram.origin}\n" + body
+        diagram.source = (
+            first
+            + f"\n' Commit: {commit}\n' Scope: {diagram.scope.replace(chr(10), ' ')}\n' Origin: {diagram.origin}\n"
+            + body
+        )
         previous = [d for d in p.uml_diagrams if d.id == diagram.id]
         if previous and previous[-1].kind != diagram.kind:
             raise ValueError("同一图的类型不能变更，请使用新 ID")
-        if previous and previous[-1].model_dump(exclude={"revision"}) == diagram.model_dump(exclude={"revision"}):
+        if previous and previous[-1].model_dump(exclude={"revision"}) == diagram.model_dump(
+            exclude={"revision"}
+        ):
             return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS"}
         render(diagram.source)  # Store only diagrams that actually compile.
         diagram.revision = len(previous) + 1

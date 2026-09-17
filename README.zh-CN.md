@@ -114,11 +114,12 @@ EvoGraph 把判断权从对话里拿出来。计划是一张里程碑图，每�
 git clone https://github.com/iiishop/EvoGraph.git
 cd EvoGraph
 npm install
-npm run build
 uv run python run.py
 ```
 
-`npm run build` 把前端产物写进 `dist/`，由 Python 侧提供。两种启动方式随后都能用：
+启动时会自己检查前端：`dist/` 缺失，或者 `frontend/` 下的源码比 `dist/` 新，就自动跑一次 `npm run build`（约 15 秒）再启动。改完前端不必再手动 build。构建失败不会挡住启动：会打印 npm 的输出并沿用现有的 `dist/`，只有 `dist/` 也不存在时才退出。
+
+两种启动方式：
 
 ```bash
 uv run python run.py            # 桌面窗口，用 pywebview 打开
@@ -127,7 +128,7 @@ uv run python run.py --browser  # 本地 HTTP 服务，http://127.0.0.1:8765
 
 首次启动会自动建一个示例项目（认证工作台）：一份七个里程碑的注册登录计划，刻意一个都没执行，所以验收取值从 0/7 开始。它的用途是拿来点开看、拆开研究，不是拿来相信的。
 
-其他参数：`--port`（默认 `8765`）、`--data-dir`（默认 `~/.evograph`，或环境变量 `EVOGRAPH_DATA_DIR`）。项目状态、事件与证据都存在该目录下的 `evograph.sqlite3`。
+其他参数：`--port`（默认 `8765`）、`--data-dir`（默认 `~/.evograph`，或环境变量 `EVOGRAPH_DATA_DIR`）、`--build`（启动前强制重建前端）、`--no-build`（跳过前端检查）。项目状态、事件与证据都存在该目录下的 `evograph.sqlite3`。
 
 桌面模式说明：pywebview 需要一个 WebView 后端，它的安装文档要求 Linux 用户显式选一个，例如 `pip install "pywebview[gtk]"`；Windows 用 WebView2，macOS 用系统自带的 WebKit。浏览器模式和桌面窗口是同一个应用，只是走本地 HTTP，所以不需要这些。
 

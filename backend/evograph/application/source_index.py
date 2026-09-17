@@ -9,7 +9,7 @@ import hashlib
 import re
 from collections import defaultdict
 
-from ..domain.models import Diagram, DiagramEdge, DiagramNode, Milestone
+from ..domain.models import Diagram, DiagramEdge, DiagramNode
 from ..infrastructure.repository import files, readable, root_path
 
 EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".vue", ".sql", ".go", ".rs", ".java"}
@@ -58,8 +58,7 @@ def populate(project):
         records.append((relative, group, path.read_text(encoding="utf-8", errors="replace")))
     selected = sorted(groups, key=lambda g: (-len(groups[g]), g))[:30]
     ids = {g: "SRC_" + hashlib.sha256(g.encode()).hexdigest()[:10] for g in selected}
-    nodes, milestones = [], []
-    old = {m.id: m for m in project.source_milestones}
+    nodes = []
     for group in selected:
         paths = [p.as_posix() for p in groups[group]]
         description = f"从 {len(paths)} 个源码文件观察到的目录组件；不代表功能已验收。"
@@ -70,18 +69,6 @@ def populate(project):
                 description=description,
                 role=role_for(groups[group]),
                 source_refs=paths[:40],
-            )
-        )
-        milestones.append(
-            Milestone(
-                id=ids[group],
-                title=group,
-                intent=description,
-                origin="source",
-                scope=[group],
-                source_refs=paths[:40],
-                architecture_components=[ids[group]],
-                position=old[ids[group]].position if ids[group] in old else None,
             )
         )
     lookup = {p.with_suffix("").as_posix(): group for p, group, _ in records}
@@ -101,7 +88,6 @@ def populate(project):
             )
             if target in ids and target != group:
                 relations.add((ids[group], ids[target]))
-    project.source_milestones = milestones
     project.source_diagram = (
         Diagram(
             id="source_architecture",

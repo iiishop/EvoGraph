@@ -12,6 +12,7 @@ class ToolContext:
     application: object
     inspected: set[str] = field(default_factory=set)
     receipts: dict[str, str] = field(default_factory=dict)
+    file_pages: set[tuple[str, str, int]] = field(default_factory=set)
     verification_milestone: str | None = None
     checks_run: int = 0
     visual_attachments: set[str] = field(default_factory=set)

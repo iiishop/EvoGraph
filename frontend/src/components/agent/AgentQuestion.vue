@@ -15,10 +15,12 @@ defineEmits<{ choose: [answer: string] }>();
         :disabled="disabled"
         :class="{ selected: answer === option }"
         :aria-pressed="answer === option"
+        title="点击即作为你的回答发送"
         @click="$emit('choose', option)"
       >
         {{ option }}
       </button>
     </div>
+    <small class="question-hint">点选项会直接发送这条回答；想补充说明就在下面自己写。</small>
   </fieldset>
 </template>

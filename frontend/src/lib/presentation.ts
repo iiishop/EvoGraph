@@ -6,6 +6,7 @@ export const statusLabels: Record<string, string> = {
   VERIFIED_COMPLETE: '验收通过',
 };
 export const eventLabels: Record<string, string> = {
+  dependencies_reduced: '自动整理依赖',
   acceptance_prepared: '准备外部验收',
   external_acceptance_imported: '导入外部验收报告',
   uml_updated: '维护 UML 设计图',
@@ -41,6 +42,13 @@ export function formatTime(value: string) {
 }
 
 export function eventDetail(event: { kind: string; detail: string }) {
+  if (event.kind === 'dependencies_reduced') {
+    try {
+      return `移除 ${JSON.parse(event.detail).length} 条冗余依赖，前置约束保持不变`;
+    } catch {
+      return '已自动整理依赖';
+    }
+  }
   if (event.kind === 'graph_edited') {
     try {
       return JSON.parse(event.detail).summary;

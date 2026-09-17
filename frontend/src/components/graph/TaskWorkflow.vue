@@ -38,7 +38,8 @@ async function handoff(action: string) {
   const result = await perform<{ prompt: string }>(action, params.value);
   if (!result) return;
   prompt.value = result.prompt;
-  if (action === 'verification.export') useNotifications().push(`「${props.milestone.title}」开始等待外部验收`);
+  if (action === 'verification.export')
+    useNotifications().push(`「${props.milestone.title}」开始等待外部验收`);
   try {
     await navigator.clipboard.writeText(result.prompt);
     copied.value = true;
@@ -60,7 +61,11 @@ async function importReport() {
       report: parsed,
     });
     if (result) {
-      useNotifications().push(result.result === 'PASS' ? `「${props.milestone.title}」验收通过，任务已释放` : `「${props.milestone.title}」验收未通过，保留任务继续制作`);
+      useNotifications().push(
+        result.result === 'PASS'
+          ? `「${props.milestone.title}」验收通过，任务已释放`
+          : `「${props.milestone.title}」验收未通过，保留任务继续制作`,
+      );
       report.value = '';
       prompt.value = '';
     } else error.value = state.error;

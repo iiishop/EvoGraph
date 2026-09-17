@@ -70,7 +70,10 @@ class ProjectService:
         if repository:
             repository = str(root_path(repository))
         if p.repository != repository:
-            if any(m.status in {"IN_PROGRESS", "REVALIDATION_REQUIRED"} for m in p.milestones):
+            if any(
+                m.lease_active or m.status in {"IN_PROGRESS", "REVALIDATION_REQUIRED"}
+                for m in p.milestones
+            ):
                 raise ValueError("请先释放在途任务再更换仓库")
             if p.baselines:
                 raise ValueError("已建立基线的项目不能更换仓库，请创建新项目")

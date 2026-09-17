@@ -64,7 +64,12 @@ class Baseline(Model):
 
 
 Status = Literal[
-    "PLANNED", "IN_PROGRESS", "AWAITING_ACCEPTANCE", "REVALIDATION_REQUIRED", "VERIFIED_COMPLETE"
+    "PLANNED",
+    "IN_PROGRESS",
+    "AWAITING_ACCEPTANCE",
+    "REVALIDATION_REQUIRED",
+    "VERIFIED_COMPLETE",
+    "IMPLEMENTED",
 ]
 
 
@@ -73,6 +78,12 @@ class MigrationStep(Model):
     milestone_id: str
     instruction: str = Field(min_length=1, max_length=2000)
     from_revision: int = 0
+
+
+class SourceBehavior(Model):
+    key: str = Field(min_length=1, max_length=100)
+    statement: str = Field(min_length=1, max_length=1000)
+    source_refs: list[str] = Field(min_length=1)
 
 
 class Milestone(Model):
@@ -98,6 +109,8 @@ class Milestone(Model):
     position: dict[str, float] | None = None
     origin: Literal["plan", "source"] = "plan"
     source_refs: list[str] = Field(default_factory=list)
+    source_behaviors: list[SourceBehavior] = Field(default_factory=list)
+    source_baseline_id: str = ""
     migration_steps: list[MigrationStep] = Field(default_factory=list)
 
 
@@ -307,6 +320,8 @@ class Project(Model):
     source_diagram: Diagram | None = None
     source_summary: str = ""
     source_fingerprint: str = ""
+    source_analysis_baseline_id: str = ""
+    source_analysis_summary: str = ""
     light_checks: list[LightCheck] = Field(default_factory=list)
     research: list[ResearchSource] = Field(default_factory=list)
     acceptance_requests: list[AcceptanceRequest] = Field(default_factory=list)
@@ -319,6 +334,20 @@ class Project(Model):
             "blocked_attempts": 0,
         }
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retire_directory_milestones(cls, data: Any) -> Any:
+        # Old scanner nodes represented directories, not deliverables. Keep their
+        # architecture inventory, but never present them as inferred milestones.
+        if isinstance(data, dict) and data.get("source_milestones"):
+            data = dict(data)
+            data["source_milestones"] = [
+                m
+                for m in data["source_milestones"]
+                if (m.get("source_baseline_id") if isinstance(m, dict) else m.source_baseline_id)
+            ]
+        return data
 
     @property
     def baseline(self) -> Baseline | None:

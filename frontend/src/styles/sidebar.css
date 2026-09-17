@@ -36,22 +36,6 @@
   margin-top: 3px;
   color: #84918b;
 }
-.sidebar-decoration {
-  margin-left: auto;
-}
-.workspace-label {
-  font-size: 10px;
-  color: #8a9791;
-  margin: 0 13px 15px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.workspace-label > span {
-  font-size: 8px;
-  letter-spacing: 0.7px;
-  color: #a2aaa6;
-}
 .nav-item {
   width: 100%;
   height: 40px;
@@ -114,13 +98,10 @@
   border-color: #e1e9e3;
   box-shadow: 0 2px 3px #34533d03;
 }
-.project-item:hover {
-  background: #ffffffa0;
-}
+
 .project-icon {
   width: 29px;
   height: 29px;
-  border: 1px solid #d9e9e0;
   color: #6e9f88;
   background: #f0f7f2;
   border-radius: 7px;
@@ -155,32 +136,8 @@
 .sidebar-bottom {
   margin-top: auto;
 }
-.local-card {
-  border: 1px solid #e0e8e1;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 10px;
-  margin-bottom: 21px;
-  font-size: 10px;
-  color: #678374;
-  background: #f0f5f1;
-}
-.local-card small {
-  display: block;
-  color: #9aa99f;
-  font-size: 9px;
-  margin-top: 5px;
-}
-.local-card > svg {
-  margin-left: auto;
-  align-self: flex-start;
-  color: #9aaa9e;
-}
 .sidebar-footer {
   border-top: 1px solid #e1e8e2;
-  margin: 0 -17px;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -188,28 +145,9 @@
   font-size: 11px;
   color: #64736a;
 }
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: #e1e9e3;
-  color: #799583;
-  font-family: Georgia, serif;
-  font-size: 16px;
-}
 .sidebar-footer small {
   display: block;
   font-size: 9px;
   margin-top: 4px;
   color: #9ca79e;
-}
-.local-tag {
-  margin-left: auto;
-  font-size: 9px;
-  border: 1px solid #dce5de;
-  border-radius: 4px;
-  padding: 3px 5px;
-  color: #99a79d;
 }

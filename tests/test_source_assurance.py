@@ -13,7 +13,8 @@ def test_source_index_is_idempotent_and_not_acceptance(app, planned, repository)
     (repository / "ui/view.ts").write_text('import {login} from "../auth";')
     (repository / "auth.ts").write_text("export const login = () => true;")
     p = app.execution.refresh(planned.id)
-    assert p.source_milestones and all(m.origin == "source" for m in p.source_milestones)
+    assert not p.source_milestones
+    assert p.source_diagram.nodes
     assert p.source_diagram.edges
     assert len(p.milestones) == 1
     target_ids = p.targets[-1].required_behavior_ids
@@ -24,7 +25,8 @@ def test_source_index_is_idempotent_and_not_acceptance(app, planned, repository)
     assert again.targets[-1].required_behavior_ids == target_ids
     (repository / "ui/view.ts").unlink()
     updated = app.execution.refresh(p.id)
-    assert len(updated.source_milestones) == len(ids) - 1
+    assert not updated.source_milestones
+    assert len(updated.source_diagram.nodes) == 1
     assert updated.targets[-1].required_behavior_ids == target_ids
 
 

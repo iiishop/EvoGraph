@@ -35,9 +35,10 @@ async function refresh() {
   state.projects = [...new Map(projects.map((p) => [p.id, p])).values()];
   state.settings = settings;
   if (state.project && !state.projects.some((p) => p.id === state.project!.id)) {
+    // 删掉的正好是当前项目时不再自动跳到列表第一个：主区域回到空态，
+    // 用户还能在 toast 里撤销删除，而不是被静默换到另一个项目。
     state.project = null;
     state.selectedId = null;
-    if (state.projects[0]) await loadProject(state.projects[0].id);
   } else if (state.project) await loadProject(state.project.id);
 }
 

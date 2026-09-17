@@ -107,7 +107,10 @@ class PlanningService:
         if plan is None:
             raise ValueError("没有待应用的草案")
         validate_plan(plan)
-        if any(m.status in {"IN_PROGRESS", "REVALIDATION_REQUIRED"} for m in project.milestones):
+        if any(
+            m.lease_active or m.status in {"IN_PROGRESS", "REVALIDATION_REQUIRED"}
+            for m in project.milestones
+        ):
             raise ValueError("请先结束或释放在途里程碑，再应用新计划")
         old = {m.id: m for m in project.milestones}
         new_nodes, required = [], []
@@ -171,6 +174,9 @@ class PlanningService:
                 )
             )
         project.milestones = new_nodes
+        from ..domain.dependencies import reduce_dependencies
+
+        reduce_dependencies(project.milestones)
         project.plans.append(
             PlanningRevision(
                 number=len(project.plans) + 1,

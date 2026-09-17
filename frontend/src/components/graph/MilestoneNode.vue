@@ -34,7 +34,7 @@ defineProps<{
     <div class="node-top">
       <span class="node-id"
         ><Layers3 :size="12" />
-        {{ data.milestone.origin === 'source' ? '源码现状' : data.milestone.id }}</span
+        {{ data.milestone.origin === 'source' ? '已实现 · 基线' : data.milestone.id }}</span
       ><ArrowUpRight :size="13" class="node-arrow" />
     </div>
     <h3>{{ data.milestone.title }}</h3>
@@ -51,7 +51,7 @@ defineProps<{
         ><CircleCheck :size="12" />
         {{
           data.milestone.origin === 'source'
-            ? `${data.milestone.source_refs.length} 个源码引用`
+            ? `${data.milestone.source_behaviors?.length ?? 0} 项行为`
             : `${data.milestone.behavior_revision_ids.length} 项验收`
         }}</span
       >

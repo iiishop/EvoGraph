@@ -114,11 +114,12 @@ Requirements:
 git clone https://github.com/iiishop/EvoGraph.git
 cd EvoGraph
 npm install
-npm run build
 uv run python run.py
 ```
 
-`npm run build` writes the frontend into `dist/`, which the Python side serves. Both launch modes work afterwards:
+Start-up checks the frontend itself: if `dist/` is missing, or anything under `frontend/` is newer than the built output, it runs `npm run build` (about 15 seconds) before launching, so a frontend edit needs no manual rebuild. A failed build does not block start-up: npm's output is printed and the existing `dist/` is used; only a missing `dist/` is fatal.
+
+Both launch modes:
 
 ```bash
 uv run python run.py            # desktop window, opened with pywebview
@@ -127,7 +128,7 @@ uv run python run.py --browser  # local HTTP server on http://127.0.0.1:8765
 
 On first launch EvoGraph creates a demo project (认证工作台): a seven-milestone registration and login plan that is deliberately unexecuted, so acceptance starts at 0/7. It is there to be looked at and taken apart, not to be trusted.
 
-Other flags: `--port` (default `8765`) and `--data-dir` (default `~/.evograph`, or `EVOGRAPH_DATA_DIR`). Project state, events and evidence live in `evograph.sqlite3` inside that directory.
+Other flags: `--port` (default `8765`), `--data-dir` (default `~/.evograph`, or `EVOGRAPH_DATA_DIR`), `--build` (force a frontend rebuild first) and `--no-build` (skip the frontend check). Project state, events and evidence live in `evograph.sqlite3` inside that directory.
 
 Desktop notes: pywebview needs a WebView backend, and its installation guide asks Linux users to choose one explicitly, for example `pip install "pywebview[gtk]"`. Windows uses WebView2 and macOS uses the system WebKit. Browser mode is the same application over local HTTP, so it runs without any of that.
 

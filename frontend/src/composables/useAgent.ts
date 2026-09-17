@@ -16,6 +16,9 @@ const state = reactive({
   updates: {} as Record<string, number>,
 });
 let controller: AbortController | null = null;
+// The composer needs to know whether a run failed so it can give the user's
+// text back instead of silently dropping it.
+let runFailed = false;
 
 function receive(event: AgentEvent) {
   const workspace = useWorkspace();
@@ -29,7 +32,8 @@ function receive(event: AgentEvent) {
     state.pulse++;
   }
   if (event.type === 'graph_changed') {
-    if (event.project) useNotifications().push(changeSummary(previous, event.project, event.label));
+    if (event.project)
+      useNotifications().push(event.message || changeSummary(previous, event.project, event.label));
     const ids = event.node_ids ?? [];
     ids.forEach((id) => {
       state.updates[id] = (state.updates[id] ?? 0) + 1;
@@ -47,6 +51,7 @@ function receive(event: AgentEvent) {
     state.label = '等待你的回答';
   }
   if (event.type === 'error') {
+    runFailed = true;
     workspace.setError(event.message ?? 'Agent 操作未完成');
     state.label = '本轮已停止';
   }
@@ -65,9 +70,10 @@ async function send(
   questionId?: string,
   attachmentIds: string[] = [],
   verificationMilestone?: string,
-) {
+): Promise<boolean> {
   const workspace = useWorkspace();
-  if (state.running || workspace.state.busy) return;
+  if (state.running || workspace.state.busy) return false;
+  runFailed = false;
   state.running = true;
   state.projectId = projectId;
   state.label = '连接 Agent…';
@@ -89,14 +95,19 @@ async function send(
       controller.signal,
     );
   } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError'))
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      runFailed = true;
       workspace.setError(String(error));
+    }
   } finally {
     state.running = false;
     workspace.setBusy(false);
     controller = null;
     await workspace.refresh().catch(() => {});
   }
+  // false means the run failed (transport error or an `error` event), so the
+  // caller must not treat the submission as delivered.
+  return !runFailed;
 }
 
 export function useAgent() {

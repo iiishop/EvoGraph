@@ -54,6 +54,8 @@ class ExecutionService:
         m = p.milestone(milestone_id)
         if m.status == "VERIFIED_COMPLETE":
             raise ValueError("该节点已完成当前基线验收")
+        if m.lease_active:
+            raise ValueError("任务已经领取，请继续制作或验收；修改领取条件前请先释放")
         state = readiness(p, milestone_id)
         if not state["safe_to_execute"]:
             p.metrics["blocked_attempts"] += 1

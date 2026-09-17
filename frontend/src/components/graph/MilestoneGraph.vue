@@ -11,6 +11,7 @@ import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
+import BaselineMilestoneStatus from './BaselineMilestoneStatus.vue';
 import GoalMarker from './GoalMarker.vue';
 import FollowAgentButton from './FollowAgentButton.vue';
 
@@ -39,19 +40,7 @@ watch(
   async () => {
     const generation = ++layoutGeneration;
     try {
-      const result = await layout(props.project.milestones);
-      const source = props.project.source_milestones ?? [];
-      const columns = Math.min(3, source.length);
-      const shelfHeight = columns ? Math.ceil(source.length / columns) * 200 + 80 : 0;
-      result.positions = new Map(
-        [...result.positions].map(([id, point]) => [id, { x: point.x, y: point.y + shelfHeight }]),
-      );
-      source.forEach((node, index) =>
-        result.positions.set(node.id, {
-          x: 30 + (index % columns) * 280,
-          y: 90 + Math.floor(index / columns) * 200,
-        }),
-      );
+      const result = await layout(allMilestones.value);
       if (generation === layoutGeneration) computedLayout.value = result;
     } catch (error) {
       console.error('Graph layout failed', error);
@@ -79,7 +68,7 @@ function route(source: string, target: string) {
   const a = displayPositions.value.get(source),
     b = displayPositions.value.get(target);
   if (!a || !b) return [];
-  if (!props.project.milestones.some((m) => m.position))
+  if (!allMilestones.value.some((m) => m.position))
     return computedLayout.value.routes.get(edgeId(source, target));
   return computedLayout.value.direction === 'DOWN'
     ? routeAroundBoxes({ x: a.x + 118, y: a.y + 150 }, { x: b.x + 118, y: b.y }, boxes.value)
@@ -116,7 +105,7 @@ const nodes = computed(() =>
     })),
 );
 const edges = computed(() =>
-  props.project.milestones.flatMap((m) =>
+  allMilestones.value.flatMap((m) =>
     m.dependencies.map((dep) => ({
       id: edgeId(dep, m.id),
       source: dep,
@@ -128,7 +117,7 @@ const edges = computed(() =>
       style: { stroke: edgeKind(m.dependency_types?.[dep]).color, strokeWidth: 1.7 },
       data: {
         kind: m.dependency_types?.[dep] ?? 'implementation',
-        routeKind: props.project.milestones.some((n) => n.position) ? 'waypoints' : 'spline',
+        routeKind: allMilestones.value.some((n) => n.position) ? 'waypoints' : 'spline',
         reason: m.dependency_reasons[dep],
         route: route(dep, m.id),
       },
@@ -166,6 +155,7 @@ defineExpose({ fit, reset });
 <template>
   <div class="graph-canvas">
     <GoalMarker :project="project" />
+    <BaselineMilestoneStatus :project="project" />
     <VueFlow
       v-if="nodes.length"
       :id="flowId"

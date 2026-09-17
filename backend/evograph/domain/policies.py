@@ -98,9 +98,13 @@ def current_evidence(project: Project, behavior_id: str):
 
 
 def readiness(project: Project, mid: str) -> dict:
+    from .dependencies import ancestor_sets
+
     m = project.milestone(mid)
     blockers = []
-    for dep in m.dependencies:
+    # After visual reduction the complete prerequisite chain still gates execution.
+    graph = {node.id: node.dependencies for node in project.milestones}
+    for dep in sorted(ancestor_sets(graph)[mid]):
         predecessor = project.milestone(dep)
         if not all(current_evidence(project, b) for b in predecessor.behavior_revision_ids):
             blockers.append(f"等待 {dep} 的当前基线验收")

@@ -13,6 +13,11 @@ class Empty(Model):
 
 class ReadFile(Model):
     path: str = Field(min_length=1, max_length=500)
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Character offset; use next_offset to continue a truncated file.",
+    )
 
 
 @tool(
@@ -34,6 +39,9 @@ def read_project(ctx, args):
             "architectures",
             "source_diagram",
             "source_summary",
+            "source_milestones",
+            "source_analysis_baseline_id",
+            "source_analysis_summary",
             "light_checks",
             "research",
         }
@@ -52,7 +60,7 @@ def inspect_repository(ctx, args):
 
 @tool(
     "read_repository_file",
-    "Read a bounded source/test file relative to the repository. Secrets, symlinks and outside paths are forbidden. Repeating a read returns NO_PROGRESS.",
+    "Read a source/test file page relative to the repository. Continue truncated files using next_offset. Secrets, symlinks and outside paths are forbidden. Repeating an unchanged page returns NO_PROGRESS.",
     ReadFile,
     label="检查源码证据",
 )
@@ -70,19 +78,26 @@ def read_repository_file(ctx, args):
     if lexical.is_symlink() or any(parent.is_symlink() for parent in lexical.parents):
         raise ValueError("不能通过符号链接读取文件")
     key = str(path)
-    if key in ctx.inspected:
-        return {"status": "NO_PROGRESS", "reason": "此文件已经检查过"}
     if path.stat().st_size > 100000:
         raise ValueError("文件过大")
     data = path.read_bytes()
     if b"\0" in data:
         raise ValueError("不支持读取二进制文件")
-    ctx.inspected.add(key)
-    ctx.receipts[path.relative_to(root).as_posix()] = hashlib.sha256(data).hexdigest()
+    digest = hashlib.sha256(data).hexdigest()
+    page = (key, digest, args.offset)
+    if page in ctx.file_pages:
+        return {"status": "NO_PROGRESS", "reason": "此文件页面已经检查过"}
     text = data.decode("utf-8", errors="replace")
+    if args.offset > len(text):
+        raise ValueError("读取位置超过文件长度")
+    ctx.file_pages.add(page)
+    ctx.inspected.add(key)
+    ctx.receipts[path.relative_to(root).as_posix()] = digest
+    end = min(args.offset + 6000, len(text))
     return {
         "path": args.path,
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "content": text[:6000],
-        "truncated": len(text) > 6000,
+        "sha256": digest,
+        "content": text[args.offset : end],
+        "truncated": end < len(text),
+        "next_offset": end if end < len(text) else None,
     }

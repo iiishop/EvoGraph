@@ -59,7 +59,11 @@ function download() {
           {{ diagram.origin === 'source' ? 'SRC 源码事实' : '设计' }}</small
         >
       </div>
-      <div class="uml-actions"><button class="button secondary" :disabled="!image" @click="expanded=true">展开大图</button><button class="button secondary" @click="download">导出 .puml</button></div>
+      <div class="uml-actions">
+        <button class="button secondary" :disabled="!image" @click="expanded = true">
+          展开大图</button
+        ><button class="button secondary" @click="download">导出 .puml</button>
+      </div>
     </header>
     <p class="muted">{{ diagram.scope }}</p>
     <p v-if="loading" role="status">正在本地编译 UML…</p>
@@ -70,5 +74,7 @@ function download() {
       <pre class="uml-source">{{ diagram.source }}</pre>
     </details>
   </article>
-  <AppModal v-if="expanded" :title="diagram.title" wide class="uml-modal" @close="expanded=false"><DiagramImage :src="image" :title="diagram.title" expanded /></AppModal>
+  <AppModal v-if="expanded" :title="diagram.title" wide class="uml-modal" @close="expanded = false"
+    ><DiagramImage :src="image" :title="diagram.title" expanded
+  /></AppModal>
 </template>

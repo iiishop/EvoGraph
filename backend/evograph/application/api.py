@@ -13,6 +13,7 @@ from .acceptance import AcceptanceService
 from .agent_runtime import AgentRuntime
 from .assurance import AssuranceService
 from .attachments import AttachmentService
+from .baseline_milestones import BaselineMilestoneService
 from .design import DesignService
 from .execution import ExecutionService
 from .graph_editor import GraphEditor
@@ -33,6 +34,7 @@ class Application:
         self.research = ResearchService(self.db, self.settings.secrets)
         self.planning = PlanningService(self.db, self.settings)
         self.execution = ExecutionService(self.db)
+        self.baseline_milestones = BaselineMilestoneService(self.db)
         self.acceptance = AcceptanceService(self.db, self.execution)
         self.assurance = AssuranceService(self.db, self.execution)
         self.graph = GraphEditor(self.db)
@@ -88,6 +90,8 @@ class Application:
             if not self.db.list_projects(include_archived=True):
                 self.demo()
             self.db.set_setting("welcome_initialized", True)
+        for project in self.db.list_projects():
+            self.graph.normalize(project.id)
         return self.projects.list()
 
     def operation_lock(self, project_id):
