@@ -97,16 +97,32 @@ def current_evidence(project: Project, behavior_id: str):
     return matching[-1] if matching and matching[-1].result == "PASS" else None
 
 
+def current_source(project: Project, milestone):
+    """Source inference proves presence in the current baseline, not acceptance."""
+    return (
+        milestone.origin == "source"
+        and project.baseline is not None
+        and project.baseline.complete
+        and milestone.source_baseline_id == project.baseline.id
+        and bool(milestone.source_behaviors)
+    )
+
+
 def readiness(project: Project, mid: str) -> dict:
     from .dependencies import ancestor_sets
 
     m = project.milestone(mid)
     blockers = []
     # After visual reduction the complete prerequisite chain still gates execution.
-    graph = {node.id: node.dependencies for node in project.milestones}
+    nodes = [*project.source_milestones, *project.milestones]
+    graph = {node.id: node.dependencies for node in nodes}
     for dep in sorted(ancestor_sets(graph)[mid]):
-        predecessor = project.milestone(dep)
-        if not all(current_evidence(project, b) for b in predecessor.behavior_revision_ids):
+        predecessor = next(node for node in nodes if node.id == dep)
+        if predecessor.origin == "source" and not current_source(project, predecessor):
+            blockers.append(f"等待 {dep} 的当前源码基线")
+        elif predecessor.origin != "source" and not all(
+            current_evidence(project, b) for b in predecessor.behavior_revision_ids
+        ):
             blockers.append(f"等待 {dep} 的当前基线验收")
     if any(not o.resolved for o in m.obligations):
         blockers.append("调查义务尚未完成")

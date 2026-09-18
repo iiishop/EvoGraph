@@ -56,7 +56,13 @@ function download() {
         <strong>{{ diagram.title }}</strong
         ><small
           >{{ kind }} · v{{ diagram.revision }} ·
-          {{ diagram.origin === 'source' ? 'SRC 源码事实' : '设计' }}</small
+          {{
+            diagram.origin === 'source'
+              ? 'SRC 源码依据'
+              : diagram.origin === 'mixed'
+                ? 'SRC + DESIGN 源码与设计'
+                : 'DESIGN 设计待实现'
+          }}</small
         >
       </div>
       <div class="uml-actions">
@@ -66,6 +72,9 @@ function download() {
       </div>
     </header>
     <p class="muted">{{ diagram.scope }}</p>
+    <p v-if="diagram.design_elements?.length" class="muted">
+      DESIGN 待实现：{{ diagram.design_elements.join('、') }}
+    </p>
     <p v-if="loading" role="status">正在本地编译 UML…</p>
     <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
     <DiagramImage v-if="image" :src="image" :title="diagram.title" />

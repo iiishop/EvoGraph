@@ -1,6 +1,6 @@
 """Incremental graph edits, checked and persisted before broadcasting to the UI."""
 
-from ..domain.dependencies import reduce_dependencies
+from ..domain.dependencies import ancestor_sets, reduce_dependencies
 from ..domain.models import (
     BehaviorRevision,
     Milestone,
@@ -23,11 +23,13 @@ class GraphEditor:
         if not project.milestones:
             return
         by_id = {b.id: b for b in project.behaviors}
+        source_ids = {m.id for m in project.source_milestones}
         proposed = []
         for node in project.milestones:
             behaviors = [by_id[bid] for bid in node.behavior_revision_ids]
             if any(b.owner != node.id for b in behaviors):
                 raise ValueError("行为验收归属不一致")
+            dependencies = [d for d in node.dependencies if d not in source_ids]
             proposed.append(
                 ProposedMilestone(
                     **node.model_dump(
@@ -37,12 +39,12 @@ class GraphEditor:
                             "intent",
                             "scope",
                             "architecture_components",
-                            "dependencies",
-                            "dependency_reasons",
                             "resources",
                             "change_types",
                         }
                     ),
+                    dependencies=dependencies,
+                    dependency_reasons={d: node.dependency_reasons[d] for d in dependencies},
                     behaviors=[
                         {"key": b.behavior_key, "statement": b.statement} for b in behaviors
                     ],
@@ -52,6 +54,11 @@ class GraphEditor:
             PlanProposal(
                 target="Incremental working graph", summary="Tool change", milestones=proposed
             )
+        )
+        # SRC capabilities are read-only but remain real nodes in the complete
+        # prerequisite graph used for cycle and reachability validation.
+        ancestor_sets(
+            {m.id: list(m.dependencies) for m in [*project.source_milestones, *project.milestones]}
         )
 
     def _save(self, project, summary, before):
@@ -202,7 +209,10 @@ class GraphEditor:
         remove: bool = False,
     ):
         p = self.db.get(project_id)
-        p.milestone(source)
+        if not any(m.id == source for m in p.source_milestones):
+            p.milestone(source)
+        elif remove:
+            raise ValueError("SRC 基线能力不能通过计划工具修改")
         node = p.milestone(target)
         if node.lease_active:
             raise ValueError("目标节点正在执行，不能修改依赖")
@@ -230,7 +240,7 @@ class GraphEditor:
         import json
 
         p = self.db.get(project_id)
-        removed = reduce_dependencies(p.milestones)
+        removed = reduce_dependencies([*p.source_milestones, *p.milestones])
         if removed:
             for milestone in p.milestones:
                 milestone.position = None

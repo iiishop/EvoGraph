@@ -58,10 +58,13 @@ async function save() {
 <template>
   <form class="research-form" @submit.prevent="save">
     <h2><Globe :size="20" />网页搜索与视觉检查</h2>
-    <p>让技术选型有可追溯的网页依据。密钥保存在系统凭据库，查询发送给选定的搜索服务。</p>
+    <p>
+      基础搜索可选择无需密钥的 Bing。网页读取独立可用，无需搜索服务或 API
+      Key；仅读取公开页面，不执行网页脚本。
+    </p>
     <label
       >搜索服务<select v-model="provider" @change="changed">
-        <option value="">未启用</option>
+        <option value="">关闭搜索（仍可读取网页）</option>
         <option v-for="p in settings?.providers" :key="p.id" :value="p.id">{{ p.name }}</option>
       </select></label
     >

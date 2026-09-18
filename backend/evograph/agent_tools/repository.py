@@ -37,6 +37,7 @@ def read_project(ctx, args):
             "behaviors",
             "baselines",
             "architectures",
+            "uml_diagrams",
             "source_diagram",
             "source_summary",
             "source_milestones",

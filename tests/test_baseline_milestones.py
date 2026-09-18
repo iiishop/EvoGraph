@@ -4,7 +4,7 @@ import pytest
 from evograph.agent_tools.base import ToolContext
 from evograph.agent_tools.repository import ReadFile, read_repository_file
 from evograph.application.baseline_milestones import BaselineMilestones
-from evograph.domain.models import Project
+from evograph.domain.models import Project, ProposedMilestone
 
 
 def reconstruction(p, dependencies=None):
@@ -149,3 +149,42 @@ def test_source_reader_can_continue_long_implementation(app, planned, repository
     assert "final_behavior" in second["content"] and second["next_offset"] is None
     assert first["content"] + second["content"] == content
     assert read_repository_file(ctx, ReadFile(path="auth.py"))["status"] == "NO_PROGRESS"
+
+
+def test_source_capabilities_can_be_real_prerequisites_without_fake_acceptance(app, planned):
+    ctx = context(app, planned)
+    app.baseline_milestones.save(ctx, reconstruction(planned, {"SRC_login": []}))
+    p = app.db.get(planned.id)
+    app.graph.upsert(
+        p.id,
+        ProposedMilestone(
+            id="M01",
+            title="包装已有登录能力",
+            intent="把现有能力接入新入口",
+            scope=["auth.py"],
+            dependencies=["SRC_login"],
+            dependency_reasons={"SRC_login": "复用当前实现"},
+            behaviors=[{"key": "auth.login", "statement": "入口可以调用登录能力"}],
+        ),
+        create=False,
+    )
+    app.graph.upsert(
+        p.id,
+        ProposedMilestone(
+            id="M02",
+            title="新登录入口",
+            intent="增加新的登录入口",
+            scope=["auth.py"],
+            dependencies=["M01", "SRC_login"],
+            dependency_reasons={"M01": "入口依赖包装层", "SRC_login": "直接复用现有能力"},
+            behaviors=[{"key": "auth.entry", "statement": "新入口返回登录结果"}],
+        ),
+        create=True,
+    )
+    app.graph.finalize(p.id)
+    p = app.db.get(p.id)
+    assert p.milestone("M01").dependencies == ["SRC_login"]
+    assert p.milestone("M02").dependencies == ["M01"]
+    assert not any(
+        "SRC_login" in blocker for blocker in app.projects.get(p.id)["readiness"]["M02"]["blockers"]
+    )

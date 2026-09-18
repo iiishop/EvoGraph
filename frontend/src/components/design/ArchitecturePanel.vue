@@ -6,6 +6,10 @@ import DiagramView from './DiagramView.vue';
 import ComponentPassport from './ComponentPassport.vue';
 import UmlView from './UmlView.vue';
 import { architectureRole } from '../../lib/architectureRoles';
+import { useBaseline } from '../../composables/useBaseline';
+import { useWorkspace } from '../../composables/useWorkspace';
+const baseline = useBaseline();
+const { state } = useWorkspace();
 const props = defineProps<{ project: Project }>();
 const view = ref('current'),
   query = ref(''),
@@ -97,11 +101,28 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
       </button>
       <p v-if="!project.architectures.length">尚无架构版本</p>
     </div>
-    <template v-if="view === 'class'"
-      ><UmlView v-if="classDiagram" :diagram="classDiagram" :project-id="project.id" />
+    <template v-if="view === 'class'">
+      <div class="architecture-tools" role="status">
+        <span>{{
+          project.class_model_state?.current
+            ? '已与当前基线及设计同步'
+            : project.class_model_state?.reasons.join(' · ') || '类图待生成'
+        }}</span>
+        <button
+          class="button secondary"
+          :disabled="state.busy"
+          @click="baseline.syncClassModel(project)"
+        >
+          {{ classDiagram ? '同步类图' : '生成类图' }}
+        </button>
+      </div>
+      <UmlView v-if="classDiagram" :diagram="classDiagram" :project-id="project.id" />
       <div v-else class="empty-state">
         <h3>持续维护一张代码架构总览</h3>
-        <p>在下方要求 Agent 阅读源码并绘制类图。按职责分包，保留关键签名、数据契约与中文说明。</p>
+        <p>
+          初始化基线时自动生成。按职责分包，保留关键签名、数据契约与中文说明；尚未实现的设计带
+          DESIGN 标识。
+        </p>
       </div></template
     >
     <template v-else-if="diagram">

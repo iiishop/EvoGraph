@@ -1,10 +1,12 @@
 from ..domain.models import PlanProposal, Project
 from ..domain.policies import acceptance, current_evidence, readiness
 from ..infrastructure.repository import root_path
+from .uml_lifecycle import class_model_state
 
 
 def project_view(project, db):
     data = project.model_dump()
+    data["class_model_state"] = class_model_state(project)
     data["acceptance"] = acceptance(project)
     data["readiness"] = {m.id: readiness(project, m.id) for m in project.milestones}
     data["evidence_validity"] = {

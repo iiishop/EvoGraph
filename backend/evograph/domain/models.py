@@ -257,7 +257,9 @@ class UmlDiagram(Model):
     kind: Literal["class", "sequence", "activity", "state"]
     source: str = Field(min_length=1, max_length=100000)
     scope: str = Field(min_length=1, max_length=1000)
-    origin: Literal["source", "design"] = "design"
+    origin: Literal["source", "design", "mixed"] = "design"
+    design_elements: list[str] = Field(default_factory=list)
+    design_fingerprint: str = ""
     source_refs: list[str] = Field(default_factory=list)
     milestone_ids: list[str] = Field(default_factory=list)
     revision: int = 0

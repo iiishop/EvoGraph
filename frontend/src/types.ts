@@ -119,6 +119,7 @@ export interface Architecture {
   diagram: Diagram;
 }
 export interface Project extends ProjectSummary {
+  class_model_state: { current: boolean; reasons: string[] };
   uml_diagrams: UmlDiagram[];
   source_milestones: Milestone[];
   source_diagram: Diagram | null;
@@ -218,7 +219,9 @@ export interface UmlDiagram {
   kind: 'class' | 'sequence' | 'activity' | 'state';
   source: string;
   scope: string;
-  origin: 'source' | 'design';
+  origin: 'source' | 'design' | 'mixed';
+  design_elements: string[];
+  design_fingerprint: string;
   source_refs: string[];
   milestone_ids: string[];
   revision: number;

@@ -9,7 +9,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from ..domain.models import UmlDiagram
-from ..infrastructure.repository import readable, root_path
+from ..infrastructure.repository import readable, root_path, snapshot
+from .uml_lifecycle import annotate_design, design_fingerprint
 
 STYLE = """Use PlantUML for UML. Maintain one canonical class diagram (id=class_model),
 an evidence-driven code architecture overview, not merely OO inheritance. Follow:
@@ -26,7 +27,12 @@ constraints and risks; preserve original code identifiers. Keep the main data/co
 chain complete. Use skinparam packageStyle rectangle, skinparam linetype polyline,
 hide empty members. Group the main chain with together. Do not rely on colors.
 Record commit and scope. Read source first; origin=source requires actual source_refs.
-Do not mix unimplemented design into source observations. Prefer a single maintained
+Use origin=mixed for an overview combining source and design. List every unimplemented
+class or member in design_elements as declared PlantUML aliases (e.g. FutureService or
+Service::new_method); the application adds visible DESIGN labels. Label proposed
+relations DESIGN as well. Never label a planned member as implemented. Once actual
+code proves a design element, remove its design marker; retain still-pending designs.
+Use origin=design only when the whole diagram is proposed. Prefer a single maintained
 overview; sequence/activity/state diagrams may be linked to milestone_ids as needed.
 Do not use includes, macros, hyperlinks, embedded images, or remote resources.
 """
@@ -104,7 +110,7 @@ class UmlService:
             ):
                 if required not in diagram.source:
                     raise ValueError("类图必须遵守绘图规范：" + required)
-        if diagram.origin == "source":
+        if diagram.origin in {"source", "mixed"}:
             if not p.baseline or not diagram.source_refs:
                 raise ValueError("源码类图需要基线及真实源码引用")
             root = root_path(p.repository)
@@ -113,8 +119,18 @@ class UmlService:
                 if not path.is_relative_to(root) or not path.is_file() or not readable(path):
                     raise ValueError("无效源码引用：" + name)
             diagram.baseline_id = p.baseline.id
+            current = snapshot(p.repository, 0)
+            if (
+                not current.complete
+                or not p.baseline.complete
+                or current.fingerprint != p.baseline.fingerprint
+            ):
+                raise ValueError("源码基线已变化或不完整，请刷新基线后更新类图")
         else:
             diagram.baseline_id = ""
+        if diagram.kind == "class":
+            diagram.design_fingerprint = design_fingerprint(p)
+            diagram.source = annotate_design(diagram)
         # The application supplies authoritative scope/version metadata, not the model.
         diagram.source = re.sub(r"(?im)^' (Commit|Scope|Origin):.*\n?", "", diagram.source)
         first, _, body = diagram.source.partition("\n")
@@ -135,7 +151,11 @@ class UmlService:
         diagram.revision = len(previous) + 1
         p.uml_diagrams.append(diagram)
         self.db.save(p, "uml_updated", f"{diagram.title} v{diagram.revision}")
-        return {"node_ids": diagram.milestone_ids, "effect": "updated"}
+        return {
+            "node_ids": diagram.milestone_ids,
+            "effect": "updated",
+            "message": f"已更新{diagram.title} · v{diagram.revision}",
+        }
 
     def preview(self, project_id: str, diagram_id: str, revision: int = 0):
         p = self.db.get(project_id)

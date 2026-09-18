@@ -50,8 +50,8 @@ const { selectNode } = useWorkspace();
         <code v-for="path in milestone.source_refs" :key="path" class="scope-path">{{ path }}</code>
       </section>
       <p class="muted">
-        由 Agent 根据源码倒推的已实现交付能力，不代表真实历史 PR 或已通过独立验收。
-        后续改动可在下方交给 Agent 规划，不重复计入待交付任务。
+        由 Agent 根据源码倒推的已实现交付能力，可作为未来里程碑的前置能力；
+        不代表真实历史 PR 或已通过独立验收，也不计入待交付任务。
       </p>
       <small
         >推导依据：基线 B{{

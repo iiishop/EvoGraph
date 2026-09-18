@@ -1,27 +1,12 @@
 import hashlib
-import ipaddress
-from urllib.parse import urlparse
 
 import httpx
 
 from ..domain.models import ResearchSource
+from ..infrastructure.public_web import public_url
 from ..providers.base import check_url
 from ..web_search import providers
-
-
-def public_url(url):
-    check_url(url)
-    host = urlparse(url).hostname or ""
-    if host.lower() in {"localhost", "localhost.localdomain"} or host.lower().endswith(
-        (".local", ".internal")
-    ):
-        raise ValueError("网页资料必须使用公开地址")
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return
-    if not address.is_global:
-        raise ValueError("网页资料不能引用私有网络地址")
+from .web_fetch import fetch
 
 
 class ResearchService:
@@ -31,7 +16,9 @@ class ResearchService:
     def settings(self):
         return {
             "providers": [p.descriptor for p in providers().values()],
-            "saved": self.db.setting("web_search", None),
+            "saved": self.db.setting(
+                "web_search", {"provider": "bing", "config": {}, "has_key": False}
+            ),
             "vision_enabled": self.db.setting("vision_enabled", False),
         }
 
@@ -70,23 +57,26 @@ class ResearchService:
         self.db.set_setting("vision_enabled", vision_enabled)
         return self.settings()
 
-    def run(self, project_id, value, extract=False):
-        saved = self.db.setting("web_search", None)
-        if not saved:
-            raise ValueError("网页搜索未配置，请到设置中连接 Tavily 或 SearXNG")
-        adapter = providers()[saved["provider"]]
-        if extract:
-            public_url(value)
-            if not hasattr(adapter, "extract"):
-                raise ValueError("当前搜索服务不支持正文提取，可切换到 Tavily")
-        secret = self.secrets.get(saved["secret_id"]) if saved.get("has_key") else ""
+    def run(self, project_id, value, extract=False, direct=False):
+        saved = self.db.setting("web_search", {"provider": "bing", "config": {}, "has_key": False})
         try:
-            results = getattr(adapter, "extract" if extract else "search")(
-                saved["config"], secret, value
-            )
+            if direct:
+                results = fetch(value)
+            else:
+                if not saved:
+                    raise ValueError("网页搜索已关闭，请在设置中选择 Bing、Tavily 或 SearXNG")
+                adapter = providers()[saved["provider"]]
+                if extract:
+                    public_url(value)
+                    if not hasattr(adapter, "extract"):
+                        raise ValueError("当前服务不支持正文提取，请使用独立的 web_fetch 工具")
+                secret = self.secrets.get(saved["secret_id"]) if saved.get("has_key") else ""
+                results = getattr(adapter, "extract" if extract else "search")(
+                    saved["config"], secret, value
+                )
         except (httpx.HTTPError, KeyError, TypeError) as exc:
             raise ValueError(
-                "搜索服务请求失败，请检查服务地址、凭据或 JSON 支持；未切换到其他服务"
+                "网页请求失败，请检查网络、地址或服务凭据；站点也可能限制自动访问"
             ) from exc
         p = self.db.get(project_id)
         records = []

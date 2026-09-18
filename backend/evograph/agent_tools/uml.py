@@ -17,8 +17,8 @@ from .base import tool
     effect="updated",
 )
 def save_uml(ctx, args):
-    if args.origin == "source":
-        missing = set(args.source_refs) - set(ctx.inspected)
+    if args.origin in {"source", "mixed"}:
+        missing = set(args.source_refs) - set(ctx.receipts)
         if missing:
             raise ValueError("先读取类图引用的源码：" + ", ".join(sorted(missing)))
         root = root_path(ctx.application.db.get(ctx.project_id).repository)
