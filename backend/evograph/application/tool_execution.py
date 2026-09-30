@@ -33,6 +33,7 @@ class ToolExecutor:
             if mutation:
                 event = {
                     "type": "graph_changed",
+                    "view": "graph",
                     **result,
                     "label": spec.label,
                     "project": self.context.application.projects.get(self.context.project_id),

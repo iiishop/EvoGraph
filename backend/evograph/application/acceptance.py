@@ -15,28 +15,155 @@ class AcceptanceService:
         m = p.milestone(milestone_id)
         if not m.lease_active:
             raise ValueError("请先检查前置条件并领取任务")
-        contract = self._context(p, m)
-        return {
-            "prompt": "你是外部制作 Agent。仅实现以下里程碑，遵守范围、架构和迁移步骤。"
-            "完成后报告变更文件与已知限制；正式验收由另一次外部验收完成。\n"
-            + json.dumps(contract, ensure_ascii=False, indent=2)
-        }
+        return {"prompt": self._implementation_prompt(p, m)}
+
+    @classmethod
+    def _implementation_prompt(cls, p, m) -> str:
+        behaviors = [b for b in p.behaviors if b.id in m.behavior_revision_ids]
+        architecture = p.architectures[-1] if p.architectures else None
+        component_ids = set(m.architecture_components)
+        components = (
+            [n for n in architecture.diagram.nodes if n.id in component_ids] if architecture else []
+        )
+        technologies = architecture.technologies if architecture else []
+        relevant_uml = [
+            d
+            for d in {d.id: d for d in p.uml_diagrams}.values()
+            if m.id in d.milestone_ids or any(e in d.design_elements for e in component_ids)
+        ]
+        sections = [
+            "你是外部制作 Agent。请在当前仓库中完成这个里程碑对应的代码变更。",
+            "只实现本任务需要的最小闭环；不要重写项目结构，不要替 EvoGraph 修改计划图，"
+            "不要编造验收结果。正式验收会由另一个外部验收 Agent 完成。",
+            "",
+            f"项目：{p.name}",
+            f"仓库：{p.repository or '未设置'}",
+            f"任务：{m.id} - {m.title}",
+            f"目标：{m.intent}",
+            cls._list("变更范围", m.scope),
+            cls._list("相关资源", m.resources),
+            cls._list("变更类型", m.change_types),
+            cls._list(
+                "必须满足的行为",
+                [f"{b.behavior_key}：{b.statement}" for b in behaviors],
+            ),
+            cls._list(
+                "已完成的前置任务",
+                [
+                    f"{dep}：{m.dependency_reasons.get(dep, '必须先完成')}"
+                    for dep in m.dependencies
+                ],
+            ),
+            cls._list(
+                "迁移步骤",
+                [
+                    f"{step.component_id}：{step.instruction}"
+                    for step in m.migration_steps
+                ],
+            ),
+            cls._architecture_brief(architecture, components, technologies),
+            cls._list(
+                "可参考的图",
+                [
+                    f"{d.title}（{d.kind}，{d.origin}，revision {d.revision}）"
+                    for d in relevant_uml
+                ],
+            ),
+            cls._baseline_brief(p),
+            "交付时请回复：变更摘要、主要修改文件、你实际运行或无法运行的检查、已知限制。"
+            "不要输出验收 JSON；验收提示词会在制作完成后单独生成。",
+        ]
+        return "\n".join(s for s in sections if s)
 
     @staticmethod
-    def _context(p, m):
-        return {
-            "project": p.name,
-            "repository": p.repository,
-            "milestone": m.model_dump(),
-            "baseline": p.baseline.model_dump() if p.baseline else None,
-            "behaviors": [b.model_dump() for b in p.behaviors if b.id in m.behavior_revision_ids],
-            "architecture": p.architectures[-1].model_dump() if p.architectures else None,
-            "uml": [
-                d.model_dump()
-                for d in {d.id: d for d in p.uml_diagrams}.values()
-                if d.kind == "class" or m.id in d.milestone_ids
-            ],
-        }
+    def _list(title: str, items: list[str]) -> str:
+        values = [item.strip() for item in items if item and item.strip()]
+        if not values:
+            return f"{title}：无"
+        return title + "：\n" + "\n".join(f"- {item}" for item in values)
+
+    @staticmethod
+    def _architecture_brief(architecture, components, technologies) -> str:
+        if not architecture:
+            return "架构约束：当前没有架构版本；按仓库现状保持一致。"
+        lines = [f"架构约束：revision {architecture.number}，{architecture.summary}"]
+        if technologies:
+            lines.append("技术栈：")
+            lines.extend(f"- {t.area}：{t.choice}。{t.rationale}" for t in technologies)
+        if components:
+            lines.append("相关组件：")
+            lines.extend(
+                f"- {c.id} / {c.label}：{c.description or c.role}" for c in components
+            )
+        if architecture.decisions:
+            lines.append("设计决策：")
+            lines.extend(f"- {decision}" for decision in architecture.decisions)
+        if architecture.risks:
+            lines.append("实现时注意：")
+            lines.extend(f"- {risk}" for risk in architecture.risks)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _baseline_brief(p) -> str:
+        baseline = p.baseline
+        if not baseline:
+            return "基线：尚未建立完整基线；先观察仓库现状再实施。"
+        status = "完整" if baseline.complete else "不完整"
+        return (
+            f"当前基线：{baseline.id}，commit {baseline.commit}，"
+            f"{baseline.file_count} 个文件，状态：{status}。"
+        )
+
+    @staticmethod
+    def _acceptance_prompt(p, m, request: AcceptanceRequest, template: dict) -> str:
+        behaviors = [b for b in p.behaviors if b.id in m.behavior_revision_ids]
+        architecture = p.architectures[-1] if p.architectures else None
+        component_ids = set(m.architecture_components)
+        components = (
+            [n for n in architecture.diagram.nodes if n.id in component_ids] if architecture else []
+        )
+        sections = [
+            "你是独立的外部验收 Agent。请检查当前仓库是否满足这个里程碑的行为契约。",
+            "选择有代表性的自动化、人工或视觉检查。不要修改产品代码；如果必须修复才能通过，"
+            "本次返回 FAIL，并说明原因。未检查、受阻或证据不足的条目不得 PASS。",
+            "",
+            f"项目：{p.name}",
+            f"仓库：{p.repository or '未设置'}",
+            f"任务：{m.id} - {m.title}",
+            f"验收目标：{m.intent}",
+            AcceptanceService._baseline_brief(p),
+            f"验收请求：{request.id}",
+            AcceptanceService._list("验收范围", m.scope),
+            AcceptanceService._list(
+                "必须逐项判断的行为",
+                [f"{b.id} / {b.behavior_key}：{b.statement}" for b in behaviors],
+            ),
+            AcceptanceService._acceptance_architecture_brief(architecture, components, m),
+            AcceptanceService._list(
+                "迁移验收关注点",
+                [
+                    f"{step.component_id}：{step.instruction}"
+                    for step in m.migration_steps
+                ],
+            ),
+            "最终只返回下面这个 JSON，不要添加 Markdown、解释文字或写入仓库文件：",
+            json.dumps(template, ensure_ascii=False, indent=2),
+            "填写规则：每个 checks 条目必须保留原 behavior_id；result 只能是 PASS、FAIL 或 ERROR；"
+            "method 写实际检查方式、命令或观察路径；evidence 写真实输出、观察结果和证据来源。",
+        ]
+        return "\n".join(s for s in sections if s)
+
+    @staticmethod
+    def _acceptance_architecture_brief(architecture, components, m) -> str:
+        if not architecture:
+            return "相关架构：当前没有架构版本；按仓库实际行为验收。"
+        lines = [f"相关架构：revision {m.architecture_revision}，{architecture.summary}"]
+        if components:
+            lines.append("涉及组件：")
+            lines.extend(
+                f"- {c.id} / {c.label}：{c.description or c.role}" for c in components
+            )
+        return "\n".join(lines)
 
     def prepare(self, project_id: str, milestone_id: str):
         p = self.execution.refresh(project_id)
@@ -77,14 +204,7 @@ class AcceptanceService:
         }
         return {
             "request_id": request.id,
-            "prompt": "你是独立的外部验收 Agent。依据以下契约逐项检查实际仓库，选择有代表性的"
-            "自动化或人工/视觉检查。不要修改产品代码；若必须修复，返回 FAIL，修复后由用户"
-            "重新生成验收提示词。未检查、受阻或缺少证据的条目不得 PASS。"
-            "最终仅返回符合模板的 JSON，供用户粘贴到 EvoGraph；不要将报告写入被验收仓库。"
-            "EvoGraph 会检查仓库是否变化，并且只有所有行为 PASS 才完成任务、释放资源。\n\n"
-            + json.dumps(self._context(p, m), ensure_ascii=False, indent=2)
-            + "\n\n报告模板：\n"
-            + json.dumps(template, ensure_ascii=False, indent=2),
+            "prompt": self._acceptance_prompt(p, m, request, template),
         }
 
     def import_report(self, project_id: str, milestone_id: str, report: AcceptanceReport):

@@ -55,6 +55,34 @@ def test_stream_directly_edits_existing_graph_before_done(app, planned):
     assert not app.db.get(planned.id).proposal
 
 
+def test_investigation_rounds_do_not_stop_before_a_later_graph_edit(app, planned):
+    rounds = 0
+    node = proposal().milestones[0].model_dump()
+    node["title"] = "Updated after investigation"
+
+    async def stream(messages, schemas):
+        nonlocal rounds
+        rounds += 1
+        if rounds <= 3:
+            async for event in tool_chunks("read_project", {}):
+                yield event
+        elif rounds == 4:
+            async for event in tool_chunks("update_milestone", node):
+                yield event
+        else:
+            yield {"type": "text", "text": "完成"}
+
+    app.settings.stream = stream
+
+    async def run():
+        return [event async for event in app.agent.stream(planned.id, "先调查再修改")]
+
+    events = asyncio.run(run())
+    assert rounds >= 5
+    assert any(event["type"] == "graph_changed" for event in events)
+    assert app.db.get(planned.id).milestone("M01").title == "Updated after investigation"
+
+
 def test_questions_pause_persist_and_resume_in_same_graph(app, planned):
     rounds = 0
 

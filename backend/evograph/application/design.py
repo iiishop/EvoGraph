@@ -16,6 +16,18 @@ def validate_diagram(diagram: Diagram):
         if key in seen:
             raise ValueError("图中存在重复连线")
         seen.add(key)
+    group_ids = {group.id for group in diagram.groups}
+    if len(group_ids) != len(diagram.groups):
+        raise ValueError("架构分组 ID 重复")
+    members: set[str] = set()
+    for group in diagram.groups:
+        unknown = set(group.member_node_ids) - ids
+        if unknown:
+            raise ValueError("架构分组引用不存在的节点：" + ", ".join(sorted(unknown)))
+        overlap = members & set(group.member_node_ids)
+        if overlap:
+            raise ValueError("每个架构节点只能属于一个主分组：" + ", ".join(sorted(overlap)))
+        members.update(group.member_node_ids)
 
 
 class DesignService:
@@ -33,7 +45,12 @@ class DesignService:
             raise ValueError("关联的资料不存在")
         p.diagrams = [d for d in p.diagrams if d.id != diagram.id] + [diagram]
         self.db.save(p, "diagram_updated", diagram.title)
-        return {"node_ids": diagram.milestone_ids, "effect": "updated"}
+        return {
+            "node_ids": diagram.milestone_ids,
+            "effect": "updated",
+            "view": "design",
+            "diagram_id": diagram.id,
+        }
 
     def update(self, project_id: str, specification: ArchitectureSpec):
         validate_diagram(specification.diagram)
@@ -104,4 +121,9 @@ class DesignService:
             if m.status != "PLANNED":
                 m.status = "REVALIDATION_REQUIRED"
         self.db.save(p, "architecture_updated", f"A{version.number} · {version.summary}")
-        return {"node_ids": [m.id for m in p.milestones], "effect": "updated"}
+        return {
+            "node_ids": [m.id for m in p.milestones],
+            "effect": "updated",
+            "view": "architecture",
+            "diagram_id": specification.diagram.id,
+        }

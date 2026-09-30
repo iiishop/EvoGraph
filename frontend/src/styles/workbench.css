@@ -251,6 +251,11 @@ a:focus-visible {
   margin-left: auto;
   font-size: 12px;
 }
+.architecture-group-hint {
+  margin: -3px 22px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
 .architecture-stage {
   display: flex;
   flex: 1;
@@ -324,6 +329,71 @@ a:focus-visible {
 .architecture-node .vue-flow__handle {
   background: var(--role-color);
 }
+.architecture-group {
+  position: relative;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px dashed #9db2bf;
+  border-radius: 14px;
+  background: transparent;
+  pointer-events: none;
+  color: #48616d;
+}
+.architecture-group-heading {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 9px;
+  border: 1px solid #d6e1e7;
+  border-radius: 6px;
+  background: #ffffffee;
+  box-shadow: 0 2px 6px #20324b0d;
+  font-size: 12px;
+  font-weight: 700;
+}
+.architecture-group-heading small {
+  color: #78909c;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.architecture-group p {
+  max-width: 280px;
+  max-height: 32px;
+  margin: 8px 0 0;
+  color: #78909c;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+.group-client {
+  border-color: #83b8c4;
+  background: rgba(231, 246, 249, 0.07);
+}
+.group-server {
+  border-color: #83b59e;
+  background: rgba(234, 247, 241, 0.07);
+}
+.group-data {
+  border-color: #a894d3;
+  background: rgba(241, 236, 251, 0.07);
+}
+.group-external {
+  border-color: #a9b5c5;
+  background: rgba(237, 241, 247, 0.07);
+}
+.group-domain {
+  border-color: #d1b07b;
+  background: rgba(255, 246, 223, 0.07);
+}
+.group-shared {
+  border-color: #aebdc6;
+  background: rgba(245, 249, 250, 0.07);
+}
 .design-diagram .vue-flow__edge-text {
   font-size: 11px;
   fill: var(--text-secondary);
@@ -350,6 +420,16 @@ a:focus-visible {
   font-size: 17px;
   overflow-wrap: anywhere;
   margin: 8px 0;
+}
+.component-passport .group-chip {
+  display: inline-block;
+  margin: 2px 0 8px;
+  padding: 4px 8px;
+  border: 1px solid #d6e1e7;
+  border-radius: 999px;
+  color: #58707c;
+  background: #f5f9fa;
+  font-size: 11px;
 }
 .component-passport h4 {
   margin: 22px 0 10px;

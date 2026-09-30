@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
+import { useAgent } from '../../composables/useAgent';
+import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import WorkspaceHeader from './WorkspaceHeader.vue';
 import GraphToolbar from '../graph/GraphToolbar.vue';
 import MilestoneGraph from '../graph/MilestoneGraph.vue';
@@ -10,7 +12,21 @@ import { useEntrance } from '../../composables/useEntrance';
 import AgentDock from '../agent/AgentDock.vue';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project } from '../../types';
-defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project }>();
+const agent = useAgent();
+function followPage() {
+  if (
+    agent.state.projectId === props.project.id &&
+    agent.state.follow[props.project.id] !== false &&
+    workspaceViews.some((v) => v.id === agent.state.view)
+  )
+    tab.value = agent.state.view;
+}
+function resume() {
+  agent.resumeFollow(props.project.id);
+  followPage();
+}
+watch(() => agent.state.navigationTick, followPage);
 defineEmits<{ edit: [] }>();
 const { selected } = useWorkspace();
 const root = ref<HTMLElement>();
@@ -21,13 +37,22 @@ const tab = ref('graph'),
 </script>
 <template>
   <main ref="root" class="project-workspace">
+    <Teleport to="body"
+      ><FollowAgentButton
+        class="global-follow-agent"
+        :following="agent.state.follow[project.id] !== false"
+        @resume="resume"
+    /></Teleport>
     <WorkspaceHeader :project="project" @edit="$emit('edit')" />
-    <section class="workspace-body">
+    <section class="workspace-body" :class="{ 'architecture-active': tab === 'architecture' }">
       <div class="planning-region">
         <GraphToolbar
           :tab="tab"
           :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
-          @tab="tab = $event"
+          @tab="
+            tab = $event;
+            agent.freeView(project.id);
+          "
           @fit="graph?.fit()"
           @reset="graph?.reset()"
         />

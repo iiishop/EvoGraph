@@ -1,5 +1,30 @@
 import type { Point } from '../composables/useGraphLayout';
 
+/** Sample the M/C-only paths emitted by our shared edge renderer. */
+export function sampleCubicPath(path: string): Point[] {
+  const values = (path.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi) ?? []).map(Number);
+  const samples: Point[] = [];
+  let start = { x: values[0], y: values[1] };
+  for (let i = 2; i + 5 < values.length; i += 6) {
+    const [ax, ay, bx, by, x, y] = values.slice(i, i + 6);
+    const length =
+      Math.hypot(ax - start.x, ay - start.y) +
+      Math.hypot(bx - ax, by - ay) +
+      Math.hypot(x - bx, y - by);
+    const steps = Math.max(16, Math.ceil(length / 4));
+    for (let j = 0; j <= steps; j++) {
+      const t = j / steps,
+        u = 1 - t;
+      samples.push({
+        x: u ** 3 * start.x + 3 * u ** 2 * t * ax + 3 * u * t ** 2 * bx + t ** 3 * x,
+        y: u ** 3 * start.y + 3 * u ** 2 * t * ay + 3 * u * t ** 2 * by + t ** 3 * y,
+      });
+    }
+    start = { x, y };
+  }
+  return samples;
+}
+
 /** ELK SPLINES emits control points for successive cubic Bézier segments. */
 export function splinePath(points: Point[]): string {
   if (points.length < 2) return '';

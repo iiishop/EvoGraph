@@ -3,12 +3,15 @@ import { computed, ref, watch } from 'vue';
 import { Search, Network, Maximize2 } from 'lucide-vue-next';
 import type { Project } from '../../types';
 import DiagramView from './DiagramView.vue';
+import ArchitectureQuality from './ArchitectureQuality.vue';
 import ComponentPassport from './ComponentPassport.vue';
 import UmlView from './UmlView.vue';
 import { architectureRole } from '../../lib/architectureRoles';
+import { useAgent } from '../../composables/useAgent';
 import { useBaseline } from '../../composables/useBaseline';
 import { useWorkspace } from '../../composables/useWorkspace';
 const baseline = useBaseline();
+const agent = useAgent();
 const { state } = useWorkspace();
 const props = defineProps<{ project: Project }>();
 const view = ref('current'),
@@ -34,6 +37,20 @@ const classDiagram = computed(() =>
   props.project.uml_diagrams?.filter((d) => d.kind === 'class').at(-1),
 );
 const historyOpen = ref(false);
+watch(
+  () => [agent.state.navigationTick, agent.state.pulse],
+  () => {
+    if (
+      agent.state.projectId === props.project.id &&
+      agent.state.view === 'architecture' &&
+      agent.state.follow[props.project.id] !== false
+    ) {
+      view.value = agent.state.diagramKind === 'class' ? 'class' : 'current';
+      historyOpen.value = false;
+    }
+  },
+  { immediate: true },
+);
 const diagram = computed(() =>
   view.value === 'source' ? props.project.source_diagram : architecture.value?.diagram,
 );
@@ -56,13 +73,6 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
     <header class="architecture-heading">
       <div>
         <h2><Network :size="21" />系统架构</h2>
-        <p>
-          {{
-            view === 'source'
-              ? '从代码出发，理解现有系统边界'
-              : '持续维护组件边界、技术选型与设计依据'
-          }}
-        </p>
       </div>
       <button
         class="button secondary"
@@ -81,7 +91,10 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         ]"
         :key="item.id"
         :aria-pressed="view === item.id"
-        @click="view = item.id"
+        @click="
+          view = item.id;
+          agent.freeView(project.id);
+        "
       >
         {{ item.label }}
       </button>
@@ -185,6 +198,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         />
       </div>
       <p v-if="view === 'source'" class="source-summary">{{ project.source_summary }}</p>
+      <ArchitectureQuality v-if="architecture" :architecture="architecture" />
       <details v-if="architecture" class="architecture-foundation">
         <summary>
           技术选型、决策与来源

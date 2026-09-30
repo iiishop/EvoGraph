@@ -15,16 +15,53 @@ const LIMIT = 6;
 const atLimit = computed(() => selected.value.length >= LIMIT);
 onMounted(loadFormats);
 
+function normalizedFiles(files: FileList | File[]) {
+  return Array.from(files).map((file, index) => {
+    const extension = file.name.includes('.')
+      ? `.${file.name.split('.').pop()?.toLowerCase()}`
+      : '';
+    const known = formats.value.extensions.includes(extension);
+    if (file.name && known) return file;
+    const suffixByMime: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/webp': 'webp',
+      'application/pdf': 'pdf',
+      'text/plain': 'txt',
+      'text/markdown': 'md',
+      'text/csv': 'csv',
+      'application/json': 'json',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    };
+    const suffix =
+      suffixByMime[file.type] || file.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'bin';
+    return new File([file], `pasted-${Date.now()}-${index}.${suffix}`, {
+      type: file.type,
+      lastModified: file.lastModified,
+    });
+  });
+}
+
+async function acceptFiles(files: FileList | File[]) {
+  const normalized = normalizedFiles(files);
+  if (!normalized.length || state.busy || uploading.value) return;
+  const projectId = props.project.id;
+  const uploaded = [...new Set(await upload(projectId, normalized))].filter(
+    (id) => !selected.value.includes(id),
+  );
+  if (props.project.id !== projectId) return;
+  const room = LIMIT - selected.value.length;
+  selected.value = [...selected.value, ...uploaded.slice(0, Math.max(room, 0))];
+  overflow.value = Math.max(uploaded.length - Math.max(room, 0), 0);
+}
+
 async function changed(event: Event) {
   const target = event.target as HTMLInputElement;
-  if (target.files) {
-    const uploaded = await upload(props.project.id, target.files);
-    const room = LIMIT - selected.value.length;
-    selected.value = [...selected.value, ...uploaded.slice(0, Math.max(room, 0))];
-    overflow.value = Math.max(uploaded.length - room, 0);
-  }
+  if (target.files) await acceptFiles(target.files);
   target.value = '';
 }
+
+defineExpose({ acceptFiles });
 function toggle(id: string) {
   if (selected.value.includes(id)) {
     selected.value = selected.value.filter((x) => x !== id);

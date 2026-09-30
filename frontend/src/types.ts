@@ -95,6 +95,14 @@ export interface Attachment {
   size: number;
   excerpt: string;
 }
+export interface ReferenceItem {
+  id: string;
+  kind: 'attachment' | 'repository';
+  name: string;
+  label: string;
+  detail: string;
+  path: string;
+}
 export interface Diagram {
   id: string;
   title: string;
@@ -107,10 +115,19 @@ export interface Diagram {
     source_refs?: string[];
   }[];
   edges: { source: string; target: string; label: string }[];
+  groups: {
+    id: string;
+    label: string;
+    description: string;
+    kind: 'client' | 'server' | 'data' | 'external' | 'shared' | 'domain';
+    member_node_ids: string[];
+  }[];
   milestone_ids: string[];
   attachment_ids: string[];
 }
 export interface Architecture {
+  quality_scenarios?: { concern: string; scenario: string; measure: string; approach: string }[];
+  risks?: string[];
   research_ids: string[];
   number: number;
   summary: string;
@@ -181,6 +198,9 @@ export interface PendingQuestion {
   options: string[];
 }
 export interface AgentEvent {
+  view?: string;
+  diagram_id?: string;
+  diagram_kind?: string;
   type: string;
   project?: Project;
   project_id?: string;

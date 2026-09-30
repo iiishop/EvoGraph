@@ -34,13 +34,11 @@ const fresh = computed(() => props.project.source_analysis_baseline_id === curre
 </template>
 <style scoped>
 .baseline-milestone-status {
-  position: absolute;
+  position: relative;
   z-index: 5;
-  bottom: 16px;
-  left: 64px;
-  right: 160px;
-  width: fit-content;
-  max-width: calc(100% - 224px);
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   flex-wrap: wrap;

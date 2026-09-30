@@ -183,6 +183,7 @@ class Attachment(Model):
     media_type: str
     size: int
     excerpt: str = ""
+    sha256: str = ""
     created_at: str = Field(default_factory=now)
 
 
@@ -202,12 +203,21 @@ class DiagramEdge(Model):
     label: str = Field(min_length=1, max_length=120)
 
 
+class DiagramGroup(Model):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    kind: Literal["client", "server", "data", "external", "shared", "domain"] = "shared"
+    member_node_ids: list[str] = Field(min_length=1, max_length=40)
+
+
 class Diagram(Model):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
     title: str = Field(min_length=1, max_length=120)
     kind: Literal["architecture", "state", "workflow", "ui"] = "architecture"
     nodes: list[DiagramNode] = Field(min_length=1, max_length=40)
     edges: list[DiagramEdge] = Field(default_factory=list, max_length=100)
+    groups: list[DiagramGroup] = Field(default_factory=list, max_length=12)
     milestone_ids: list[str] = Field(default_factory=list)
     attachment_ids: list[str] = Field(default_factory=list)
 
@@ -218,7 +228,17 @@ class Technology(Model):
     rationale: str = Field(min_length=1, max_length=1500)
 
 
+class QualityScenario(Model):
+    concern: str = Field(min_length=1, max_length=120)
+    scenario: str = Field(min_length=1, max_length=1500)
+    measure: str = Field(min_length=1, max_length=500)
+    approach: str = Field(min_length=1, max_length=1500)
+
+
 class ArchitectureSpec(Model):
+    quality_scenarios: list[QualityScenario] = Field(default_factory=list, max_length=20)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+
     summary: str = Field(min_length=1, max_length=4000)
     technologies: list[Technology] = Field(min_length=1, max_length=30)
     decisions: list[str] = Field(default_factory=list, max_length=30)

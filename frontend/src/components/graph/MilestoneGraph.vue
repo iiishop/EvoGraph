@@ -5,7 +5,7 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { GitBranch } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
-import PrerequisiteEdge from './PrerequisiteEdge.vue';
+import GraphEdge from './GraphEdge.vue';
 import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
@@ -13,7 +13,6 @@ import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
 import BaselineMilestoneStatus from './BaselineMilestoneStatus.vue';
 import GoalMarker from './GoalMarker.vue';
-import FollowAgentButton from './FollowAgentButton.vue';
 
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
@@ -153,42 +152,57 @@ watch(computedLayout, follow);
 defineExpose({ fit, reset });
 </script>
 <template>
-  <div class="graph-canvas">
-    <GoalMarker :project="project" />
+  <div class="milestone-stage">
     <BaselineMilestoneStatus :project="project" />
-    <VueFlow
-      v-if="nodes.length"
-      :id="flowId"
-      :nodes="nodes"
-      :edges="edges"
-      :min-zoom="0.25"
-      :max-zoom="1.6"
-      :nodes-connectable="false"
-      :nodes-draggable="!agent.state.running"
-      :delete-key-code="null"
-      fit-view-on-init
-      @nodes-initialized="initialized"
-      @move-start="moved"
-      @node-drag-start="agent.freeView(project.id)"
-      @node-click="({ node }) => selectNode(node.id)"
-      @pane-click="selectNode(null)"
-      @node-drag-stop="dragged"
-      ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
-        :show-interactive="false"
-        position="bottom-left"
-      /><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
-      <template #edge-prerequisite="edgeProps"><PrerequisiteEdge v-bind="edgeProps" /></template>
-    </VueFlow>
-    <div v-else class="empty-state">
-      <span class="empty-icon"><GitBranch :size="32" /></span>
-      <h3>下一步演化，从一个目标开始</h3>
-      <p>在下方描述你的目标，让 Agent 帮你形成可执行的里程碑。</p>
+    <div class="graph-canvas">
+      <GoalMarker :project="project" />
+      <VueFlow
+        v-if="nodes.length"
+        :id="flowId"
+        :nodes="nodes"
+        :edges="edges"
+        :min-zoom="0.25"
+        :max-zoom="1.6"
+        :nodes-connectable="false"
+        :nodes-draggable="!agent.state.running"
+        :delete-key-code="null"
+        fit-view-on-init
+        @nodes-initialized="initialized"
+        @move-start="moved"
+        @node-drag-start="agent.freeView(project.id)"
+        @node-click="({ node }) => selectNode(node.id)"
+        @pane-click="selectNode(null)"
+        @node-drag-stop="dragged"
+        ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
+          :show-interactive="false"
+          position="bottom-left"
+        /><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
+        <template #edge-prerequisite="edgeProps"><GraphEdge v-bind="edgeProps" /></template>
+      </VueFlow>
+      <div v-else class="empty-state">
+        <span class="empty-icon"><GitBranch :size="32" /></span>
+        <h3>下一步演化，从一个目标开始</h3>
+        <p>在下方描述你的目标，让 Agent 帮你形成可执行的里程碑。</p>
+      </div>
+      <div v-if="nodes.length" class="edge-legend">
+        <span v-for="kind in edgeKinds" :key="kind.label"
+          ><i :style="{ background: kind.color }"></i>{{ kind.label }}</span
+        >
+      </div>
     </div>
-    <div v-if="nodes.length" class="edge-legend">
-      <span v-for="kind in edgeKinds" :key="kind.label"
-        ><i :style="{ background: kind.color }"></i>{{ kind.label }}</span
-      >
-    </div>
-    <FollowAgentButton v-if="!follows" @resume="agent.resumeFollow(project.id)" />
   </div>
 </template>
+
+<style scoped>
+.milestone-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.milestone-stage > .graph-canvas {
+  flex: 1;
+  min-height: 240px;
+}
+</style>

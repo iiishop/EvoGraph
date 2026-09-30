@@ -616,8 +616,27 @@ html[data-sidebar='collapsed'] .app-main {
   background: var(--canvas);
 }
 .agent-dock {
+  position: relative;
   border-top: 1px solid var(--line);
   padding-top: 14px;
+}
+.agent-dock.is-drop-target .agent-input {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #355ad614;
+}
+.agent-drop-overlay {
+  position: absolute;
+  z-index: 4;
+  inset: 43px 0 8px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  border-radius: 14px;
+  background: #eef2fff2;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
 }
 .agent-symbol {
   width: 28px;
@@ -780,6 +799,11 @@ html[data-sidebar='collapsed'] .app-main {
   padding: 0;
   max-height: none;
   overflow: visible;
+  position: relative;
+  transition:
+    background 0.16s,
+    border-color 0.16s,
+    box-shadow 0.16s;
 }
 .attachment-count {
   font-size: 11px;
@@ -1271,4 +1295,61 @@ html[data-sidebar='collapsed'] .app-main {
   .notification-stack {
     bottom: 8px;
   }
+}
+
+/* Architecture boundaries are structural, with a reserved heading strip. */
+.architecture-group {
+  border-style: solid;
+  border-width: 2px;
+  border-radius: 10px;
+}
+.architecture-group-heading {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: 1px solid #b7c6d4;
+  border-radius: 0;
+  box-shadow: none;
+  background: #f8fafdf5;
+}
+.architecture-group-heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.architecture-group p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.global-follow-agent {
+  position: fixed;
+  right: 22px;
+  bottom: 18px;
+  z-index: 60;
+  color: var(--accent);
+  border-color: var(--line);
+  box-shadow: 0 4px 20px #20324b20;
+}
+.notification-stack {
+  bottom: 72px;
+}
+.workspace-body.architecture-active {
+  overflow-y: auto;
+}
+.architecture-active .planning-region {
+  min-height: 580px;
+  flex-shrink: 0;
+}
+.architecture-heading {
+  padding: 10px 18px 8px;
+}
+.architecture-heading h2 {
+  font-size: 16px;
+}
+.architecture-tools {
+  padding: 0 18px 8px;
+}
+.architecture-legend {
+  padding: 0 18px 8px;
 }

@@ -89,7 +89,7 @@ def test_implemented_design_drops_markers_and_keeps_history(app, planned, monkey
     assert revisions[-1].baseline_id == planned.baseline.id
 
 
-def test_runtime_requests_class_sync_after_design_change(app, planned, monkeypatch):
+def test_runtime_does_not_require_class_sync_after_design_change(app, planned, monkeypatch):
     from conftest import proposal
     from test_agent_stream import tool_chunks
 
@@ -107,13 +107,8 @@ def test_runtime_requests_class_sync_after_design_change(app, planned, monkeypat
         elif calls == 2:
             yield {"type": "text", "text": "已更新规划"}
             return
-        elif calls == 3:
-            assert "class_model" in messages[-1]["content"]
-            name, args = "read_repository_file", {"path": "auth.py"}
-        elif calls == 4:
-            name, args = "save_uml", diagram().model_dump()
         else:
-            yield {"type": "text", "text": "类图已同步"}
+            yield {"type": "text", "text": "已完成规划更新"}
             return
         async for item in tool_chunks(name, args):
             yield item
@@ -125,8 +120,9 @@ def test_runtime_requests_class_sync_after_design_change(app, planned, monkeypat
 
     events = asyncio.run(run())
     assert not [e for e in events if e["type"] in {"error", "tool_failed"}]
-    assert class_model_state(app.db.get(planned.id))["current"]
-    assert len(app.db.get(planned.id).uml_diagrams) == 2
+    assert not class_model_state(app.db.get(planned.id))["current"]
+    assert calls == 3
+    assert len(app.db.get(planned.id).uml_diagrams) == 1
 
 
 def test_design_labels_render_in_exported_image():

@@ -36,6 +36,24 @@ def test_architecture_revisions_require_review_and_valid_component_mapping(app, 
     assert len(app.db.get(p.id).architectures) == 1
 
 
+def test_architecture_quality_and_navigation_persist(app, planned):
+    spec = architecture()
+    spec = ArchitectureSpec.model_validate({
+        **spec.model_dump(),
+        "quality_scenarios": [{"concern": "可靠性", "scenario": "服务重启",
+                               "measure": "目标：不丢失已提交记录", "approach": "事务持久化"}],
+        "risks": ["待验证：并发写入的等待时间"],
+    })
+    result = app.design.update(planned.id, spec)
+    assert result["view"] == "architecture"
+    assert result["diagram_id"] == "system"
+    saved = app.db.get(planned.id).architectures[-1]
+    assert saved.quality_scenarios[0].approach == "事务持久化"
+    assert saved.risks == spec.risks
+    result = app.design.save_diagram(planned.id, spec.diagram)
+    assert result["view"] == "design"
+
+
 def test_state_cycles_allowed_but_unknown_endpoints_rejected(app, planned):
     diagram = Diagram(
         id="states",
@@ -52,6 +70,34 @@ def test_state_cycles_allowed_but_unknown_endpoints_rejected(app, planned):
     with pytest.raises(ValueError):
         app.design.save_diagram(planned.id, diagram)
     assert len(app.db.get(planned.id).diagrams) == 1
+
+
+def test_architecture_groups_validate_boundaries_and_persist(app, planned):
+    diagram = Diagram(
+        id="grouped",
+        title="Grouped architecture",
+        nodes=[
+            {"id": "client", "label": "Web client", "role": "frontend"},
+            {"id": "api", "label": "API", "role": "backend"},
+            {"id": "db", "label": "SQLite", "role": "database"},
+        ],
+        groups=[
+            {"id": "client-boundary", "label": "客户端", "kind": "client", "member_node_ids": ["client"]},
+            {"id": "server-boundary", "label": "服务端", "kind": "server", "member_node_ids": ["api"]},
+            {"id": "data-boundary", "label": "数据层", "kind": "data", "member_node_ids": ["db"]},
+        ],
+        edges=[{"source": "client", "target": "api", "label": "Request >"},
+               {"source": "api", "target": "db", "label": "Persist >"}],
+    )
+    app.design.save_diagram(planned.id, diagram)
+    assert [g.label for g in app.db.get(planned.id).diagrams[-1].groups] == ["客户端", "服务端", "数据层"]
+    diagram.groups[1].member_node_ids = ["api", "db"]
+    with pytest.raises(ValueError, match="只能属于一个"):
+        app.design.save_diagram(planned.id, diagram)
+    diagram.groups[1].member_node_ids = ["api"]
+    diagram.groups[2].member_node_ids = ["unknown"]
+    with pytest.raises(ValueError, match="不存在的节点"):
+        app.design.save_diagram(planned.id, diagram)
 
 
 def test_upload_documents_and_images_scoped_and_multimodal(app, planned):

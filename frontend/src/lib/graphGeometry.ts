@@ -105,3 +105,62 @@ export function routeAroundBoxes(start: Point, end: Point, boxes: Box[]): Point[
   }
   return []; // Never draw a fabricated path through a node.
 }
+
+/** Keep curves clear of nodes and group headings, including return/self edges. */
+export function routeArchitectureEdge(start: Point, end: Point, boxes: Box[]): Point[] {
+  const clearance = 28;
+  const obstacles = boxes.map((b) => ({
+    ...b,
+    x: b.x - clearance,
+    y: b.y - clearance,
+    width: b.width + 2 * clearance,
+    height: b.height + 2 * clearance,
+  }));
+  const exit = { x: start.x + clearance + 24, y: start.y };
+  const entry = { x: end.x - clearance - 24, y: end.y };
+  const middle = routeAroundBoxes(exit, entry, obstacles);
+  return middle.length ? [start, exit, ...middle.slice(1, -1), entry, end] : [];
+}
+
+/** Place labels on free route segments, reserving space for earlier labels. */
+export function architectureLabels(routes: { route: Point[]; label: string }[], obstacles: Box[]) {
+  const occupied = [...obstacles];
+  return routes.map(({ route, label }, index) => {
+    const width = Math.max(
+      36,
+      [...label].reduce((sum, c) => sum + (c.charCodeAt(0) > 255 ? 12 : 7), 18),
+    );
+    const segments = route
+      .slice(1)
+      .map((b, i) => ({ a: route[i], b }))
+      .sort(
+        (s, t) =>
+          Math.hypot(t.b.x - t.a.x, t.b.y - t.a.y) - Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y),
+      );
+    for (const { a, b } of segments) {
+      for (const ratio of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+        const center = { x: a.x + (b.x - a.x) * ratio, y: a.y + (b.y - a.y) * ratio };
+        const box = {
+          id: `label:${index}`,
+          x: center.x - width / 2,
+          y: center.y - 15,
+          width,
+          height: 30,
+        };
+        if (
+          occupied.some(
+            (r) =>
+              box.x < r.x + r.width + 8 &&
+              box.x + box.width + 8 > r.x &&
+              box.y < r.y + r.height + 8 &&
+              box.y + box.height + 8 > r.y,
+          )
+        )
+          continue;
+        occupied.push(box);
+        return center;
+      }
+    }
+    return null; // Crowded labels remain available on hover and in the component passport.
+  });
+}

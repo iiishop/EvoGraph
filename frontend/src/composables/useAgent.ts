@@ -10,6 +10,10 @@ const state = reactive({
   projectId: '',
   label: '',
   focusId: '',
+  view: 'graph',
+  diagramId: '',
+  diagramKind: '',
+  navigationTick: 0,
   effect: '',
   pulse: 0,
   follow: {} as Record<string, boolean>,
@@ -32,6 +36,12 @@ function receive(event: AgentEvent) {
     state.pulse++;
   }
   if (event.type === 'graph_changed') {
+    if (event.view) {
+      state.view = event.view;
+      state.diagramId = event.diagram_id ?? '';
+      state.diagramKind = event.diagram_kind ?? '';
+      state.navigationTick++;
+    }
     if (event.project)
       useNotifications().push(event.message || changeSummary(previous, event.project, event.label));
     const ids = event.node_ids ?? [];

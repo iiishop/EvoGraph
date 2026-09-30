@@ -1,6 +1,7 @@
 """Local attachment storage. Parsers are registered once by extension."""
 
 import base64
+import hashlib
 import io
 import warnings
 import zipfile
@@ -10,7 +11,7 @@ from xml.etree import ElementTree
 from PIL import Image
 from pypdf import PdfReader
 
-from ..domain.models import Attachment
+from ..domain.models import Attachment, Project
 
 MAX_BYTES = 8 * 1024 * 1024
 PARSERS = {}
@@ -74,13 +75,80 @@ class AttachmentService:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), data BLOB NOT NULL)"
             )
+        self._deduplicate_existing()
+
+    def _deduplicate_existing(self):
+        """Collapse duplicates created by older clients before exposing a project."""
+        for project in self.db.list_projects(include_archived=True):
+            with self.db.connect() as connection:
+                rows = connection.execute(
+                    "SELECT id,data FROM attachments WHERE project_id=?", (project.id,)
+                ).fetchall()
+            blobs = {row[0]: row[1] for row in rows}
+            seen: dict[str, str] = {}
+            kept = []
+            duplicate_ids = {}
+            hashes_changed = False
+            for asset in project.attachments:
+                data = blobs.get(asset.id)
+                digest = asset.sha256 or (
+                    hashlib.sha256(data).hexdigest() if data is not None else ""
+                )
+                if digest and digest in seen:
+                    duplicate_ids[asset.id] = seen[digest]
+                    continue
+                if digest and asset.sha256 != digest:
+                    asset.sha256 = digest
+                    hashes_changed = True
+                if digest:
+                    seen[digest] = asset.id
+                kept.append(asset)
+            if not duplicate_ids and not hashes_changed:
+                continue
+            old_revision = project.revision
+            project.attachments = kept
+
+            # Rewrite references in milestones, proposals and every diagram revision.
+            def remap(value):
+                if isinstance(value, dict):
+                    return {
+                        key: list(dict.fromkeys(duplicate_ids.get(v, v) for v in item))
+                        if key == "attachment_ids" and isinstance(item, list)
+                        else remap(item)
+                        for key, item in value.items()
+                    }
+                if isinstance(value, list):
+                    return [remap(item) for item in value]
+                return value
+
+            project = Project.model_validate(remap(project.model_dump()))
+            project.revision += 1
+            from ..domain.models import now, uid
+
+            with self.db.connect() as connection:
+                updated = connection.execute(
+                    "UPDATE projects SET revision=?,payload=? WHERE id=? AND revision=?",
+                    (project.revision, project.model_dump_json(), project.id, old_revision),
+                )
+                if updated.rowcount != 1:
+                    continue
+                if duplicate_ids:
+                    placeholders = ",".join("?" for _ in duplicate_ids)
+                    connection.execute(
+                        f"DELETE FROM attachments WHERE project_id=? AND id IN ({placeholders})",
+                        (project.id, *duplicate_ids),
+                    )
+                connection.execute(
+                    "INSERT INTO events VALUES(?,?,?,?,?)",
+                    (uid(), project.id, "attachments_deduplicated", str(len(duplicate_ids)), now()),
+                )
 
     def formats(self):
         return {"extensions": list(PARSERS), "max_bytes": MAX_BYTES}
 
     def upload(self, project_id: str, name: str, content: str):
         p = self.db.get(project_id)
-        if p.archived or len(p.attachments) >= 40:
+        if p.archived:
             raise ValueError("项目已删除或资料已达 40 份上限")
         name = PurePath(name.replace("\\", "/")).name[:180]
         handler = PARSERS.get(PurePath(name).suffix.lower())
@@ -95,22 +163,40 @@ class AttachmentService:
             media_type, text, data = handler(data)
         except Exception as exc:
             raise ValueError("无法读取文件，请检查格式、大小或文件是否损坏") from exc
-        asset = Attachment(name=name, media_type=media_type, size=len(data), excerpt=text[:60000])
-        # One transaction covers binary + aggregate + audit, including revision CAS.
+        digest = hashlib.sha256(data).hexdigest()
+        # Serialize lookup and insert across windows/processes. A repeated upload
+        # returns the canonical asset even when the project has reached its limit.
         from ..domain.models import now, uid
-        from ..infrastructure.database import ConflictError
 
-        old_revision = p.revision
-        p.attachments.append(asset)
-        p.revision += 1
-        p.updated_at = now()
         with self.db.connect() as connection:
-            updated = connection.execute(
-                "UPDATE projects SET revision=?,payload=? WHERE id=? AND revision=?",
-                (p.revision, p.model_dump_json(), p.id, old_revision),
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("项目不存在")
+            p = Project.model_validate_json(row[0])
+            if p.archived:
+                raise ValueError("项目已删除")
+            existing = next((a for a in p.attachments if a.sha256 == digest), None)
+            if existing:
+                return existing
+            if len(p.attachments) >= 40:
+                raise ValueError("资料已达 40 份上限")
+            asset = Attachment(
+                name=name,
+                media_type=media_type,
+                size=len(data),
+                excerpt=text[:60000],
+                sha256=digest,
             )
-            if updated.rowcount != 1:
-                raise ConflictError("项目已更新，请重试上传")
+            p.attachments.append(asset)
+            p.revision += 1
+            p.updated_at = now()
+            connection.execute(
+                "UPDATE projects SET revision=?,payload=? WHERE id=?",
+                (p.revision, p.model_dump_json(), p.id),
+            )
             connection.execute("INSERT INTO attachments VALUES(?,?,?)", (asset.id, p.id, data))
             connection.execute(
                 "INSERT INTO events VALUES(?,?,?,?,?)",

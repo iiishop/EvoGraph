@@ -153,6 +153,9 @@ class UmlService:
         self.db.save(p, "uml_updated", f"{diagram.title} v{diagram.revision}")
         return {
             "node_ids": diagram.milestone_ids,
+            "view": "architecture" if diagram.kind == "class" else "design",
+            "diagram_id": diagram.id,
+            "diagram_kind": diagram.kind,
             "effect": "updated",
             "message": f"已更新{diagram.title} · v{diagram.revision}",
         }

@@ -8,6 +8,6 @@
 也可设置 `EVOGRAPH_PLANTUML_JAR` 指向已有 jar。使用 SANDBOX 和 Smetana，
 无需 Graphviz，不将项目源码上传到公共绘图服务。
 
-save_uml 编译成功后保存版本；类图固定为 class_model，其他图按 ID 独立维护，
+save_uml 编译成功后保存版本；若选择维护主类图则固定为 class_model，其他图按 ID 独立维护。
 milestone_ids 指定关联位置。源码图要求实际读取的源码引用，规划设计用 design。
 编译校验不代表源码语义已被自动证明，仍需要依据图中引用核对。

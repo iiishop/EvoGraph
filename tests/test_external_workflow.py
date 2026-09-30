@@ -11,8 +11,22 @@ def test_external_workflow_pass_releases_and_rejects_replay(app, planned):
     with pytest.raises(ValueError, match="领取"):
         app.acceptance.prepare(planned.id, "M01")
     app.execution.start(planned.id, "M01")
-    assert "auth.py" in app.acceptance.implementation(planned.id, "M01")["prompt"]
+    prompt = app.acceptance.implementation(planned.id, "M01")["prompt"]
+    assert "auth.py" in prompt
+    assert "变更范围" in prompt
+    assert "必须满足的行为" in prompt
+    assert '"milestone"' not in prompt
+    assert '"behavior_revision_ids"' not in prompt
     req = app.acceptance.prepare(planned.id, "M01")
+    acceptance_prompt = req["prompt"]
+    assert "必须逐项判断的行为" in acceptance_prompt
+    assert "报告模板" not in acceptance_prompt
+    assert '"request_id":' in acceptance_prompt
+    assert '"checks":' in acceptance_prompt
+    assert '"milestone"' not in acceptance_prompt
+    assert '"behavior_revision_ids"' not in acceptance_prompt
+    assert '"architecture"' not in acceptance_prompt
+    assert '"uml"' not in acceptance_prompt
     report = external_report(app, planned.id, "M01", req["request_id"])
     result = app.acceptance.import_report(planned.id, "M01", report)
     assert result["released"]

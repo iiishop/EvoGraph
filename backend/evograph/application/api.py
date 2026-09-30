@@ -19,6 +19,7 @@ from .execution import ExecutionService
 from .graph_editor import GraphEditor
 from .planning import PlanningService
 from .projects import ProjectService
+from .references import ReferenceService
 from .research import ResearchService
 from .settings import SettingsService
 from .uml import UmlService
@@ -30,6 +31,7 @@ class Application:
     def __init__(self, data_dir: Path, secrets=None):
         self.db = Database(data_dir / "evograph.sqlite3")
         self.projects = ProjectService(self.db)
+        self.references = ReferenceService(self.db)
         self.settings = SettingsService(self.db, secrets)
         self.research = ResearchService(self.db, self.settings.secrets)
         self.planning = PlanningService(self.db, self.settings)
@@ -62,6 +64,7 @@ class Application:
             "attachments.upload": self.attachments.upload,
             "attachments.read": self.attachments.read,
             "attachments.formats": self.attachments.formats,
+            "references.list": self.references.list,
             "design.update": self.design.update,
             "design.diagram": self.design.save_diagram,
             "uml.save": self.uml.save,
@@ -102,7 +105,13 @@ class Application:
         if action not in self.operations:
             return {"ok": False, "error": {"code": "UNKNOWN_ACTION", "message": "未知操作"}}
         lock = None
-        readonly = action in {"projects.list", "projects.get", "settings.get", "uml.preview"}
+        readonly = action in {
+            "projects.list",
+            "projects.get",
+            "settings.get",
+            "uml.preview",
+            "references.list",
+        }
         if not readonly:
             key = params.get("project_id", "__global__")
             with self._lock_guard:
