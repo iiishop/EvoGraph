@@ -42,6 +42,11 @@ for (const name of [
   '../graph/FollowAgentButton.vue',
   '../attachments/AttachmentPicker.vue',
   './ReferenceMentionPicker.vue',
+  '../ui/StatusBadge.vue',
+  '../attachments/AssetPreview.vue',
+  '../design/DiagramView.vue',
+  '../design/UmlView.vue',
+  './TaskWorkflow.vue',
 ]) {
   imports[name] = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 }
@@ -56,6 +61,7 @@ async function component(path) {
   });
   return (await import(moduleUrl(compiled))).default;
 }
+const MilestoneInspector = await component('graph/MilestoneInspector');
 const ProjectDialog = await component('projects/ProjectDialog');
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const EvidencePanel = await component('workspace/EvidencePanel');
@@ -262,4 +268,19 @@ test('agent send button submits the composer when clicked', async () => {
   const html = await render(AgentDock, { project: project() });
   const sendButton = html.match(/<button\b[^>]*class="send-button"[^>]*>/)?.[0] || '';
   assert.match(sendButton, /type="submit"/);
+});
+
+
+test('long milestone instructions stay collapsed inside the scrollable inspector', async () => {
+  const intent = 'Long model-written task description. '.repeat(80);
+  const html = await render(MilestoneInspector, {
+    project: project(),
+    milestone: { id: 'M1', title: 'A long task title', intent, status: 'ready', behavior_revision_ids: [] },
+  });
+  const details = html.match(/<details\b([^>]*)>([\s\S]*?)<\/details>/);
+  assert.ok(details);
+  assert.doesNotMatch(details[1], /\bopen\b/);
+  assert.ok(details[2].includes(intent));
+  assert.match(html, /class="inspector-scroll"[^>]*><details/);
+  assert.doesNotMatch(html.match(/class="inspector-title"[\s\S]*?<nav/)?.[0] || '', /Long model-written/);
 });

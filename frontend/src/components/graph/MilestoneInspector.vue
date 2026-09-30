@@ -41,9 +41,8 @@ const uml = computed(() =>
       </button>
     </header>
     <div class="inspector-title">
-      <h2>{{ milestone.title }}</h2>
+      <h2 :title="milestone.title">{{ milestone.title }}</h2>
       <StatusBadge :status="milestone.status" />
-      <p>{{ milestone.intent }}</p>
     </div>
     <nav class="detail-tabs" aria-label="任务详情">
       <button
@@ -59,7 +58,12 @@ const uml = computed(() =>
         {{ item.label }}
       </button>
     </nav>
-    <div class="inspector-scroll">
+    <div :key="milestone.id" class="inspector-scroll">
+      <details class="inspector-intent">
+        <summary>任务说明</summary>
+        <strong>{{ milestone.title }}</strong>
+        <p>{{ milestone.intent }}</p>
+      </details>
       <TaskWorkflow v-if="tab === 'flow'" :project="project" :milestone="milestone" />
       <template v-else-if="tab === 'design'">
         <section>
