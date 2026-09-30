@@ -1485,3 +1485,74 @@ body {
   font-size: 12px;
   line-height: 1.65;
 }
+
+/* The inspector owns a stable viewport; only its scrollable content changes. */
+.inspector-scroll {
+  scrollbar-gutter: stable;
+}
+.inspector-panel {
+  animation: inspector-reveal 160ms ease-out;
+}
+.planning-intro {
+  margin: 14px 0 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.planning-dependencies h3 span {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.planning-dependencies article {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+.dependency-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+}
+.dependency-link small {
+  color: var(--muted);
+}
+.planning-dependencies p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.inspector-intent[open] > :not(summary) {
+  animation: inspector-reveal 160ms ease-out;
+}
+.detail-tabs button {
+  transition:
+    color 140ms ease,
+    border-color 140ms ease;
+}
+@keyframes inspector-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inspector-panel,
+  .inspector-intent[open] > :not(summary) {
+    animation: none;
+  }
+  .detail-tabs button {
+    transition: none;
+  }
+}

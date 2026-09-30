@@ -82,6 +82,7 @@ const project = (overrides) => ({
   evidence: [],
   evidence_validity: {},
   messages: [],
+  source_milestones: [], diagrams: [], attachments: [],
   ...overrides,
 });
 const evidence = (overrides) => ({
@@ -275,13 +276,13 @@ test('long milestone instructions stay collapsed inside the scrollable inspector
   const intent = 'Long model-written task description. '.repeat(80);
   const html = await render(MilestoneInspector, {
     project: project(),
-    milestone: { id: 'M1', title: 'A long task title', intent, status: 'ready', behavior_revision_ids: [] },
+    milestone: { id: 'M1', title: 'A long task title', intent, status: 'ready', behavior_revision_ids: [], scope: ['src/feature.ts'], dependencies: [], architecture_components: [], attachment_ids: [] },
   });
   const details = html.match(/<details\b([^>]*)>([\s\S]*?)<\/details>/);
   assert.ok(details);
   assert.doesNotMatch(details[1], /\bopen\b/);
   assert.ok(details[2].includes(intent));
-  assert.match(html, /class="inspector-scroll"[^>]*><details/);
+  assert.match(html, /class="inspector-scroll"[\s\S]*?<details/);
   assert.doesNotMatch(html.match(/class="inspector-title"[\s\S]*?<nav/)?.[0] || '', /Long model-written/);
 });
 
@@ -302,4 +303,31 @@ test('a pending decision stays visible even in compact architecture mode', async
   assert.match(html, /需要你的判断/);
   assert.match(html, /收起项目对话/);
   assert.match(html, /aria-expanded="true"/);
+});
+
+
+test('milestone detail opens on delivery planning with execution still available', async () => {
+  const html = await render(MilestoneInspector, {
+    project: project({milestones: [{id: 'M0', title: 'Shared contract'}], behaviors: [{id: 'B1', behavior_key: 'feature.works', version: 1, statement: 'The outcome is reviewable'}]}),
+    milestone: {id: 'M1', title: 'Delivery', intent: 'Intent', status: 'PLANNED', scope: ['src/feature.ts'], behavior_revision_ids: ['B1'], dependencies: ['M0'], dependency_reasons: {M0: 'Consumes its contract'}, architecture_components: [], attachment_ids: []},
+  });
+  assert.match(html, /aria-pressed="true"[^>]*>交付规划/);
+  assert.match(html, /执行与验收/);
+  for (const text of ['验收标准', 'The outcome is reviewable', 'Shared contract', 'Consumes its contract', 'src/feature.ts']) assert.ok(html.includes(text));
+});
+
+
+test('selecting a milestone gives detail space without unmounting the conversation', () => {
+  const source = readFileSync(new URL('../../frontend/src/components/workspace/ProjectWorkspace.vue', import.meta.url), 'utf8');
+  assert.match(source, /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/);
+  assert.equal((source.match(/<AgentDock/g) || []).length, 1);
+});
+
+test('inspector transitions preserve the viewport and respect reduced motion', () => {
+  const css = readFileSync(new URL('../../frontend/src/styles/studio.css', import.meta.url), 'utf8');
+  assert.match(css, /\.inspector-scroll\s*\{\s*scrollbar-gutter: stable;/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.inspector-panel,[\s\S]*?animation: none;[\s\S]*?\.detail-tabs button\s*\{\s*transition: none;/);
+  const animation = css.match(/@keyframes inspector-reveal\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(animation, /opacity: 0/);
+  assert.doesNotMatch(animation, /height|width|transform|margin/);
 });

@@ -70,6 +70,9 @@ Each turn gets 12 model rounds, 24 tool calls and 6 source files, then stops. Tw
 
 There is no shell tool and no file-write tool. The agent edits planning data and reads source code. It cannot run your tests, and it cannot tell you it did. Repository content and quoted text are passed in as untrusted data, never as instructions.
 
+
+The 24-milestone proposal limit is a per-generation safety budget, not a lifetime project limit. Incremental edits support up to 256 active delivery milestones, with at most 24 direct prerequisites per milestone. This explicit working-set ceiling bounds full-graph validation, transitive ancestor sets and unvirtualized canvas layout; it is not a claim of unlimited scale. At capacity, refine or remove existing nodes, or split the roadmap into separate projects before adding more.
+
 ## Explore architecture locally
 
 The architecture view is the global module overview. Select 1–3 components, optionally narrow their linked files, then open local class structure in the same workspace. Extraction reads only the selected source paths; imports and outside architecture neighbors stay collapsed boundary nodes. There is no project-wide class diagram generation.

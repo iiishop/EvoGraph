@@ -134,6 +134,8 @@ class ProposedMilestone(Model):
 
 
 class PlanProposal(Model):
+    """Bounded single-generation output, not the persistent working graph."""
+
     target: str = Field(min_length=1, max_length=4000)
     summary: str = Field(min_length=1, max_length=3000)
     milestones: list[ProposedMilestone] = Field(min_length=1, max_length=24)

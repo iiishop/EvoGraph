@@ -1,6 +1,6 @@
 """Deterministic rules. Semantic sufficiency is deliberately not a PASS claim."""
 
-from .models import Obligation, PlanProposal, Project
+from .models import Obligation, PlanProposal, Project, ProposedMilestone
 
 # One registry is the extension point for investigation obligations.
 CHANGE_POLICIES = {
@@ -44,11 +44,22 @@ def obligations(change_types: list[str]) -> list[Obligation]:
     ]
 
 
+# A generation is deliberately small; a persisted roadmap can grow across turns.
+# Bound validation and transitive-closure work independently from model output.
+MAX_WORKING_MILESTONES = 256
+
+
 def validate_plan(plan: PlanProposal) -> None:
-    nodes = {m.id: m for m in plan.milestones}
-    if len(nodes) != len(plan.milestones):
+    validate_milestones(plan.milestones)
+
+
+def validate_milestones(milestones: list[ProposedMilestone]) -> None:
+    if len(milestones) > MAX_WORKING_MILESTONES:
+        raise ValueError(f"工作图最多支持 {MAX_WORKING_MILESTONES} 个交付里程碑，请拆分项目")
+    nodes = {m.id: m for m in milestones}
+    if len(nodes) != len(milestones):
         raise ValueError("里程碑 ID 必须唯一")
-    keys = [b.key for m in plan.milestones for b in m.behaviors]
+    keys = [b.key for m in milestones for b in m.behaviors]
     if len(keys) != len(set(keys)):
         raise ValueError("同一计划中的行为 key 只能属于一个里程碑")
     visiting, visited = set(), set()

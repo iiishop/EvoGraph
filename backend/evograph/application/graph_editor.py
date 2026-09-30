@@ -6,11 +6,10 @@ from ..domain.models import (
     Milestone,
     Obligation,
     PlanningRevision,
-    PlanProposal,
     ProposedMilestone,
     TargetVersion,
 )
-from ..domain.policies import obligations, validate_plan
+from ..domain.policies import MAX_WORKING_MILESTONES, obligations, validate_milestones
 
 
 class GraphEditor:
@@ -20,6 +19,8 @@ class GraphEditor:
     def _check(self, project):
         if project.archived:
             raise ValueError("项目已删除")
+        if len(project.milestones) > MAX_WORKING_MILESTONES:
+            raise ValueError(f"工作图最多支持 {MAX_WORKING_MILESTONES} 个交付里程碑，请拆分项目")
         if not project.milestones:
             return
         by_id = {b.id: b for b in project.behaviors}
@@ -50,11 +51,7 @@ class GraphEditor:
                     ],
                 )
             )
-        validate_plan(
-            PlanProposal(
-                target="Incremental working graph", summary="Tool change", milestones=proposed
-            )
-        )
+        validate_milestones(proposed)
         # SRC capabilities are read-only but remain real nodes in the complete
         # prerequisite graph used for cycle and reachability validation.
         ancestor_sets(

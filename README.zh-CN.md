@@ -214,3 +214,5 @@ uv run --extra test pytest
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=iiishop/EvoGraph&type=date&legend=top-left" />
  </picture>
 </a>
+
+单次生成提案的 24 个里程碑上限不再限制项目长期增长。增量编辑支持最多 256 个活跃交付里程碑，每个里程碑最多 24 条直接前置依赖。这个明确的工作集上限用于约束全图校验、传递祖先集合和未虚拟化画布布局的开销，并不代表无限扩展；达到上限后仍可修改或移除现有节点，新增前请将路线图拆分到独立项目。
