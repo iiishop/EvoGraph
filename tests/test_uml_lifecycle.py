@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 
 import pytest
 from evograph.agent_tools.base import ToolContext
@@ -27,7 +28,8 @@ def diagram(**overrides):
     return UmlDiagram(
         **(
             dict(
-                id="class_model",
+                id="auth_classes",
+                component_ids=["SRC_" + hashlib.sha256("根目录".encode()).hexdigest()[:10]],
                 title="认证总览",
                 kind="class",
                 source=SOURCE,

@@ -195,6 +195,7 @@ class DiagramNode(Model):
         "backend"
     )
     source_refs: list[str] = Field(default_factory=list, max_length=40)
+    source_ref_count: int = Field(default=0, ge=0)
 
 
 class DiagramEdge(Model):
@@ -280,6 +281,9 @@ class UmlDiagram(Model):
     origin: Literal["source", "design", "mixed"] = "design"
     design_elements: list[str] = Field(default_factory=list)
     design_fingerprint: str = ""
+    component_ids: list[str] = Field(default_factory=list)
+    architecture_revision: int = Field(default=0, ge=0)
+    source_fingerprints: dict[str, str] = Field(default_factory=dict)
     source_refs: list[str] = Field(default_factory=list)
     milestone_ids: list[str] = Field(default_factory=list)
     revision: int = 0
@@ -342,6 +346,7 @@ class Project(Model):
     source_diagram: Diagram | None = None
     source_summary: str = ""
     source_fingerprint: str = ""
+    source_file_fingerprints: dict[str, str] = Field(default_factory=dict)
     source_analysis_baseline_id: str = ""
     source_analysis_summary: str = ""
     light_checks: list[LightCheck] = Field(default_factory=list)

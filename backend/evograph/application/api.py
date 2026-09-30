@@ -67,6 +67,7 @@ class Application:
             "references.list": self.references.list,
             "design.update": self.design.update,
             "design.diagram": self.design.save_diagram,
+            "architecture.class_detail": self.uml.class_detail,
             "uml.save": self.uml.save,
             "uml.preview": self.uml.preview,
             "agent.chat": self.planning.chat,  # Legacy API compatibility; new UI uses streaming tools.
@@ -110,6 +111,7 @@ class Application:
             "projects.get",
             "settings.get",
             "uml.preview",
+            "architecture.class_detail",
             "references.list",
         }
         if not readonly:

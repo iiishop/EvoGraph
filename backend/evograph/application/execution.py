@@ -16,7 +16,9 @@ class ExecutionService:
             and p.baseline.commit == baseline.commit
             and p.baseline.complete == baseline.complete
         ):
-            if p.source_fingerprint != baseline.fingerprint:
+            if p.source_fingerprint != baseline.fingerprint or (
+                p.source_diagram and not p.source_file_fingerprints
+            ):
                 populate(p)
                 return self.db.save(p, "source_indexed", p.source_summary)
             return p

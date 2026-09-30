@@ -37,7 +37,7 @@ function receive(event: AgentEvent) {
   }
   if (event.type === 'graph_changed') {
     if (event.view) {
-      state.view = event.view;
+      state.view = event.diagram_kind === 'class' ? 'architecture' : event.view;
       state.diagramId = event.diagram_id ?? '';
       state.diagramKind = event.diagram_kind ?? '';
       state.navigationTick++;

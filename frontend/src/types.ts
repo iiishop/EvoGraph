@@ -113,6 +113,7 @@ export interface Diagram {
     description: string;
     role?: string;
     source_refs?: string[];
+    source_ref_count?: number;
   }[];
   edges: { source: string; target: string; label: string }[];
   groups: {
@@ -233,7 +234,19 @@ export interface Settings {
     has_key: boolean;
   } | null;
 }
+export interface ClassDetailResult {
+  status: 'ready' | 'empty' | 'unmapped' | 'too_large' | 'unsupported';
+  message: string;
+  diagram?: UmlDiagram;
+  image?: string;
+  files: string[];
+  component_ids: string[];
+  boundaries: string[];
+  limitations: string[];
+}
 export interface UmlDiagram {
+  component_ids?: string[];
+  architecture_revision?: number;
   id: string;
   title: string;
   kind: 'class' | 'sequence' | 'activity' | 'state';

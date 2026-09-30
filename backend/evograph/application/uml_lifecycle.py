@@ -34,16 +34,31 @@ def design_fingerprint(project):
 
 
 def class_model_state(project):
-    diagram = next((d for d in reversed(project.uml_diagrams) if d.id == "class_model"), None)
-    reasons = []
-    if diagram is None:
-        reasons.append("尚未生成类图")
-    else:
-        if project.baseline and diagram.baseline_id != project.baseline.id:
-            reasons.append("源码基线已更新")
+    """Compatibility metadata: local views are optional, never a global prerequisite."""
+    latest = {}
+    for diagram in project.uml_diagrams:
+        if diagram.kind == "class" and diagram.component_ids and diagram.id != "class_model":
+            latest[diagram.id] = diagram
+    scopes, reasons = {}, []
+    for diagram in latest.values():
+        stale = []
+        if (
+            diagram.origin in {"source", "mixed"}
+            and project.baseline
+            and diagram.baseline_id != project.baseline.id
+        ):
+            stale.append("源码基线已更新")
         if diagram.design_fingerprint != design_fingerprint(project):
-            reasons.append("设计已更新")
-    return {"current": not reasons, "reasons": reasons}
+            stale.append("设计已更新")
+        scopes[diagram.id] = {"current": not stale, "reasons": stale}
+        reasons.extend(reason for reason in stale if reason not in reasons)
+    return {
+        "current": not reasons,
+        "reasons": reasons,
+        "required": False,
+        "mode": "scoped",
+        "scopes": scopes,
+    }
 
 
 def annotate_design(diagram):

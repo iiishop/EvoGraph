@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, watch, useId, nextTick, ref, computed } from 'vue';
+import { shallowRef, watch, useId, nextTick, ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { VueFlow, MarkerType, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
@@ -26,13 +26,54 @@ const props = withDefaults(
 const emit = defineEmits<{ select: [id: string] }>();
 const flowId = `design-${useId()}`;
 const { fitView, updateNodeInternals, setCenter, findNode } = useVueFlow(flowId);
+const canvas = ref<HTMLElement>();
+let viewportMoved = false;
+let frame = 0;
+let resizeObserver: ResizeObserver | undefined;
+let previousSize = '';
+// Initial fitting is independent of Agent-follow. Once the user moves or focuses,
+// subsequent resizes (including returning from local detail) preserve their camera.
+function fitWhenReady() {
+  cancelAnimationFrame(frame);
+  frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      if (
+        !canvas.value?.clientWidth ||
+        !canvas.value.clientHeight ||
+        viewportMoved ||
+        props.focusedId
+      )
+        return;
+      void fitView({ padding: 0.16, duration: 0 });
+    });
+  });
+}
+onMounted(() => {
+  resizeObserver = new ResizeObserver(([entry]) => {
+    if (!entry || entry.contentRect.width <= 0 || entry.contentRect.height <= 0) return;
+    const size = `${Math.round(entry.contentRect.width)}:${Math.round(entry.contentRect.height)}`;
+    if (size === previousSize) return;
+    previousSize = size;
+    fitWhenReady();
+  });
+  if (canvas.value) resizeObserver.observe(canvas.value);
+  fitWhenReady();
+});
+onBeforeUnmount(() => {
+  generation++;
+  cancelAnimationFrame(frame);
+  resizeObserver?.disconnect();
+});
 const positions = shallowRef(new Map<string, { x: number; y: number }>());
 const error = ref('');
 const agent = useAgent();
 const workspace = useWorkspace();
 const follows = computed(() => agent.state.follow[workspace.state.project?.id ?? ''] !== false);
 function moved({ event }: { event: unknown }) {
-  if (event && workspace.state.project) agent.freeView(workspace.state.project.id);
+  if (event) {
+    viewportMoved = true;
+    if (workspace.state.project) agent.freeView(workspace.state.project.id);
+  }
 }
 const visible = computed(() => {
   const ids = new Set(
@@ -152,7 +193,7 @@ watch(
       await nextTick();
       updateNodeInternals(diagram.nodes.map((n) => n.id));
       await nextTick();
-      if (follows.value) fitView({ padding: 0.2, duration: 0 });
+      fitWhenReady();
     } catch {
       error.value = '布局未完成，请切换版本后重试';
     }
@@ -164,11 +205,13 @@ watch(
   async (id) => {
     await nextTick();
     const node = findNode(id);
-    if (node)
+    if (node) {
+      viewportMoved = true;
       setCenter(node.position.x + 118, node.position.y + 75, {
         zoom: 0.95,
         duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220,
       });
+    }
   },
 );
 watch(
@@ -180,7 +223,7 @@ watch(
 defineExpose({ fit: () => fitView({ padding: 0.2 }), reset: () => fitView({ padding: 0.2 }) });
 </script>
 <template>
-  <div class="design-diagram">
+  <div ref="canvas" class="design-diagram">
     <p v-if="error" role="alert">{{ error }}</p>
     <VueFlow
       v-else-if="flowNodes.length"
@@ -192,8 +235,7 @@ defineExpose({ fit: () => fitView({ padding: 0.2 }), reset: () => fitView({ padd
       :delete-key-code="null"
       :min-zoom="0.12"
       :max-zoom="1.8"
-      fit-view-on-init
-      @nodes-initialized="follows && fitView({ padding: 0.2 })"
+      @nodes-initialized="fitWhenReady"
       @move-start="moved"
       @node-click="({ node }) => node.type === 'architecture' && emit('select', node.id)"
     >

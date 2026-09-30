@@ -65,7 +65,7 @@ const tab = ref('graph'),
           />
         </div>
       </div>
-      <AgentDock :project="project" @resume="resume" />
+      <AgentDock :project="project" :compact="tab === 'architecture'" @resume="resume" />
     </section>
   </main>
 </template>

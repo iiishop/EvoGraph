@@ -284,3 +284,22 @@ test('long milestone instructions stay collapsed inside the scrollable inspector
   assert.match(html, /class="inspector-scroll"[^>]*><details/);
   assert.doesNotMatch(html.match(/class="inspector-title"[\s\S]*?<nav/)?.[0] || '', /Long model-written/);
 });
+
+test('architecture compact conversation keeps the mounted composer and has an explicit expand control', async () => {
+  const html = await render(AgentDock, { project: project(), compact: true });
+  assert.match(html, /is-collapsed/);
+  assert.match(html, /展开项目对话/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /<form\b[^>]*style="[^"]*display:none/);
+  assert.match(html, /id="agent-message"/);
+});
+
+test('a pending decision stays visible even in compact architecture mode', async () => {
+  const html = await render(AgentDock, {
+    project: project({ question: { id: 'Q1', prompt: '需要确认', options: [] } }), compact: true,
+  });
+  assert.doesNotMatch(html, /is-collapsed/);
+  assert.match(html, /需要你的判断/);
+  assert.match(html, /收起项目对话/);
+  assert.match(html, /aria-expanded="true"/);
+});

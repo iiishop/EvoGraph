@@ -28,6 +28,7 @@ defineEmits<{ close: []; select: [id: string] }>();
     >
       分组：{{ diagram.groups.find((group) => group.member_node_ids.includes(node.id))?.label }}
     </p>
+    <slot name="scope-action" />
     <h4>{{ source ? 'SRC 源码依据' : '引用源码' }}</h4>
     <code v-for="path in node.source_refs" :key="path" class="scope-path">{{ path }}</code>
     <p v-if="!node.source_refs?.length" class="muted">设计组件，尚未关联源码依据。</p>

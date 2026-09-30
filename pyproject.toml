@@ -7,11 +7,26 @@ name = "evograph"
 version = "0.1.0"
 description = "Evidence-aware project evolution planner"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "pydantic>=2.9,<3", "pywebview>=5,<7", "keyring>=25,<26", "pillow>=11,<13", "pypdf>=5,<7"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.27,<1",
+    "pydantic>=2.9,<3",
+    "pywebview>=5,<7",
+    "keyring>=25,<26",
+    "pillow>=11,<13",
+    "pypdf>=5,<7",
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-cpp>=0.23,<0.24",
+    "tree-sitter-typescript>=0.23,<0.24",
+]
 
 [project.optional-dependencies]
 linux = ["pywebview[pyside6]>=5,<7"]
 test = ["pytest>=8,<10", "ruff>=0.12,<1"]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
 
 [project.scripts]
 evograph = "evograph.__main__:main"

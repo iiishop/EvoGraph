@@ -70,6 +70,12 @@ Each turn gets 12 model rounds, 24 tool calls and 6 source files, then stops. Tw
 
 There is no shell tool and no file-write tool. The agent edits planning data and reads source code. It cannot run your tests, and it cannot tell you it did. Repository content and quoted text are passed in as untrusted data, never as instructions.
 
+## Explore architecture locally
+
+The architecture view is the global module overview. Select 1–3 components, optionally narrow their linked files, then open local class structure in the same workspace. Extraction reads only the selected source paths; imports and outside architecture neighbors stay collapsed boundary nodes. There is no project-wide class diagram generation.
+
+Python AST and tree-sitter adapters for TypeScript/Vue and C++ extract declarations and signatures without executing code. Parsing is bounded (12 files, 24 classes, 160 members); oversized scopes require narrowing. Static declarations do not establish runtime behavior, and missing source mappings never become invented classes. Source-backed structure and proposed design stay explicitly labeled SRC and DESIGN. Existing architecture revisions, evidence, migrations and archived legacy diagrams are preserved.
+
 ## Architecture
 
 ```text

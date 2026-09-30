@@ -11,8 +11,9 @@ from collections import defaultdict
 
 from ..domain.models import Diagram, DiagramEdge, DiagramNode
 from ..infrastructure.repository import files, readable, root_path
+from .class_extractors import SUPPORTED_SUFFIXES
 
-EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".vue", ".sql", ".go", ".rs", ".java"}
+EXTENSIONS = SUPPORTED_SUFFIXES | {".py", ".sql", ".go", ".rs", ".java"}
 
 
 def imports(path, text):
@@ -45,6 +46,7 @@ def populate(project):
     root = root_path(project.repository)
     groups, records = defaultdict(list), []
     truncated = False
+    fingerprints = {}
     for index, path in enumerate(files(root)):
         if index >= 10000 or len(records) >= 1200:
             truncated = True
@@ -55,7 +57,9 @@ def populate(project):
         parts = relative.parts
         group = "/".join(parts[: min(3, len(parts) - 1)]) or "根目录"
         groups[group].append(relative)
-        records.append((relative, group, path.read_text(encoding="utf-8", errors="replace")))
+        data = path.read_bytes()
+        fingerprints[relative.as_posix()] = hashlib.sha256(data).hexdigest()
+        records.append((relative, group, data.decode("utf-8", errors="replace")))
     selected = sorted(groups, key=lambda g: (-len(groups[g]), g))[:30]
     ids = {g: "SRC_" + hashlib.sha256(g.encode()).hexdigest()[:10] for g in selected}
     nodes = []
@@ -69,6 +73,7 @@ def populate(project):
                 description=description,
                 role=role_for(groups[group]),
                 source_refs=paths[:40],
+                source_ref_count=len(paths),
             )
         )
     lookup = {p.with_suffix("").as_posix(): group for p, group, _ in records}
@@ -100,6 +105,7 @@ def populate(project):
         if nodes
         else None
     )
+    project.source_file_fingerprints = fingerprints
     project.source_fingerprint = project.baseline.fingerprint
     project.source_summary = (
         f"扫描 {len(records)} 个源码文件，显示 {len(nodes)} 个目录组件、"

@@ -8,8 +8,11 @@ import UmlView from './UmlView.vue';
 const agent = useAgent();
 const root = ref<HTMLElement>();
 const props = defineProps<{ project: Project }>();
+const diagrams = computed(() => props.project.diagrams.filter((d) => d.kind !== 'class'));
 const uml = computed(() => [
-  ...new Map((props.project.uml_diagrams ?? []).map((d) => [d.id, d])).values(),
+  ...new Map(
+    (props.project.uml_diagrams ?? []).filter((d) => d.kind !== 'class').map((d) => [d.id, d]),
+  ).values(),
 ]);
 watch(
   () => [agent.state.navigationTick, agent.state.pulse],
@@ -40,7 +43,7 @@ watch(
       在下方添加文档或图片，选择后随建议发送。也可以让 Agent 绘制状态机、流程图或 UI 结构图。
     </p>
     <article
-      v-for="diagram in project.diagrams"
+      v-for="diagram in diagrams"
       :key="diagram.id"
       :data-diagram="diagram.id"
       class="diagram-card"
@@ -75,10 +78,7 @@ watch(
         :project-id="project.id"
       />
     </div>
-    <div
-      v-if="!project.attachments.length && !project.diagrams.length && !uml.length"
-      class="empty-state"
-    >
+    <div v-if="!project.attachments.length && !diagrams.length && !uml.length" class="empty-state">
       <h3>把想法变成可参考的资料</h3>
       <p>支持文档提取、图片预览，以及随项目长期维护的结构化设计图。</p>
     </div>

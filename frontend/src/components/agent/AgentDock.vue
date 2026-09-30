@@ -4,15 +4,16 @@ import AgentQuestion from './AgentQuestion.vue';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
-import { ArrowUp, Orbit, Square, CornerDownLeft } from 'lucide-vue-next';
+import { ArrowUp, Orbit, Square, CornerDownLeft, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { useAgent } from '../../composables/useAgent';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
-const props = defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project; compact?: boolean }>();
 defineEmits<{ resume: [] }>();
 const conversationOpen = ref(false);
+const dockCollapsed = ref(false);
 const latestReply = computed(() =>
   props.project.messages.filter((item) => item.role === 'assistant').at(-1),
 );
@@ -57,6 +58,24 @@ const runningElsewhere = computed(
   () => agent.state.running && agent.state.projectId !== props.project.id,
 );
 const answering = computed(() => Boolean(props.project.question));
+watch(
+  () => props.compact,
+  (compact) => {
+    dockCollapsed.value = Boolean(
+      compact && !content.value.trim() && !answering.value && !runningHere.value,
+    );
+  },
+  { immediate: true },
+);
+watch(
+  () => props.project.question?.id,
+  (id) => {
+    if (id) dockCollapsed.value = false;
+  },
+);
+watch(dragDepth, (depth) => {
+  if (depth > 0) dockCollapsed.value = false;
+});
 const modelName = computed(() => state.settings?.provider?.config.model || '未连接模型');
 
 // Why the send button is dead, spelled out instead of silently ignored.
@@ -251,7 +270,7 @@ function choose(option: string) {
 <template>
   <section
     class="agent-dock"
-    :class="{ 'is-drop-target': draggingFiles }"
+    :class="{ 'is-drop-target': draggingFiles, 'is-collapsed': dockCollapsed }"
     @paste.capture="onPaste"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent
@@ -276,6 +295,17 @@ function choose(option: string) {
           agent.state.label
         }}</template></span
       >
+      <button
+        v-if="compact"
+        type="button"
+        class="button secondary agent-collapse-toggle"
+        :aria-expanded="!dockCollapsed"
+        @click="dockCollapsed = !dockCollapsed"
+      >
+        <component :is="dockCollapsed ? ChevronUp : ChevronDown" :size="14" />{{
+          dockCollapsed ? '展开项目对话' : '收起项目对话'
+        }}
+      </button>
       <FollowAgentButton
         v-if="runningHere || agent.state.follow[project.id] === false"
         :following="agent.state.follow[project.id] !== false"
@@ -284,6 +314,7 @@ function choose(option: string) {
     </div>
     <details
       v-if="project.messages.length"
+      v-show="!dockCollapsed"
       class="agent-conversation"
       :open="conversationOpen"
       @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
@@ -302,7 +333,12 @@ function choose(option: string) {
     <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
       松开以上传文档或图片
     </div>
-    <form style="position: relative" class="agent-input" @submit.prevent="submit()">
+    <form
+      v-show="!dockCollapsed"
+      style="position: relative"
+      class="agent-input"
+      @submit.prevent="submit()"
+    >
       <ReferenceMentionPicker
         v-if="mentionOpen"
         ref="mentionPicker"
@@ -364,7 +400,7 @@ function choose(option: string) {
         </button>
       </div>
     </form>
-    <div class="agent-dock-note" :class="{ failed: failedAttempt }">
+    <div v-show="!dockCollapsed" class="agent-dock-note" :class="{ failed: failedAttempt }">
       <template v-if="failedAttempt"
         >发送未完成，内容已放回输入框。<button type="button" class="text-button" @click="retry">
           重试
@@ -373,3 +409,19 @@ function choose(option: string) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.agent-collapse-toggle {
+  margin-left: auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.agent-dock.is-collapsed {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.agent-dock.is-collapsed .agent-dock-heading {
+  margin-bottom: 0;
+}
+</style>

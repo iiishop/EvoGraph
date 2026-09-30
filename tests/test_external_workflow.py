@@ -116,10 +116,11 @@ end note
 @enduml"""
 
 
-def test_uml_history_single_class_and_inert_source(app, planned, monkeypatch):
+def test_uml_scoped_history_and_inert_source(app, planned, monkeypatch):
     monkeypatch.setattr("evograph.application.uml.render", lambda source: b"<svg/>")
     d = UmlDiagram(
         id="overview",
+        component_ids=[planned.source_diagram.nodes[0].id],
         title="总览",
         kind="class",
         source=SOURCE,
@@ -130,7 +131,7 @@ def test_uml_history_single_class_and_inert_source(app, planned, monkeypatch):
     app.uml.save(planned.id, d)
     app.uml.save(planned.id, d.model_copy(update={"title": "总览更新"}))
     p = app.db.get(planned.id)
-    assert [d.id for d in p.uml_diagrams] == ["class_model", "class_model"]
+    assert [d.id for d in p.uml_diagrams] == ["overview", "overview"]
     assert [d.revision for d in p.uml_diagrams] == [1, 2]
     for bad in [
         "!include /secret",

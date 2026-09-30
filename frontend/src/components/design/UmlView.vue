@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import type { UmlDiagram } from '../../types';
 import { command } from '../../api/client';
 import DiagramImage from './DiagramImage.vue';
 import AppModal from '../ui/AppModal.vue';
-const props = defineProps<{ diagram: UmlDiagram; projectId: string }>();
+defineOptions({ inheritAttrs: false });
+const props = defineProps<{ diagram: UmlDiagram; projectId: string; previewImage?: string }>();
 const image = ref(''),
   error = ref(''),
   loading = ref(false),
@@ -17,12 +18,14 @@ const kind = computed(
     ],
 );
 watch(
-  () => [props.projectId, props.diagram.id, props.diagram.revision],
+  () => [props.projectId, props.diagram.id, props.diagram.revision, props.previewImage],
   async () => {
     const current = ++sequence;
-    image.value = '';
+    image.value = props.previewImage ?? '';
     error.value = '';
-    loading.value = true;
+    expanded.value = false;
+    loading.value = !image.value;
+    if (image.value) return;
     try {
       const result = await command<{ image: string }>('uml.preview', {
         project_id: props.projectId,
@@ -38,6 +41,7 @@ watch(
   },
   { immediate: true },
 );
+onBeforeUnmount(() => sequence++);
 function download() {
   const url = URL.createObjectURL(
     new Blob([props.diagram.source], { type: 'text/plain;charset=utf-8' }),
@@ -50,12 +54,12 @@ function download() {
 }
 </script>
 <template>
-  <article class="uml-view">
+  <article v-bind="$attrs" class="uml-view">
     <header>
       <div>
         <strong>{{ diagram.title }}</strong
         ><small
-          >{{ kind }} · v{{ diagram.revision }} ·
+          >{{ kind }} · {{ diagram.revision > 0 ? `v${diagram.revision}` : '即时提取' }} ·
           {{
             diagram.origin === 'source'
               ? 'SRC 源码依据'
