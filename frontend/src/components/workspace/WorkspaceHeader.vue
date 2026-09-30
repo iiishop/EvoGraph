@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { ChevronRight, GitBranch, SlidersHorizontal, RefreshCw, Folder } from 'lucide-vue-next';
+import { computed } from 'vue';
+import {
+  ChevronRight,
+  GitBranch,
+  SlidersHorizontal,
+  RefreshCw,
+  Folder,
+  FolderOpen,
+} from 'lucide-vue-next';
 import type { Project } from '../../types';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useBaseline } from '../../composables/useBaseline';
-defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project }>();
 defineEmits<{ edit: [] }>();
 const { state } = useWorkspace();
 const baseline = useBaseline();
+const latestBaseline = computed(() => props.project.baselines.at(-1));
 </script>
 <template>
   <header class="workspace-header">
@@ -21,16 +30,37 @@ const baseline = useBaseline();
         <p>
           {{ project.description || '让每一步演化，都有明确的目标和依据。' }}
         </p>
+        <div
+          class="repository-location"
+          :title="project.repository || '可在项目设置中连接本地仓库'"
+        >
+          <FolderOpen :size="13" />
+          <span>{{ project.repository || '尚未连接本地仓库，可先规划项目' }}</span>
+          <small v-if="project.repository && !latestBaseline">已关联 · 等待读取基线</small>
+        </div>
+        <p
+          v-if="project.repository && !latestBaseline && state.settings?.provider"
+          class="source-analysis-note"
+        >
+          首次读取后，会将源码上下文发送给已配置的模型，分析已实现能力。
+        </p>
       </div>
       <div class="header-actions">
         <button
           class="button secondary"
-          :disabled="state.busy || !project.repository"
-          :title="project.repository ? '扫描仓库并更新基线' : '请先在项目设置中连接仓库'"
-          @click="baseline.refresh(project)"
+          :disabled="state.busy"
+          :title="
+            project.repository
+              ? state.settings?.provider
+                ? '读取仓库基线，按需将源码上下文发送给已配置模型分析'
+                : '只读扫描仓库文件；配置模型后可继续分析源码'
+              : '打开项目设置，连接本地仓库'
+          "
+          @click="project.repository ? baseline.refresh(project) : $emit('edit')"
         >
-          <RefreshCw :size="15" :class="{ spinning: state.busy }" />
-          刷新基线</button
+          <RefreshCw v-if="project.repository" :size="15" :class="{ spinning: state.busy }" />
+          <FolderOpen v-else :size="15" />
+          {{ !project.repository ? '连接仓库' : latestBaseline ? '刷新基线' : '读取基线' }}</button
         ><button class="icon-button bordered" aria-label="项目设置" @click="$emit('edit')">
           <SlidersHorizontal :size="17" />
         </button>
@@ -48,7 +78,11 @@ const baseline = useBaseline();
       ><span
         ><span class="version-letter baseline">B</span> 基线
         <strong>{{
-          project.baselines.length ? `B${project.baselines.at(-1)?.number}` : '尚未连接'
+          latestBaseline
+            ? `B${latestBaseline.number}${latestBaseline.complete ? '' : ' · 扫描不完整'}`
+            : project.repository
+              ? '尚未读取'
+              : '未连接仓库'
         }}</strong></span
       ><span class="target-progress"
         ><span class="progress-track"
@@ -63,3 +97,47 @@ const baseline = useBaseline();
     </div>
   </header>
 </template>
+<style scoped>
+.title-row > div:first-child {
+  min-width: 0;
+}
+.header-actions {
+  flex-shrink: 0;
+}
+.repository-location {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  color: #7d8d82;
+  font-size: 10px;
+}
+.repository-location > svg,
+.repository-location > small {
+  flex-shrink: 0;
+}
+.title-row p.source-analysis-note {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #7d8d82;
+}
+.repository-location > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-location > small {
+  font-size: 10px;
+  color: #8a805c;
+}
+@media (max-width: 760px) {
+  .repository-location {
+    flex-wrap: wrap;
+  }
+  .repository-location > span {
+    max-width: calc(100% - 20px);
+  }
+}
+</style>

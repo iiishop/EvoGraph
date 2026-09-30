@@ -1335,11 +1335,11 @@ html[data-sidebar='collapsed'] .app-main {
   bottom: 72px;
 }
 .workspace-body.architecture-active {
-  overflow-y: auto;
+  overflow: hidden;
 }
 .architecture-active .planning-region {
-  min-height: 580px;
-  flex-shrink: 0;
+  min-height: 0;
+  flex: 1;
 }
 .architecture-heading {
   padding: 10px 18px 8px;
@@ -1352,4 +1352,91 @@ html[data-sidebar='collapsed'] .app-main {
 }
 .architecture-legend {
   padding: 0 18px 8px;
+}
+
+/* Keep controls reachable while the work area owns its scrolling. */
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Noto Sans',
+    'Noto Sans CJK SC',
+    'Microsoft YaHei',
+    sans-serif;
+}
+body {
+  font-family: inherit;
+}
+.agent-dock-heading {
+  flex-wrap: wrap;
+}
+.agent-dock-heading .follow-agent {
+  position: static;
+  font-size: 11px;
+  padding: 5px 8px;
+  box-shadow: none;
+}
+.agent-live-status {
+  color: var(--text-secondary);
+}
+.agent-conversation {
+  margin: 0 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafb;
+}
+.agent-conversation > summary {
+  display: flex;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.agent-conversation > summary::before {
+  content: '▸';
+  color: var(--accent);
+}
+.agent-conversation[open] > summary::before {
+  content: '▾';
+}
+.agent-conversation > summary > span:first-of-type {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+.reply-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.agent-conversation-scroll {
+  max-height: 150px;
+  overflow: auto;
+  padding: 0 12px 10px;
+}
+.agent-conversation article {
+  border-top: 1px solid var(--line);
+  padding: 10px 0;
+  font-size: 12px;
+}
+.agent-conversation article strong {
+  color: var(--accent);
+}
+.agent-conversation article p {
+  margin-top: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+@media (max-height: 820px) {
+  .agent-dock {
+    padding-top: 9px;
+  }
+  .agent-dock-heading {
+    margin-bottom: 7px;
+  }
+  .agent-conversation-scroll {
+    max-height: 100px;
+  }
 }

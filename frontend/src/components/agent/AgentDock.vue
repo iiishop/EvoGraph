@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
+import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
 import { ArrowUp, Orbit, Square, CornerDownLeft } from 'lucide-vue-next';
@@ -10,6 +11,11 @@ import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
 const props = defineProps<{ project: Project }>();
+defineEmits<{ resume: [] }>();
+const conversationOpen = ref(false);
+const latestReply = computed(() =>
+  props.project.messages.filter((item) => item.role === 'assistant').at(-1),
+);
 const agent = useAgent();
 const { state, setPage, setError } = useWorkspace();
 
@@ -40,6 +46,7 @@ watch(
     references.value = [];
     referencesLoadedFor.value = '';
     mentionOpen.value = false;
+    conversationOpen.value = false;
   },
 );
 
@@ -265,9 +272,33 @@ function choose(option: string) {
       ><span class="agent-live-status" role="status"
         ><i v-if="agent.state.running" class="live-dot"></i
         ><template v-if="runningElsewhere">其他项目正在运行</template
-        ><template v-else-if="runningHere">{{ agent.state.label }}</template></span
+        ><template v-else-if="agent.state.projectId === project.id">{{
+          agent.state.label
+        }}</template></span
       >
+      <FollowAgentButton
+        v-if="runningHere || agent.state.follow[project.id] === false"
+        :following="agent.state.follow[project.id] !== false"
+        @resume="$emit('resume')"
+      />
     </div>
+    <details
+      v-if="project.messages.length"
+      class="agent-conversation"
+      :open="conversationOpen"
+      @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
+    >
+      <summary>
+        <span>{{ latestReply ? '最近回复' : '对话记录' }}</span
+        ><span class="reply-preview">{{ latestReply?.content || '查看已发送的请求' }}</span>
+      </summary>
+      <div class="agent-conversation-scroll" aria-label="项目对话记录">
+        <article v-for="item in project.messages" :key="item.id" :class="item.role">
+          <strong>{{ item.role === 'assistant' ? 'Agent' : '你' }}</strong>
+          <p>{{ item.content }}</p>
+        </article>
+      </div>
+    </details>
     <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
       松开以上传文档或图片
     </div>
@@ -324,7 +355,7 @@ function choose(option: string) {
           <Square :size="13" aria-hidden="true" />停止</button
         ><button
           v-else
-          type="button"
+          type="submit"
           class="send-button"
           :aria-label="answering ? '发送回答' : '发送修改建议'"
           :disabled="!canSend"

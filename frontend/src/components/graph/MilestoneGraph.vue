@@ -125,10 +125,10 @@ const edges = computed(() =>
 );
 function fit() {
   agent.freeView(props.project.id);
-  fitView({ padding: 0.17, duration: 250 });
+  fitView({ padding: 0.17, maxZoom: 1, duration: 250 });
 }
 function initialized() {
-  if (!agent.state.running && follows.value) fitView({ padding: 0.22, duration: 0 });
+  fitView({ padding: 0.22, maxZoom: 1, duration: 0 });
 }
 async function follow() {
   if (!follows.value || agent.state.projectId !== props.project.id) return;
@@ -166,7 +166,7 @@ defineExpose({ fit, reset });
         :nodes-connectable="false"
         :nodes-draggable="!agent.state.running"
         :delete-key-code="null"
-        fit-view-on-init
+        :fit-view-on-init="false"
         @nodes-initialized="initialized"
         @move-start="moved"
         @node-drag-start="agent.freeView(project.id)"

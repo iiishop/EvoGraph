@@ -4,7 +4,7 @@ import hashlib
 
 from pydantic import Field
 
-from ..domain.dependencies import reduce_dependencies
+from ..domain.dependencies import ancestor_sets, reduce_dependencies
 from ..domain.models import Milestone, Model, ProposedMilestone, SourceBehavior
 from ..infrastructure.repository import root_path, snapshot
 
@@ -67,6 +67,16 @@ class BaselineMilestoneService:
         # Validate the entire graph and reduce it before replacing the previous
         # snapshot. A malformed model response must never partially erase it.
         reduce_dependencies(nodes)
+        missing = {dep for m in p.milestones for dep in m.dependencies} - {
+            m.id for m in [*nodes, *p.milestones]
+        }
+        if missing:
+            raise ValueError(
+                "倒推结果移除了计划仍依赖的源码里程碑："
+                + "、".join(sorted(missing))
+                + "。请保留这些 ID，或先调整计划的前置依赖后再重新倒推。"
+            )
+        ancestor_sets({m.id: m.dependencies for m in [*nodes, *p.milestones]})
         current = snapshot(p.repository, 0)
         if (
             not current.complete

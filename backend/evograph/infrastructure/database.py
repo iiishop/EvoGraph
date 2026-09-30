@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -66,8 +67,6 @@ class Database:
                 Project.model_validate_json(row[0])
                 for row in db.execute("SELECT payload FROM projects")
             ]
-            import os
-
             for other in existing:
                 same_repository = (
                     project.repository
@@ -94,6 +93,28 @@ class Database:
         project.revision += 1
         project.updated_at = now()
         with self.connect() as db:
+            # Rebinding and restoring must preserve the same repository invariant
+            # as creation, including concurrent changes in other windows.
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM projects WHERE id=?", (project.id,)
+            ).fetchone()
+            previous = Project.model_validate_json(row[0]) if row else None
+            if (
+                previous
+                and not project.archived
+                and project.repository
+                and (previous.archived or previous.repository != project.repository)
+            ):
+                repository = os.path.normcase(os.path.realpath(project.repository))
+                for candidate in db.execute("SELECT payload FROM projects WHERE id!=?", (project.id,)):
+                    other = Project.model_validate_json(candidate[0])
+                    if (
+                        not other.archived
+                        and other.repository
+                        and os.path.normcase(os.path.realpath(other.repository)) == repository
+                    ):
+                        raise ValueError("此仓库已有活跃项目，请打开现有项目或选择其他仓库")
             updated = db.execute(
                 "UPDATE projects SET revision=?,payload=? WHERE id=? AND revision=?",
                 (project.revision, project.model_dump_json(), project.id, old_revision),

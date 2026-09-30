@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useAgent } from '../../composables/useAgent';
-import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import WorkspaceHeader from './WorkspaceHeader.vue';
 import GraphToolbar from '../graph/GraphToolbar.vue';
 import MilestoneGraph from '../graph/MilestoneGraph.vue';
@@ -37,12 +36,6 @@ const tab = ref('graph'),
 </script>
 <template>
   <main ref="root" class="project-workspace">
-    <Teleport to="body"
-      ><FollowAgentButton
-        class="global-follow-agent"
-        :following="agent.state.follow[project.id] !== false"
-        @resume="resume"
-    /></Teleport>
     <WorkspaceHeader :project="project" @edit="$emit('edit')" />
     <section class="workspace-body" :class="{ 'architecture-active': tab === 'architecture' }">
       <div class="planning-region">
@@ -72,7 +65,7 @@ const tab = ref('graph'),
           />
         </div>
       </div>
-      <AgentDock :project="project" />
+      <AgentDock :project="project" @resume="resume" />
     </section>
   </main>
 </template>

@@ -188,3 +188,29 @@ def test_source_capabilities_can_be_real_prerequisites_without_fake_acceptance(a
     assert not any(
         "SRC_login" in blocker for blocker in app.projects.get(p.id)["readiness"]["M02"]["blockers"]
     )
+
+
+def test_reconstruction_preserves_source_prerequisites_used_by_plan(app, planned):
+    ctx = context(app, planned)
+    app.baseline_milestones.save(ctx, reconstruction(planned))
+    from conftest import proposal
+
+    node = proposal().milestones[0]
+    node.dependencies = ["SRC_login"]
+    node.dependency_reasons = {"SRC_login": "Reuse the existing login implementation"}
+    app.graph.upsert(planned.id, node, create=False)
+    previous = app.db.get(planned.id)
+    for replacement in ({"SRC_renamed": []}, {}):
+        args = reconstruction(previous, replacement or {"SRC_renamed": []})
+        if not replacement:
+            args.milestones = []
+        with pytest.raises(ValueError, match="计划仍依赖.*SRC_login"):
+            app.baseline_milestones.save(ctx, args)
+        assert app.db.get(planned.id) == previous
+        assert app.projects.get(planned.id)["readiness"]["M01"]
+        assert app.bootstrap()[0]["id"] == planned.id
+    # Retaining referenced IDs permits a normal refresh with additional nodes.
+    app.baseline_milestones.save(
+        ctx, reconstruction(previous, {"SRC_login": [], "SRC_new": []})
+    )
+    assert len(app.db.get(planned.id).source_milestones) == 2
