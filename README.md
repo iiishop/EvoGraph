@@ -126,6 +126,9 @@ uv run python run.py            # desktop window, opened with pywebview
 uv run python run.py --browser  # local HTTP server on http://127.0.0.1:8765
 ```
 
+Linux: use the explicit Qt setup, `uv sync --extra linux` then `uv run --extra linux python run.py --gui qt`. See [Linux desktop setup](docs/linux.md) for graphical-session, native-library, writable-state and credential-store requirements.
+
+
 On first launch EvoGraph creates a demo project (认证工作台): a seven-milestone registration and login plan that is deliberately unexecuted, so acceptance starts at 0/7. It is there to be looked at and taken apart, not to be trusted.
 
 Other flags: `--port` (default `8765`), `--data-dir` (default `~/.evograph`, or `EVOGRAPH_DATA_DIR`), `--build` (force a frontend rebuild first) and `--no-build` (skip the frontend check). Project state, events and evidence live in `evograph.sqlite3` inside that directory.

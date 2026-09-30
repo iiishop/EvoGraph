@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import sys
 import threading
 from pathlib import Path
 
@@ -66,9 +68,24 @@ class DesktopBridge:
         return {"cancelled": True}
 
 
-def launch(application: Application, dist: Path):
+def check_desktop_environment():
+    """Fail before native GUI initialization can abort a headless Linux process."""
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY")
+        or os.environ.get("WAYLAND_DISPLAY")
+        or os.environ.get("QT_QPA_PLATFORM") in {"offscreen", "minimal"}
+    ):
+        raise SystemExit(
+            "Linux desktop mode needs an active graphical session (DISPLAY or WAYLAND_DISPLAY). "
+            "Run from your desktop terminal. For a headless HTTP server use --browser. "
+            "See docs/linux.md; an offscreen test is not a visible desktop window."
+        )
+
+
+def launch(application: Application, dist: Path, gui: str | None = None):
     import webview
 
+    check_desktop_environment()
     configure_asset_types()
     index = dist / "index.html"
     if not index.exists():
@@ -86,4 +103,11 @@ def launch(application: Application, dist: Path):
         background_color="#f7f8fa",
     )
     bridge._window = window
-    webview.start(http_server=True)
+    try:
+        webview.start(http_server=True, gui=gui)
+    except webview.errors.WebViewException as exc:
+        raise SystemExit(
+            f"Desktop WebView could not start: {exc}. On Linux install the Qt backend with "
+            "uv sync --extra linux, then run uv run --extra linux python run.py --gui qt. "
+            "See docs/linux.md for native libraries and GTK alternatives."
+        ) from exc

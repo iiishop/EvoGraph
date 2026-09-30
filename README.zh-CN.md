@@ -126,6 +126,9 @@ uv run python run.py            # 桌面窗口，用 pywebview 打开
 uv run python run.py --browser  # 本地 HTTP 服务，http://127.0.0.1:8765
 ```
 
+Linux 桌面：先运行 `uv sync --extra linux`，再运行 `uv run --extra linux python run.py --gui qt`。图形会话、系统库、可写数据目录和安全密钥存储要求见 [Linux 安装说明](docs/linux.md)。
+
+
 首次启动会自动建一个示例项目（认证工作台）：一份七个里程碑的注册登录计划，刻意一个都没执行，所以验收取值从 0/7 开始。它的用途是拿来点开看、拆开研究，不是拿来相信的。
 
 其他参数：`--port`（默认 `8765`）、`--data-dir`（默认 `~/.evograph`，或环境变量 `EVOGRAPH_DATA_DIR`）、`--build`（启动前强制重建前端）、`--no-build`（跳过前端检查）。项目状态、事件与证据都存在该目录下的 `evograph.sqlite3`。
