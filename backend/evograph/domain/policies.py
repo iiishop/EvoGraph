@@ -1,6 +1,6 @@
 """Deterministic rules. Semantic sufficiency is deliberately not a PASS claim."""
 
-from .models import Obligation, PlanProposal, Project, ProposedMilestone
+from .models import Milestone, Obligation, PlanProposal, Project, ProposedMilestone
 
 # One registry is the extension point for investigation obligations.
 CHANGE_POLICIES = {
@@ -42,6 +42,19 @@ def obligations(change_types: list[str]) -> list[Obligation]:
         for kind in dict.fromkeys(["general", *change_types])
         for key, label in CHANGE_POLICIES.get(kind, [])
     ]
+
+
+def resolve_architecture_components(
+    project: Project, proposed: ProposedMilestone, previous: Milestone | None = None
+) -> list[str]:
+    """Unmapped work is pending association; an empty proposal never clears an existing mapping."""
+    components = proposed.architecture_components or (
+        previous.architecture_components if previous else []
+    )
+    architecture = project.architectures[-1] if project.architectures else None
+    if set(components) - ({n.id for n in architecture.diagram.nodes} if architecture else set()):
+        raise ValueError("引用的架构组件不存在，请先更新架构设计")
+    return list(components)
 
 
 # A generation is deliberately small; a persisted roadmap can grow across turns.

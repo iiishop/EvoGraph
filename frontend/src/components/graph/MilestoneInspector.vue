@@ -141,6 +141,12 @@ const uml = computed(() =>
               id
             }}</code>
           </section>
+          <section v-else-if="project.architectures?.length">
+            <h3>组件待关联</h3>
+            <p class="muted">
+              此步骤尚未关联现有架构组件。可以先完善交付规划，后续再补充映射；执行与验收要求仍然保留。
+            </p>
+          </section>
           <section
             v-for="diagram in project.diagrams.filter((d) =>
               d.milestone_ids.includes(milestone.id),

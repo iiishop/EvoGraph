@@ -25,8 +25,8 @@ def test_architecture_revisions_require_review_and_valid_component_mapping(app, 
     assert p.milestones[0].architecture_revision == 1
     assert any(o.id == "architecture" and not o.resolved for o in p.milestones[0].obligations)
     node = proposal().milestones[0]
-    with pytest.raises(ValueError, match="关联"):
-        app.graph.upsert(p.id, node, False)
+    app.graph.upsert(p.id, node, False)
+    assert not app.db.get(p.id).milestone(node.id).architecture_components
     node.architecture_components = ["api"]
     app.graph.upsert(p.id, node, False)
     different = architecture()

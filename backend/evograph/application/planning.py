@@ -4,13 +4,15 @@ import time
 from ..domain.models import (
     BehaviorRevision,
     Milestone,
+    Obligation,
     PlanningRevision,
     PlanProposal,
     TargetVersion,
 )
-from ..domain.policies import obligations, validate_plan
+from ..domain.policies import obligations, resolve_architecture_components, validate_plan
 from ..domain.target_contract import required_target_behavior_ids
 from ..infrastructure.repository import context
+from .design_workflow import ARCHITECTURE_INTENT
 from .investigation import InvestigationService
 
 
@@ -35,17 +37,34 @@ class PlanningService:
             "现有已完成节点保持 id、scope、behaviors 不变，修改行为时创建新节点并复用行为 key。"
             "返回计划时是全量期望计划，包含仍需保留的现有节点。资源用稳定字符串，如 schema:users、api:auth；"
             "change_types 只允许 general/api/data/auth。没有证据的判断标为待调查。\n"
+            "当前架构摘要仅供约束和组件映射参考；全量计划接口不修改架构。"
+            "保留现有架构与有效组件映射，不得因用户本轮不做架构而清空它们。"
+            "没有架构时 architecture_components 留空，不虚构组件。\n"
+            "已有架构仍无合适组件时，新里程碑可留空待关联，不必为路线图创建架构或强行关联无关组件。\n"
         )
+        system += ARCHITECTURE_INTENT
         if propose:
             system += (
                 "本轮只返回 JSON 对象，不要 Markdown。对象必须遵守以下 JSON Schema：\n"
                 + json.dumps(PlanProposal.model_json_schema(), ensure_ascii=False)
             )
+        architecture = project.architectures[-1] if project.architectures else None
         state = {
             "target": project.targets[-1].model_dump() if project.targets else None,
             "milestones": [m.model_dump() for m in project.milestones],
             "behaviors": [b.model_dump() for b in project.behaviors],
             "baseline": project.baseline.model_dump() if project.baseline else None,
+            # Compact reference only: omit graph edges, groups, source refs and historical revisions.
+            "architecture": {
+                "number": architecture.number,
+                "summary": architecture.summary,
+                "technologies": [
+                    {"area": t.area, "choice": t.choice} for t in architecture.technologies
+                ],
+                "components": [{"id": n.id, "label": n.label} for n in architecture.diagram.nodes],
+            }
+            if architecture
+            else None,
         }
         messages = [
             {"role": "system", "content": system},
@@ -117,9 +136,11 @@ class PlanningService:
         ):
             raise ValueError("请先结束或释放在途里程碑，再应用新计划")
         old = {m.id: m for m in project.milestones}
+        architecture = project.architectures[-1] if project.architectures else None
         new_nodes = []
         for proposed in plan.milestones:
             previous = old.get(proposed.id)
+            architecture_components = resolve_architecture_components(project, proposed, previous)
             if previous:
                 old_behaviors = [
                     next(b for b in project.behaviors if b.id == bid)
@@ -132,10 +153,11 @@ class PlanningService:
                     and previous.dependencies == proposed.dependencies
                     and previous.resources == proposed.resources
                     and previous.change_types == proposed.change_types
+                    and previous.architecture_components == architecture_components
                 )
                 if not unchanged:
                     raise ValueError(
-                        f"{proposed.id} 已有执行身份；改变范围或验收请使用新的里程碑 ID"
+                        f"{proposed.id} 已有执行身份；改变范围、验收或架构关联请使用新的里程碑 ID"
                     )
                 previous.title, previous.intent = proposed.title, proposed.intent
                 previous.dependency_reasons = proposed.dependency_reasons
@@ -162,10 +184,19 @@ class PlanningService:
                 project.behaviors.append(revision)
                 bids.append(revision.id)
             node = Milestone(
-                **proposed.model_dump(exclude={"behaviors"}),
+                **proposed.model_dump(exclude={"behaviors", "architecture_components"}),
+                architecture_components=architecture_components,
+                architecture_revision=architecture.number if architecture else 0,
                 behavior_revision_ids=bids,
                 obligations=obligations(proposed.change_types),
             )
+            if architecture:
+                node.obligations.append(
+                    Obligation(
+                        id="architecture",
+                        label=f"审查架构 A{architecture.number} 与当前里程碑的一致性",
+                    )
+                )
             new_nodes.append(node)
         required = required_target_behavior_ids(new_nodes, project.behaviors)
         target_changed = (

@@ -340,3 +340,16 @@ test('inspector transitions preserve the viewport and respect reduced motion', (
   assert.match(animation, /opacity: 0/);
   assert.doesNotMatch(animation, /height|width|transform|margin/);
 });
+
+test('unmapped roadmap steps stay visibly pending without claiming architecture coverage', async () => {
+  const milestone = { id: 'M1', title: 'New roadmap slice', intent: 'Plan first', status: 'PLANNED', behavior_revision_ids: [], scope: ['src/new/'], dependencies: [], architecture_components: [], attachment_ids: [] };
+  const pending = await render(MilestoneInspector, { project: project({ architectures: [{ number: 1 }] }), milestone });
+  assert.match(pending, /组件待关联/);
+  assert.match(pending, /执行与验收要求仍然保留/);
+  const mapped = await render(MilestoneInspector, { project: project({ architectures: [{ number: 1 }] }), milestone: { ...milestone, architecture_components: ['existing-api'] } });
+  assert.match(mapped, /关联组件/);
+  assert.match(mapped, /existing-api/);
+  assert.doesNotMatch(mapped, /组件待关联/);
+  const absent = await render(MilestoneInspector, { project: project({ architectures: [] }), milestone });
+  assert.doesNotMatch(absent, /组件待关联/);
+});

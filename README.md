@@ -96,6 +96,10 @@ The 24-milestone proposal limit is a per-generation safety budget, not a lifetim
 
 ## Explore architecture locally
 
+Architecture work follows the scope you request. Ask for a PR roadmap without an architecture diagram, or defer architecture until later, and the agent is instructed to continue roadmap-only without making architecture a prerequisite. Existing architecture, diagrams and component mappings are preserved; skipping architecture is not a deletion request. When architecture is requested or relevant to an unrestricted design change, it remains part of planning. These are model instructions, not a keyword filter or a guarantee of model compliance.
+
+If no existing component honestly covers a new milestone, its mapping can stay empty as pending association. Review flags this as advisory; planning does not require an invented component or an unrelated mapping. Empty or omitted mappings preserve an existing milestone's nonempty association in both incremental edits and full-plan replacement. Unknown component IDs remain invalid, and architecture consistency obligations and acceptance evidence rules still apply.
+
 The architecture view is the global module overview. Select 1–3 components, optionally narrow their linked files, then open local class structure in the same workspace. Extraction reads only the selected source paths; imports and outside architecture neighbors stay collapsed boundary nodes. There is no project-wide class diagram generation.
 
 Python AST and tree-sitter adapters for TypeScript/Vue and C++ extract declarations and signatures without executing code. Parsing is bounded (12 files, 24 classes, 160 members); oversized scopes require narrowing. Static declarations do not establish runtime behavior, and missing source mappings never become invented classes. Source-backed structure and proposed design stay explicitly labeled SRC and DESIGN. Existing architecture revisions, evidence, migrations and archived legacy diagrams are preserved.

@@ -9,7 +9,12 @@ from ..domain.models import (
     ProposedMilestone,
     TargetVersion,
 )
-from ..domain.policies import MAX_WORKING_MILESTONES, obligations, validate_milestones
+from ..domain.policies import (
+    MAX_WORKING_MILESTONES,
+    obligations,
+    resolve_architecture_components,
+    validate_milestones,
+)
 from ..domain.target_contract import required_target_behavior_ids
 
 
@@ -109,16 +114,7 @@ class GraphEditor:
         if old and old.lease_active:
             raise ValueError("该节点已领取，请先释放后修改")
         architecture = p.architectures[-1] if p.architectures else None
-        if set(proposed.architecture_components) - (
-            {n.id for n in architecture.diagram.nodes} if architecture else set()
-        ):
-            raise ValueError("引用的架构组件不存在，请先更新架构设计")
-        if (
-            architecture
-            and not proposed.architecture_components
-            and not (old and old.migration_steps)
-        ):
-            raise ValueError("请为里程碑关联至少一个架构组件")
+        architecture_components = resolve_architecture_components(p, proposed, old)
         if set(proposed.attachment_ids) - {a.id for a in p.attachments}:
             raise ValueError("引用的资料不存在")
         before = [m.model_dump() for m in p.milestones]
@@ -164,7 +160,8 @@ class GraphEditor:
                 p.behaviors.append(b)
                 bids.append(b.id)
         node = Milestone(
-            **proposed.model_dump(exclude={"behaviors"}),
+            **proposed.model_dump(exclude={"behaviors", "architecture_components"}),
+            architecture_components=architecture_components,
             behavior_revision_ids=bids,
             obligations=obligations(proposed.change_types),
             position=old.position if old else None,

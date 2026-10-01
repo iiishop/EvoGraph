@@ -593,12 +593,12 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
     </template>
     <div v-else class="empty-state">
       <Network :size="36" />
-      <h3>{{ view === 'source' ? '读取基线，自动建立源码视图' : '让架构先于实现' }}</h3>
+      <h3>{{ view === 'source' ? '读取基线，自动建立源码视图' : '架构可以稍后补充' }}</h3>
       <p>
         {{
           view === 'source'
             ? '在顶部读取基线后，将显示带 SRC 标识的目录组件和静态导入关系。'
-            : '在下方说明系统边界与技术约束，Agent 将维护架构与选型依据。'
+            : '可以先完善里程碑路线图；需要架构时，在下方说明系统边界与技术约束。'
         }}
       </p>
     </div>

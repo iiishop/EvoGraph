@@ -94,8 +94,8 @@ def architecture_traceability(project):
             yield finding(
                 "unmapped_delivery",
                 m.id,
-                "交付与当前架构没有组件映射",
-                "关联实际影响的组件；非架构工作说明例外",
+                "交付与当前架构待关联",
+                "仅关联实际影响的组件；暂无合适组件可保留待关联，不得覆盖用户本轮不做架构的范围",
             )
         if m.status != "VERIFIED_COMPLETE" and m.architecture_revision != a.number:
             yield finding(
