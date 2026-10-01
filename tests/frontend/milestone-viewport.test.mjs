@@ -432,3 +432,88 @@ test('a real manual gesture interrupts an in-flight animation and owns later res
     h.dispose();
   }
 });
+
+for (const mode of ['selected', 'agent']) {
+  test(`${mode} readable focus recovers after temporary question/composer shrink`, async () => {
+    const h = await harness();
+    try {
+      await h.flush();
+      if (mode === 'selected') h.workspace.selectNode('M64');
+      else {
+        Object.assign(h.agent.state, { projectId: 'P1', focusId: 'M64', pulse: 1 });
+        h.agent.state.follow.P1 = true;
+      }
+      await h.flush();
+      assert.ok(h.env.viewport.zoom >= 0.9);
+      h.env.dimensions.value = { width: 320, height: 110 };
+      await h.flush();
+      assert.ok(h.env.viewport.zoom < 0.5);
+      inside(boxes(64)[63], h.env.viewport, h.env.dimensions.value);
+      const limited = h.env.viewport.zoom;
+      h.env.dimensions.value = { width: 320, height: 90 };
+      await h.flush();
+      assert.ok(
+        h.env.viewport.zoom <= limited,
+        'still-small viewport must keep fitting rather than force 0.95',
+      );
+      h.env.dimensions.value = { width: 440, height: 300 };
+      await h.flush();
+      assert.equal(h.env.viewport.zoom, 0.95);
+      inside(boxes(64)[63], h.env.viewport, h.env.dimensions.value);
+      assert.equal(h.env.calls.at(-1)[1].duration, 0);
+    } finally {
+      h.dispose();
+    }
+  });
+}
+
+test('manual zoom after a shrink stays owned by the user when the question closes', async () => {
+  const h = await harness();
+  try {
+    await h.flush();
+    h.workspace.selectNode('M64');
+    await h.flush();
+    h.env.dimensions.value = { width: 320, height: 110 };
+    await h.flush();
+    h.env.attrs.onMoveStart({ event: { type: 'wheel' } });
+    const viewport = { ...h.env.viewport },
+      calls = h.env.calls.length;
+    h.env.dimensions.value = { width: 440, height: 300 };
+    await h.flush();
+    assert.deepEqual(h.env.viewport, viewport);
+    assert.equal(h.env.calls.length, calls);
+    h.vm.locate('M64');
+    await h.flush();
+    assert.equal(h.env.viewport.zoom, 0.95);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('late focus-animation completion cannot suppress later shrink-to-grow recovery', async () => {
+  const h = await harness();
+  try {
+    await h.flush();
+    const animations = deferredAnimations(h.env);
+    h.workspace.selectNode('M64');
+    await h.flush();
+    assert.equal(animations.length, 1);
+    h.env.dimensions.value = { width: 320, height: 110 };
+    await h.flush();
+    assert.ok(h.env.viewport.zoom < 0.5);
+    h.env.dimensions.value = { width: 440, height: 300 };
+    await h.flush();
+    assert.equal(h.env.viewport.zoom, 0.95);
+    animations[0].resolve(true);
+    await h.flush();
+    h.env.dimensions.value = { width: 320, height: 90 };
+    await h.flush();
+    assert.ok(h.env.viewport.zoom < 0.5);
+    h.env.dimensions.value = { width: 440, height: 300 };
+    await h.flush();
+    assert.equal(h.env.viewport.zoom, 0.95);
+    inside(boxes(64)[63], h.env.viewport, h.env.dimensions.value);
+  } finally {
+    h.dispose();
+  }
+});

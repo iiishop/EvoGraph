@@ -234,8 +234,8 @@ async function harness() {
     export const useAgent = () => agent; // ${id}`);
   const workspaceUrl = moduleUrl(`import { reactive, computed } from ${JSON.stringify(vueUrl)};
     const project = (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null });
-    export const workspace = { state: reactive({ project: project('A'), projects: [], page: 'projects', loading: false, busy: false, settings: { provider: { config: { model: 'Test model' } } } }),
-      selected: computed(() => null), calls: [], init() {}, dismiss() {}, undoDelete() {},
+    export const workspace = { state: reactive({ selectedId: null, project: project('A'), projects: [], page: 'projects', loading: false, busy: false, settings: { provider: { config: { model: 'Test model' } } } }),
+      selected: computed(() => workspace.state.project.milestones.find(item => item.id === workspace.state.selectedId) ?? null), selectNode: id => { workspace.state.selectedId = id; }, calls: [], init() {}, dismiss() {}, undoDelete() {},
       applyProject: project => { if (workspace.state.project.id === project.id) workspace.state.project = project; },
       setPage(page) { this.state.page = page; }, setError(error) { this.state.error = error; },
       selectProject: async (id) => { workspace.calls.push(id); workspace.state.project = project(id); workspace.state.page = 'projects'; } };
@@ -268,6 +268,7 @@ async function harness() {
       export default { props: ['modelValue'], emits: ['update:modelValue'], setup(props, { emit }) { return () => h('attachments', { selected: props.modelValue, choose: ids => emit('update:modelValue', ids) }); } };`),
   };
   for (const name of [
+    '../attachments/AttachmentReceipt.vue',
     './AgentTurnSummary.vue',
     '../graph/FollowAgentButton.vue',
     './ReferenceMentionPicker.vue',
@@ -1062,6 +1063,131 @@ test('attachment preparation blocks sending with an upload explanation rather th
     h.agentDrafts.finishAttachmentTransfer(transfer, null);
     await tick();
     assert.equal(h.find('textarea').value, 'draft waiting for its document');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('selecting and clearing a node keeps the same visible composer and attachment selection', async () => {
+  const h = await harness();
+  try {
+    await h.input('Keep planning in one conversation');
+    await h.attach(['A-material']);
+    const input = h.find('textarea'),
+      picker = h.find('attachments'),
+      form = h.find('form');
+    h.workspace.state.project.milestones = [{ id: 'M1', title: 'A planned slice' }];
+    h.workspace.state.selectedId = 'M1';
+    await tick();
+    assert.equal(h.find('textarea'), input);
+    assert.equal(h.find('attachments'), picker);
+    assert.notEqual(h.find('form').style?.display, 'none');
+    assert.equal(input.value, 'Keep planning in one conversation');
+    assert.deepEqual(picker.selected, ['A-material']);
+    h.workspace.state.selectedId = null;
+    await tick();
+    assert.equal(h.find('form'), form);
+    assert.equal(h.find('textarea'), input);
+    assert.equal(h.env.calls.length, 0);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('file drag discloses project persistence and the reference limit before drop', async () => {
+  const h = await harness();
+  try {
+    const dock = all(h.root).find((node) =>
+      String(node.class ?? '')
+        .split(' ')
+        .includes('agent-dock'),
+    );
+    assert.doesNotMatch(textOf(h.root), /松开以上传并保存到项目/);
+    dock.onDragenter({ preventDefault() {}, dataTransfer: { types: ['Files'] } });
+    await tick();
+    assert.match(textOf(h.root), /松开以上传并保存到项目/);
+    assert.match(textOf(h.root), /本条最多引用6份资料内容/);
+    assert.equal(h.env.calls.length, 0);
+    dock.onDragleave({ preventDefault() {} });
+    await tick();
+    assert.doesNotMatch(textOf(h.root), /松开以上传并保存到项目/);
+  } finally {
+    h.dispose();
+  }
+});
+
+for (const attention of ['failed request', 'active upload', 'uncertain upload']) {
+  test(`compact remount keeps ${attention} visible with an empty draft`, async () => {
+    const h = await harness();
+    try {
+      h.workspace.state.project.milestones = [{ id: 'M1', title: 'Selected slice' }];
+      h.workspace.state.selectedId = 'M1';
+      await tick();
+      if (attention === 'failed request') {
+        h.env.send = async () => false;
+        await h.input('Original failed request');
+        await h.submit();
+        await tick();
+        await h.input('');
+      } else {
+        const transfer = h.agentDrafts.beginAttachmentTransfer('A', 1, 'uploading');
+        if (attention === 'uncertain upload')
+          h.agentDrafts.finishAttachmentTransfer(transfer, {
+            assets: [],
+            confirmedFiles: [],
+            refresh: 'not_needed',
+            unattempted: [],
+            failure: { name: 'document.txt', status: 'unconfirmed', message: 'Result unknown' },
+          });
+      }
+      h.workspace.setPage('settings');
+      await tick();
+      h.workspace.setPage('projects');
+      await tick();
+      const review = () => all(h.root).find((node) => node.class === 'agent-review');
+      assert.ok(review());
+      assert.notEqual(review().style?.display, 'none');
+      assert.equal(h.find('textarea').value, '');
+      assert.ok(h.button('收起项目对话'));
+      h.workspace.state.selectedId = null;
+      await tick();
+      h.find('toolbar').change('architecture');
+      await tick();
+      assert.notEqual(review().style?.display, 'none');
+      assert.ok(h.button('收起项目对话'));
+      if (attention === 'failed request') assert.ok(h.button('重试这条请求'));
+    } finally {
+      h.dispose();
+    }
+  });
+}
+
+test('collapsing history keeps a pending question outside its scroller and preserves exact answer binding', async () => {
+  const h = await harness();
+  try {
+    h.workspace.state.project.messages = [
+      { id: 'old', role: 'assistant', content: 'Earlier result' },
+    ];
+    h.workspace.state.project.question = {
+      id: 'Q-visible',
+      prompt: 'Choose fields',
+      context: 'Current contract',
+      options: ['Title', 'Title and author'],
+    };
+    await h.input('A separate custom draft');
+    const question = h.find('question');
+    assert.equal(question.parent, h.find('form').parent);
+    h.button('收起项目对话').onClick();
+    await tick();
+    assert.equal(h.find('question'), question);
+    const review = all(h.root).find((node) => node.class === 'agent-review');
+    assert.equal(review.style.display, 'none');
+    assert.notEqual(question.parent.style?.display, 'none');
+    question.choose('Title and author');
+    await tick();
+    assert.equal(h.env.calls[0][1], 'Title and author');
+    assert.equal(h.env.calls[0][2], 'Q-visible');
+    assert.equal(h.find('textarea').value, 'A separate custom draft');
   } finally {
     h.dispose();
   }

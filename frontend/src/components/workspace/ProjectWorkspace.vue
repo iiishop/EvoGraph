@@ -59,20 +59,27 @@ watch(tab, (value) => {
 </script>
 <template>
   <main ref="root" class="project-workspace">
+    <GraphToolbar
+      :tab="tab"
+      :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
+      @tab="
+        tab = $event;
+        agent.freeView(project.id);
+      "
+      @find="openFinder"
+      @fit="graph?.fit()"
+      @reset="graph?.reset()"
+    />
     <WorkspaceHeader :project="project" @edit="$emit('edit')" />
-    <section class="workspace-body" :class="{ 'architecture-active': tab === 'architecture' }">
+    <section
+      class="workspace-body"
+      :class="{
+        'architecture-active': tab === 'architecture',
+        'workspace-detail-open': selected && tab === 'graph',
+        'question-active': Boolean(project.question),
+      }"
+    >
       <div class="planning-region">
-        <GraphToolbar
-          :tab="tab"
-          :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
-          @tab="
-            tab = $event;
-            agent.freeView(project.id);
-          "
-          @find="openFinder"
-          @fit="graph?.fit()"
-          @reset="graph?.reset()"
-        />
         <div
           ref="planningContent"
           class="planning-content"
@@ -84,17 +91,18 @@ watch(tab, (value) => {
             ref="graph"
             :project="project"
           />
-          <component
-            :is="selected?.origin === 'source' ? SourceInspector : MilestoneInspector"
-            v-if="selected && tab === 'graph'"
-            :key="selected.id"
-            :milestone="selected"
-            :project="project"
-          />
         </div>
       </div>
+      <component
+        :is="selected?.origin === 'source' ? SourceInspector : MilestoneInspector"
+        v-if="selected && tab === 'graph'"
+        :key="selected.id"
+        :milestone="selected"
+        :project="project"
+      />
       <AgentDock
         :project="project"
+        :view="tab"
         :compact="tab === 'architecture' || (tab === 'graph' && Boolean(selected))"
         @resume="resume"
       />
@@ -110,7 +118,7 @@ watch(tab, (value) => {
 
 <style scoped>
 .workspace-body {
-  overflow-y: auto;
+  overflow: visible;
 }
 /* A fixed graph-canvas minimum must not overflow a shorter flex viewport. */
 .workspace-body .planning-content :deep(.milestone-stage > .graph-canvas) {
@@ -119,8 +127,7 @@ watch(tab, (value) => {
 /* On narrow windows the detail remains in flow so it cannot cover the node
    that was just located. Both the canvas and existing inspector stay usable. */
 @media (max-width: 760px) {
-  .planning-content.graph-detail-open {
-    flex-direction: column;
+  .workspace-detail-open {
     overflow-y: auto;
   }
   .graph-detail-open :deep(.milestone-stage) {
@@ -133,7 +140,7 @@ watch(tab, (value) => {
   .graph-detail-open :deep(.milestone-stage > .graph-canvas > .vue-flow) {
     min-height: 220px;
   }
-  .graph-detail-open > :deep(.inspector) {
+  .workspace-detail-open > :deep(.inspector) {
     position: static;
     width: 100%;
     flex: 1 1 220px;

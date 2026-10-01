@@ -7,6 +7,7 @@ const tabs = workspaceViews;
 </script>
 <template>
   <div class="graph-toolbar">
+    <span class="workspace-brand" aria-hidden="true">EvoGraph</span>
     <div class="view-tabs" role="tablist">
       <button
         v-for="item in tabs"

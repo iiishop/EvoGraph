@@ -114,7 +114,10 @@ const edges = computed(() =>
       targetHandle: 'in',
       type: 'prerequisite',
       markerEnd: { type: MarkerType.ArrowClosed, color: edgeKind(m.dependency_types?.[dep]).color },
-      style: { stroke: edgeKind(m.dependency_types?.[dep]).color, strokeWidth: 1.7 },
+      style: {
+        stroke: edgeKind(m.dependency_types?.[dep]).color,
+        strokeWidth: state.selectedId === dep || state.selectedId === m.id ? 2.5 : 1.7,
+      },
       data: {
         kind: m.dependency_types?.[dep] ?? 'implementation',
         routeKind: allMilestones.value.some((n) => n.position) ? 'waypoints' : 'spline',
@@ -145,12 +148,17 @@ function applyCamera(milliseconds = 0, sequence = cameraSequence) {
   if (disposed || cameraMode === 'manual' || sequence !== cameraSequence) return;
   const current = getViewport();
   const focused = boxes.value.find((box) => box.id === focusedId);
+  // A question or expanded composer can temporarily reduce readable focus.
+  // Keep the explicit Locate/Follow target when space returns; a real gesture
+  // switches to manual mode above and continues to own its zoom unchanged.
+  const readable = focused ? fitMilestoneBounds(focused, size.value, 0.95) : null;
+  const restoreReadable = readable && readable.zoom > current.zoom + 0.00001;
   const target =
     cameraMode === 'overview'
       ? overview.value
       : focused
-        ? readableFocus
-          ? fitMilestoneBounds(focused, size.value, 0.95)
+        ? readableFocus || restoreReadable
+          ? readable
           : keepMilestoneVisible(focused, size.value, current)
         : null;
   if (!target) return;
@@ -317,7 +325,7 @@ defineExpose({ fit, reset, locate });
         @node-click="({ node }) => selectNode(node.id)"
         @pane-click="selectNode(null)"
         @node-drag-stop="dragged"
-        ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
+        ><Background :gap="24" :size="1" pattern-color="#cdd5e4" /><Controls
           :show-interactive="false"
           position="bottom-left"
           @zoom-in="manual"

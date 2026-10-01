@@ -6,8 +6,9 @@ import { latestTurnSummary } from '../../lib/turnSummary';
 import { planAgentRetry, waitForRetryRead } from '../../lib/agentRetry';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
+import AttachmentReceipt from '../attachments/AttachmentReceipt.vue';
 import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
-import { ArrowUp, Orbit, Square, CornerDownLeft, ChevronDown, ChevronUp } from 'lucide-vue-next';
+import { ArrowUp, Square, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { useAgent } from '../../composables/useAgent';
 import {
@@ -19,7 +20,7 @@ import {
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
-const props = defineProps<{ project: Project; compact?: boolean }>();
+const props = defineProps<{ project: Project; compact?: boolean; view?: string }>();
 defineEmits<{ resume: [] }>();
 const conversationOpen = ref(false);
 const dockCollapsed = ref(false);
@@ -75,11 +76,24 @@ const runningElsewhere = computed(
   () => agent.state.running && agent.state.projectId !== props.project.id,
 );
 const answering = computed(() => Boolean(props.project.question));
+const requiresReview = computed(() => {
+  const transfer = attachmentTransfer.value;
+  return Boolean(
+    answering.value ||
+    failedAttempt.value ||
+    (transfer &&
+      (transfer.phase !== 'done' ||
+        transfer.report?.failure ||
+        transfer.report?.selectionError ||
+        transfer.report?.refresh === 'failed' ||
+        transfer.report?.refresh === 'timeout')),
+  );
+});
 watch(
   () => props.compact,
   (compact) => {
     dockCollapsed.value = Boolean(
-      compact && !content.value.trim() && !answering.value && !runningHere.value,
+      compact && !content.value.trim() && !requiresReview.value && !runningHere.value,
     );
   },
   { immediate: true },
@@ -93,7 +107,26 @@ watch(
 watch(dragDepth, (depth) => {
   if (depth > 0) dockCollapsed.value = false;
 });
-const modelName = computed(() => state.settings?.provider?.config.model || '未连接模型');
+const showStatus = computed(
+  () =>
+    runningElsewhere.value ||
+    (agent.state.projectId === props.project.id && Boolean(agent.state.label)),
+);
+const hasReview = computed(() =>
+  Boolean(
+    props.project.messages.length ||
+    (turnSummary.value && !runningHere.value) ||
+    attachmentTransfer.value ||
+    failedAttempt.value,
+  ),
+);
+watch(
+  () => [props.project.question?.id, failedAttempt.value?.id, attachmentTransfer.value?.id],
+  ([question, failure, transfer]) => {
+    if (question || failure || (transfer && requiresReview.value)) dockCollapsed.value = false;
+  },
+  { immediate: true },
+);
 
 // Why the send button is dead, spelled out instead of silently ignored.
 const blocker = computed(() => {
@@ -371,33 +404,28 @@ function choose(option: string) {
 <template>
   <section
     class="agent-dock"
-    :class="{ 'is-drop-target': draggingFiles, 'is-collapsed': dockCollapsed }"
+    :class="{
+      'is-drop-target': draggingFiles,
+      'is-collapsed': dockCollapsed,
+      'has-question': answering,
+    }"
     @paste.capture="onPaste"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <div class="agent-dock-heading">
-      <span class="agent-symbol"><Orbit :size="17" aria-hidden="true" /></span
-      ><strong>{{ answering ? '需要你的判断' : '调整项目规划' }}</strong
-      ><span class="agent-scope">{{ answering ? '回答一个问题' : '直接修改当前图' }}</span
-      ><button
-        type="button"
-        class="agent-mode"
-        :title="state.settings?.provider ? '切换模型（前往设置）' : '尚未配置模型'"
-        @click="setPage('settings')"
-      >
-        {{ modelName }}</button
-      ><span class="agent-live-status" role="status"
-        ><i v-if="agent.state.running" class="live-dot"></i
-        ><template v-if="runningElsewhere">其他项目正在运行</template
-        ><template v-else-if="agent.state.projectId === project.id">{{
-          agent.state.label
-        }}</template></span
-      >
+    <div
+      v-if="answering || hasReview || showStatus || agent.state.follow[project.id] === false"
+      class="agent-dock-heading"
+    >
+      <strong v-if="answering || hasReview">{{ answering ? '需要你的判断' : '项目对话' }}</strong>
+      <span v-if="showStatus" class="agent-live-status" role="status">
+        <i v-if="agent.state.running" class="live-dot"></i>
+        {{ runningElsewhere ? '其他项目正在运行' : agent.state.label }}
+      </span>
       <button
-        v-if="compact"
+        v-if="hasReview"
         type="button"
         class="button secondary agent-collapse-toggle"
         :aria-expanded="!dockCollapsed"
@@ -413,8 +441,15 @@ function choose(option: string) {
         @resume="$emit('resume')"
       />
     </div>
+    <AgentQuestion
+      v-if="project.question"
+      :question="project.question"
+      :answer="content"
+      :disabled="agent.state.running"
+      @choose="choose"
+    />
     <div
-      v-if="project.messages.length || (turnSummary && !runningHere)"
+      v-if="hasReview"
       v-show="!dockCollapsed"
       class="agent-review"
       aria-label="对话与本轮变更"
@@ -422,7 +457,6 @@ function choose(option: string) {
     >
       <details
         v-if="project.messages.length"
-        v-show="!dockCollapsed"
         class="agent-conversation"
         :open="conversationOpen"
         @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
@@ -433,91 +467,19 @@ function choose(option: string) {
         </summary>
         <div class="agent-conversation-scroll" aria-label="项目对话记录">
           <article v-for="item in project.messages" :key="item.id" :class="item.role">
-            <strong>{{ item.role === 'assistant' ? 'Agent' : '你' }}</strong>
+            <strong>{{ item.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
             <p>{{ item.content }}</p>
           </article>
         </div>
       </details>
       <AgentTurnSummary
         v-if="turnSummary && !runningHere"
-        v-show="!dockCollapsed"
         :key="`${project.id}-${turnSummary.turn_id}`"
         :summary="turnSummary"
         :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
       />
-    </div>
-    <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
-      松开以上传文档或图片
-    </div>
-    <form
-      v-show="!dockCollapsed"
-      style="position: relative"
-      class="agent-input"
-      @submit.prevent="submit()"
-    >
-      <ReferenceMentionPicker
-        v-if="mentionOpen"
-        ref="mentionPicker"
-        :items="references"
-        :query="mentionQuery"
-        @select="insertReference"
-      />
-      <AgentQuestion
-        v-if="project.question"
-        :question="project.question"
-        :answer="content"
-        :disabled="agent.state.running"
-        @choose="choose"
-      />
-      <textarea
-        id="agent-message"
-        ref="message"
-        v-model="content"
-        :aria-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
-        :disabled="runningHere"
-        rows="2"
-        maxlength="16000"
-        :placeholder="placeholder"
-        @input="updateMentionState"
-        @click="updateMentionState"
-        @keyup.left="updateMentionState"
-        @keyup.right="updateMentionState"
-        @blur="mentionOpen = false"
-        @keydown="onKeydown"
-        @keydown.enter.exact.prevent="onEnter"
-      />
-      <div class="agent-input-footer">
-        <AttachmentPicker ref="attachmentPicker" :project="project" v-model="attachmentIds" />
-        <span v-if="blocker" class="agent-blocker" role="status"
-          >{{ blocker.text
-          }}<button
-            v-if="blocker.action"
-            type="button"
-            class="text-button"
-            @click="runBlockerAction"
-          >
-            {{ blocker.action }}
-          </button></span
-        ><span v-else class="agent-hint"
-          ><CornerDownLeft :size="12" aria-hidden="true" /> Enter 发送 · Shift + Enter 换行</span
-        ><span v-if="counter > 200" class="agent-counter" :class="{ near: counter > 15000 }">{{
-          counter
-        }}</span
-        ><button v-if="runningHere" type="button" class="stop-agent" @click="agent.stop">
-          <Square :size="13" aria-hidden="true" />停止</button
-        ><button
-          v-else
-          type="submit"
-          class="send-button"
-          :aria-label="answering ? '发送回答' : '发送修改建议'"
-          :disabled="!canSend"
-        >
-          <ArrowUp :size="19" aria-hidden="true" />
-        </button>
-      </div>
-    </form>
-    <div v-show="!dockCollapsed" class="agent-dock-note" :class="{ failed: failedAttempt }">
-      <template v-if="failedAttempt">
+      <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="attachmentIds" />
+      <div v-if="failedAttempt" class="agent-recovery-card">
         <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
         {{
           failureRestored
@@ -539,8 +501,76 @@ function choose(option: string) {
           @click="agentDrafts.dismissFailure(project.id, failedAttempt.id)"
         >
           {{ failureRestored ? '关闭提示' : '丢弃这条请求' }}
-        </button> </template
-      ><template v-else>缺少信息时会向你提问 · 不会自动修改仓库代码</template>
+        </button>
+      </div>
+    </div>
+    <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
+      松开以上传并保存到项目 · 本条最多引用6份资料内容
+    </div>
+    <form style="position: relative" class="agent-input" @submit.prevent="submit()">
+      <ReferenceMentionPicker
+        v-if="mentionOpen"
+        ref="mentionPicker"
+        :items="references"
+        :query="mentionQuery"
+        @select="insertReference"
+      />
+      <textarea
+        id="agent-message"
+        ref="message"
+        v-model="content"
+        :aria-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
+        :disabled="runningHere"
+        rows="2"
+        maxlength="16000"
+        :placeholder="placeholder"
+        @input="updateMentionState"
+        @click="updateMentionState"
+        @keyup.left="updateMentionState"
+        @keyup.right="updateMentionState"
+        @blur="mentionOpen = false"
+        @keydown="onKeydown"
+        @keydown.enter.exact.prevent="onEnter"
+      />
+      <div class="agent-input-footer">
+        <AttachmentPicker
+          ref="attachmentPicker"
+          :project="project"
+          :context-key="`${view}:${compact}:${dockCollapsed}`"
+          v-model="attachmentIds"
+          @settings="setPage('settings')"
+        />
+        <span v-if="counter > 15000" class="agent-counter near">{{ counter }}/16000</span>
+        <button
+          v-if="runningHere"
+          type="button"
+          class="stop-agent"
+          aria-label="停止当前请求"
+          title="停止当前请求"
+          @click="agent.stop"
+        >
+          <Square :size="14" aria-hidden="true" />
+        </button>
+        <button
+          v-else
+          type="submit"
+          class="send-button"
+          :aria-label="answering ? '发送回答' : '发送修改建议'"
+          :disabled="!canSend"
+        >
+          <ArrowUp :size="20" aria-hidden="true" />
+        </button>
+      </div>
+    </form>
+    <div
+      v-if="blocker && (content.trim() || runningHere || runningElsewhere || attachmentTransfer)"
+      class="agent-blocker"
+      role="status"
+    >
+      {{ blocker.text
+      }}<button v-if="blocker.action" type="button" class="text-button" @click="runBlockerAction">
+        {{ blocker.action }}
+      </button>
     </div>
   </section>
 </template>
@@ -572,8 +602,8 @@ function choose(option: string) {
 }
 .agent-review {
   flex: 0 1 auto;
-  min-height: 36px;
-  max-height: min(220px, 30dvh);
+  min-height: 0;
+  max-height: clamp(80px, calc(100dvh - 740px), 200px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -597,8 +627,7 @@ function choose(option: string) {
   font-size: 11px;
 }
 .agent-dock.is-collapsed {
-  padding-top: 8px;
-  padding-bottom: 8px;
+  padding: 0;
 }
 .agent-dock.is-collapsed .agent-dock-heading {
   margin-bottom: 0;

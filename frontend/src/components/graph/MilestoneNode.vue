@@ -37,8 +37,10 @@ defineProps<{
         {{ data.milestone.origin === 'source' ? '已实现 · 基线' : data.milestone.id }}</span
       ><ArrowUpRight :size="13" class="node-arrow" />
     </div>
-    <h3>{{ data.milestone.title }}</h3>
-    <div class="node-scope"><Code2 :size="12" /> {{ data.milestone.scope[0] }}</div>
+    <h3 :title="data.milestone.title">{{ data.milestone.title }}</h3>
+    <div class="node-scope" :title="data.milestone.scope[0]">
+      <Code2 :size="12" /> {{ data.milestone.scope[0] }}
+    </div>
     <div class="node-bottom">
       <StatusBadge
         v-if="data.milestone.origin !== 'source'"

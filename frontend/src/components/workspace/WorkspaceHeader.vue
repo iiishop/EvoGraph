@@ -28,8 +28,8 @@ const acceptance = computed(() => acceptanceSummary(props.project));
     </div>
     <div class="title-row">
       <div>
-        <h1>{{ project.name }}<span class="title-tag">演化工作台</span></h1>
-        <p>
+        <h1 :title="project.name">{{ project.name }}</h1>
+        <p :title="project.description">
           {{ project.description || '让每一步演化，都有明确的目标和依据。' }}
         </p>
         <div

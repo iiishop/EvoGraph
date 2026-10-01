@@ -23,7 +23,7 @@ function edit() {
 onMounted(init);
 </script>
 <template>
-  <div class="app-shell">
+  <div class="app-shell spatial-app">
     <AppSidebar @create="create" />
     <div class="app-main">
       <div v-if="state.loading" class="loading-screen">
