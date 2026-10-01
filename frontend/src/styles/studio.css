@@ -589,6 +589,56 @@ html[data-sidebar='collapsed'] .app-main {
 .behavior-contract small {
   color: var(--muted);
 }
+.acceptance-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+.acceptance-heading > span {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.acceptance-explanation {
+  margin: 0 0 14px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.behavior-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+.behavior-meta small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+.acceptance-scope {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d6e2e9;
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: #eef3f6;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.acceptance-scope.milestone {
+  border-color: #e5dfd3;
+  background: #f7f5ef;
+  color: #7b6b4f;
+}
+.behavior-contract .acceptance-excluded {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+}
 .scope-path {
   background: #f3f6f8;
   color: var(--text-secondary);

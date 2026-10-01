@@ -53,3 +53,44 @@ def test_empty_project_is_not_a_design_failure(app):
     assert report["status"] == "structural_checks_clear"
     assert report["findings"] == []
     assert "不代表验收通过" in report["limitation"]
+
+
+def test_review_flags_stage_only_plan_without_reclassifying_behaviors(planned):
+    for behavior in planned.behaviors:
+        behavior.acceptance_scope = "milestone"
+    before = planned.model_dump()
+    report = review_design(planned)
+    warning = next(f for f in report["findings"] if f["code"] == "target_coverage_missing")
+    assert warning["severity"] == "review"
+    assert "最终目标标准" in warning["message"]
+    assert planned.model_dump() == before
+
+
+def test_review_ignores_historical_target_behaviors_when_current_plan_is_stage_only(planned):
+    from evograph.domain.models import BehaviorRevision
+
+    planned.behaviors.append(
+        BehaviorRevision(
+            behavior_key="retired.target", version=1, statement="Past target", owner="removed"
+        )
+    )
+    for behavior in planned.behaviors:
+        if behavior.id in planned.milestones[0].behavior_revision_ids:
+            behavior.acceptance_scope = "milestone"
+    codes = {f["code"] for f in review_design(planned)["findings"]}
+    assert "target_coverage_missing" in codes
+
+
+def test_review_accepts_mixed_target_and_step_coverage(planned):
+    from evograph.domain.models import BehaviorRevision
+
+    temporary = BehaviorRevision(
+        behavior_key="step.csv",
+        version=1,
+        statement="CSV writes work during migration",
+        owner=planned.milestones[0].id,
+        acceptance_scope="milestone",
+    )
+    planned.behaviors.append(temporary)
+    planned.milestones[0].behavior_revision_ids.append(temporary.id)
+    assert "target_coverage_missing" not in {f["code"] for f in review_design(planned)["findings"]}

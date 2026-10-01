@@ -10,6 +10,7 @@ from ..domain.models import (
     TargetVersion,
 )
 from ..domain.policies import MAX_WORKING_MILESTONES, obligations, validate_milestones
+from ..domain.target_contract import required_target_behavior_ids
 
 
 class GraphEditor:
@@ -47,7 +48,12 @@ class GraphEditor:
                     dependencies=dependencies,
                     dependency_reasons={d: node.dependency_reasons[d] for d in dependencies},
                     behaviors=[
-                        {"key": b.behavior_key, "statement": b.statement} for b in behaviors
+                        {
+                            "key": b.behavior_key,
+                            "statement": b.statement,
+                            "acceptance_scope": b.acceptance_scope,
+                        }
+                        for b in behaviors
                     ],
                 )
             )
@@ -117,10 +123,24 @@ class GraphEditor:
             raise ValueError("引用的资料不存在")
         before = [m.model_dump() for m in p.milestones]
         bids = []
+        existing_behaviors = {
+            b.behavior_key: b for b in p.behaviors if old and b.id in old.behavior_revision_ids
+        }
         for behavior in proposed.behaviors:
+            scope = behavior.acceptance_scope
+            if (
+                "acceptance_scope" not in behavior.model_fields_set
+                and behavior.key in existing_behaviors
+            ):
+                scope = existing_behaviors[behavior.key].acceptance_scope
             versions = [b for b in p.behaviors if b.behavior_key == behavior.key]
             latest = versions[-1] if versions else None
-            if latest and latest.owner == proposed.id and latest.statement == behavior.statement:
+            if (
+                latest
+                and latest.owner == proposed.id
+                and latest.statement == behavior.statement
+                and latest.acceptance_scope == scope
+            ):
                 bids.append(latest.id)
             else:
                 if (
@@ -136,6 +156,7 @@ class GraphEditor:
                 b = BehaviorRevision(
                     behavior_key=behavior.key,
                     statement=behavior.statement,
+                    acceptance_scope=scope,
                     owner=proposed.id,
                     version=latest.version + 1 if latest else 1,
                     supersedes=latest.id if latest else None,
@@ -249,7 +270,7 @@ class GraphEditor:
         p = self.db.get(project_id)
         if not p.milestones and not p.targets and not p.target_draft:
             return removed
-        required = [bid for m in p.milestones for bid in m.behavior_revision_ids]
+        required = required_target_behavior_ids(p.milestones, p.behaviors)
         statement = p.target_draft or (
             p.targets[-1].statement if p.targets else p.description or p.name
         )

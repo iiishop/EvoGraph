@@ -16,6 +16,7 @@ export interface Behavior {
   behavior_key: string;
   version: number;
   statement: string;
+  acceptance_scope?: 'target' | 'milestone';
   owner: string;
   supersedes: string | null;
 }
@@ -85,7 +86,11 @@ export interface Proposal {
     intent: string;
     scope: string[];
     dependencies: string[];
-    behaviors: { key: string; statement: string }[];
+    behaviors: {
+      key: string;
+      statement: string;
+      acceptance_scope?: 'target' | 'milestone';
+    }[];
   }[];
 }
 export interface Attachment {

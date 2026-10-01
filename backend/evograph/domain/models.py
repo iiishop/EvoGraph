@@ -33,6 +33,10 @@ class BehaviorRevision(Model):
     behavior_key: str
     version: int
     statement: str
+    acceptance_scope: Literal["target", "milestone"] = Field(
+        default="target",
+        description="Both scopes require milestone acceptance; only target counts toward the final goal.",
+    )
     owner: str
     supersedes: str | None = None
 
@@ -117,6 +121,14 @@ class Milestone(Model):
 class ProposedBehavior(Model):
     key: str = Field(min_length=1, max_length=100)
     statement: str = Field(min_length=1, max_length=1000)
+    acceptance_scope: Literal["target", "milestone"] = Field(
+        default="target",
+        description=(
+            "target is a lasting final-state requirement; milestone is a local or transitional "
+            "step check. Both are mandatory for milestone acceptance. Omit on incremental updates "
+            "to preserve an existing behavior's scope; new behaviors default to target."
+        ),
+    )
 
 
 class ProposedMilestone(Model):

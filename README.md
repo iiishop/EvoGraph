@@ -40,10 +40,25 @@ Change the code afterwards and that evidence goes stale. The artifact that passe
 |---|---|
 | Target version | The acceptance contract: the target statement plus the behaviors that must hold |
 | Milestone | One independently verifiable unit of evolution: scope, resources, change types, prerequisite edges |
-| Behavior revision | A stable behavior key with a versioned statement. Editing a statement creates a new revision; the old one stays in history |
+| Behavior revision | A stable behavior key with a versioned statement and acceptance scope. Editing either creates a new revision; the old one stays in history |
 | Baseline | A snapshot of the repository: file count, git commit, and a sha256 fingerprint over relative paths and file contents |
 | Evidence | The result of a local command, pinned to a milestone, the milestone's behavior revisions, and one baseline |
 | Current evidence | Evidence whose baseline id and fingerprint both match the latest baseline and whose result is PASS. Everything else is stale |
+
+## Final goals and step acceptance
+
+A roadmap can contain temporary states. For example, a first PR may write inventory to CSV, while a later PR migrates writes to PostgreSQL and retires CSV persistence. Those two checks should not both become final requirements.
+
+Each proposed behavior supports `acceptance_scope`:
+
+- `target` (the default): a lasting requirement included in the final target contract
+- `milestone`: a local or transitional check, mandatory for its milestone but excluded from the final target contract
+
+Both incremental tools and full-plan proposals support this field. Set it explicitly when planning a transition; graph order does not determine final membership. The inspector labels each check, and the goal strip counts the exact behavior IDs in the latest committed target. A roadmap containing only milestone-scoped checks has no final acceptance contract yet and is never shown as achieved.
+
+Existing projects and proposals without the field retain `target` semantics. A scope change creates a new behavior revision; previous targets and evidence are retained. An incremental update that omits the scope on an unchanged active behavior preserves that behavior's scope.
+
+This distinction is about final-goal membership. It does not waive step acceptance, make old evidence current, or discharge historical prerequisites: milestone acceptance still checks every behavior, prerequisites still require current-baseline evidence, and evidence results remain aggregated per milestone. It does not automatically detect all contradictory requirements or make a completed final goal equivalent to every roadmap step passing.
 
 ## What the graph enforces
 

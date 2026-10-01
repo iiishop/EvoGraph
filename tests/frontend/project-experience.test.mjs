@@ -31,6 +31,11 @@ const imports = {
   '../ui/AppModal.vue': moduleUrl(
     'export default { props: ["title"], emits: ["close"], setup(_, { slots }) { return () => slots.default?.(); } };',
   ),
+  '../../lib/acceptance': moduleUrl(
+    transpile(
+      readFileSync(new URL('../../frontend/src/lib/acceptance.ts', import.meta.url), 'utf8'),
+    ),
+  ),
   '../../lib/presentation': moduleUrl(
     transpile(
       readFileSync(new URL('../../frontend/src/lib/presentation.ts', import.meta.url), 'utf8'),

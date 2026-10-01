@@ -64,29 +64,54 @@
 .inline-question .question-options button {
   padding: 5px 10px;
 }
+.milestone-stage > .graph-canvas {
+  display: flex;
+  flex-direction: column;
+}
+.milestone-stage > .graph-canvas > .vue-flow {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.milestone-stage > .graph-canvas > .empty-state {
+  flex: 1;
+  min-height: 0;
+}
+.milestone-stage > .graph-canvas > .edge-legend {
+  position: static;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 13px;
+  border-top: 1px solid #e6ecef;
+  background: #fff;
+}
 .goal-marker {
-  position: absolute;
-  z-index: 4;
-  top: 12px;
-  left: 14px;
-  max-width: min(470px, 65%);
+  position: relative;
+  flex-shrink: 0;
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 10px 13px;
-  background: #ffffffed;
-  border: 1px solid #dce9e3;
-  border-radius: 10px;
-  box-shadow: 0 4px 18px #1f554608;
-  color: #5c8575;
+  padding: 9px 13px;
+  background: #fff;
+  border-bottom: 1px solid #dce5e9;
+  color: #365e73;
 }
-.goal-marker div {
+.goal-marker > svg {
+  flex-shrink: 0;
+}
+.goal-marker .goal-copy {
+  flex: 1;
   min-width: 0;
 }
 .goal-marker small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 9px;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.2px;
   margin-bottom: 4px;
 }
 .goal-marker strong {
@@ -97,13 +122,33 @@
   font-size: 11px;
   font-weight: 500;
 }
-.goal-marker > span {
-  font-size: 11px;
+.goal-marker .goal-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #596a77;
   white-space: nowrap;
 }
+.goal-counts b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
+}
 .goal-marker.achieved {
-  border-color: #65b08d;
-  background: #edf9f1;
+  border-color: #b4d4c5;
+  background: #f1f8f4;
+  color: #28715d;
+}
+.goal-marker.needs-target {
+  background: #f8fafb;
+  color: #596a77;
+}
+.goal-guidance {
+  margin: 4px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
 }
 .design-panel {
   flex: 1;

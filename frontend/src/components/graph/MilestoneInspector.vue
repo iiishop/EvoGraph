@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { X } from 'lucide-vue-next';
 import type { Milestone, Project } from '../../types';
+import { acceptanceScope, acceptanceSummary } from '../../lib/acceptance';
 import { useWorkspace } from '../../composables/useWorkspace';
 import StatusBadge from '../ui/StatusBadge.vue';
 import AssetPreview from '../attachments/AssetPreview.vue';
@@ -19,6 +20,10 @@ watch(
 );
 const behaviors = computed(() =>
   props.project.behaviors.filter((b) => props.milestone.behavior_revision_ids.includes(b.id)),
+);
+const acceptance = computed(() => acceptanceSummary(props.project));
+const targetCount = computed(
+  () => behaviors.value.filter((behavior) => acceptance.value.targetIds.has(behavior.id)).length,
 );
 const evidence = computed(() =>
   props.project.evidence
@@ -77,11 +82,29 @@ const uml = computed(() =>
             }}</code>
           </section>
           <section>
-            <h3>验收标准</h3>
-            <ol class="behavior-contract">
+            <h3 class="acceptance-heading">
+              验收标准
+              <span>计入最终目标 {{ targetCount }} / 本步共 {{ behaviors.length }} 项</span>
+            </h3>
+            <p class="acceptance-explanation">
+              最终目标要求持续成立；阶段检查仅约束本步。两类都必须通过本步验收。
+            </p>
+            <p v-if="!behaviors.length" class="muted">尚未定义本步验收标准。</p>
+            <ol v-else class="behavior-contract">
               <li v-for="b in behaviors" :key="b.id">
                 <p>{{ b.statement }}</p>
-                <small>{{ b.behavior_key }} · v{{ b.version }}</small>
+                <div class="behavior-meta">
+                  <span class="acceptance-scope" :class="acceptanceScope(b)">
+                    {{ acceptanceScope(b) === 'milestone' ? '阶段检查' : '最终目标要求' }}
+                  </span>
+                  <small>{{ b.behavior_key }} · v{{ b.version }}</small>
+                </div>
+                <small
+                  v-if="acceptanceScope(b) === 'target' && !acceptance.targetIds.has(b.id)"
+                  class="acceptance-excluded"
+                >
+                  未纳入当前目标版本
+                </small>
               </li>
             </ol>
           </section>

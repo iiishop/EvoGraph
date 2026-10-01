@@ -54,6 +54,20 @@ def milestone_contracts(project):
 
 
 @rule
+def target_coverage(project):
+    active_ids = {bid for m in project.milestones for bid in m.behavior_revision_ids}
+    if active_ids and not any(
+        b.id in active_ids and b.acceptance_scope == "target" for b in project.behaviors
+    ):
+        yield finding(
+            "target_coverage_missing",
+            "project",
+            "当前仅有本步验收，尚未定义最终目标标准",
+            "补充最终交付时仍需成立的行为，并标记为 target；不要把临时要求自动提升为最终目标",
+        )
+
+
+@rule
 def architecture_traceability(project):
     if not project.architectures:
         if project.milestones:
@@ -122,7 +136,8 @@ def architecture_traceability(project):
 
 
 SEMANTIC_REVIEW = [
-    "目标中的每项结果是否有交付行为覆盖？是否有无关或重复工作？",
+    "目标中的每项结果是否由 target 行为覆盖？临时或过渡验收是否标为 milestone，并仍保留在本步契约中？",
+    "是否有无关或重复工作？最终目标与每一步的验收标准是否各自清楚？",
     "每个里程碑能否独立合并、说明价值，并让外部验收者按触发条件验证结果？",
     "每条前置边是否确实阻塞交付，而非技术关联或人为串行？",
     "架构职责、接口、数据所有权与信任边界是否一致，关键失败路径是否可恢复？",

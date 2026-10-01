@@ -9,6 +9,7 @@ import {
   FolderOpen,
 } from 'lucide-vue-next';
 import type { Project } from '../../types';
+import { acceptanceSummary } from '../../lib/acceptance';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useBaseline } from '../../composables/useBaseline';
 const props = defineProps<{ project: Project }>();
@@ -16,6 +17,7 @@ defineEmits<{ edit: [] }>();
 const { state } = useWorkspace();
 const baseline = useBaseline();
 const latestBaseline = computed(() => props.project.baselines.at(-1));
+const acceptance = computed(() => acceptanceSummary(props.project));
 </script>
 <template>
   <header class="workspace-header">
@@ -68,7 +70,7 @@ const latestBaseline = computed(() => props.project.baselines.at(-1));
     </div>
     <div class="version-strip">
       <span
-        ><span class="version-letter target">T</span> 目标
+        ><span class="version-letter target">T</span> 最终目标
         <strong>V{{ project.targets.at(-1)?.number ?? 0 }}</strong></span
       ><i></i
       ><span
@@ -88,11 +90,11 @@ const latestBaseline = computed(() => props.project.baselines.at(-1));
         ><span class="progress-track"
           ><span
             :style="{
-              width: `${project.acceptance.total ? (project.acceptance.passed / project.acceptance.total) * 100 : 0}%`,
+              width: `${acceptance.total ? (acceptance.passed / acceptance.total) * 100 : 0}%`,
             }"
           ></span></span
-        ><strong>{{ project.acceptance.passed }} / {{ project.acceptance.total }}</strong>
-        行为已验证</span
+        ><strong>{{ acceptance.passed }} / {{ acceptance.total }}</strong>
+        {{ acceptance.total ? '最终目标已验证' : '尚未定义最终目标标准' }}</span
       >
     </div>
   </header>

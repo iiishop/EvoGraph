@@ -28,7 +28,7 @@ class Target(Model):
 
 @tool(
     "create_milestone",
-    "Create one independently verifiable milestone in the current graph. Dependencies must already exist. Behavior keys must be unique across active nodes.",
+    "Create one independently verifiable milestone in the current graph. Dependencies must already exist. Behavior keys must be unique across active nodes. Set behavior acceptance_scope to target for lasting final-state requirements or milestone for local/transitional checks. Both remain mandatory milestone acceptance; new behaviors default to target.",
     ProposedMilestone,
     label="创建里程碑",
     effect="created",
@@ -40,7 +40,7 @@ def create_milestone(ctx, args):
 
 @tool(
     "update_milestone",
-    "Update an existing milestone in place. Supply the full node definition. Preserve stable id and unchanged behavior keys; changed behavior statements create revisions.",
+    "Update an existing milestone in place. Supply the full node definition. Preserve stable id and unchanged behavior keys; changed statements or acceptance_scope create revisions. Preserve existing scopes: omitted acceptance_scope retains the active behavior's scope, while new behaviors default to target. Both scopes remain mandatory milestone acceptance.",
     ProposedMilestone,
     label="更新里程碑",
     effect="updated",
@@ -88,7 +88,7 @@ def remove_dependency(ctx, args):
 
 @tool(
     "set_target",
-    "Set the current target statement when user intent changes. The final acceptance contract is derived from active behavior revisions at the end of this turn.",
+    "Set the current target statement when user intent changes. The final acceptance contract is derived only from active target-scope behavior revisions at the end of this turn. Milestone-scope checks remain mandatory for their own milestone but do not count toward the final goal.",
     Target,
     label="更新目标",
     effect="target",

@@ -45,7 +45,10 @@ class AcceptanceService:
             cls._list("变更类型", m.change_types),
             cls._list(
                 "必须满足的行为",
-                [f"{b.behavior_key}：{b.statement}" for b in behaviors],
+                [
+                    f"{b.behavior_key}（{'目标要求' if b.acceptance_scope == 'target' else '步骤验收，不计入最终目标'}）：{b.statement}"
+                    for b in behaviors
+                ],
             ),
             cls._list(
                 "已完成的前置任务",
@@ -136,7 +139,10 @@ class AcceptanceService:
             AcceptanceService._list("验收范围", m.scope),
             AcceptanceService._list(
                 "必须逐项判断的行为",
-                [f"{b.id} / {b.behavior_key}：{b.statement}" for b in behaviors],
+                [
+                    f"{b.id} / {b.behavior_key}（{'目标要求' if b.acceptance_scope == 'target' else '步骤验收，不计入最终目标'}）：{b.statement}"
+                    for b in behaviors
+                ],
             ),
             AcceptanceService._acceptance_architecture_brief(architecture, components, m),
             AcceptanceService._list(
