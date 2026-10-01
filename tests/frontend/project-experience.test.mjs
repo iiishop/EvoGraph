@@ -17,6 +17,11 @@ const transpile = (code) =>
 const turnSummaryUrl = moduleUrl(transpile(readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8')));
 const imports = {
   '../../lib/turnSummary': turnSummaryUrl,
+  '../../composables/useAgentDrafts': moduleUrl(
+    transpile(
+      readFileSync(new URL('../../frontend/src/composables/useAgentDrafts.ts', import.meta.url), 'utf8'),
+    ).replace("from 'vue'", `from ${JSON.stringify(pathToFileURL(require.resolve('vue')).href)}`),
+  ),
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../composables/useWorkspace': moduleUrl(`export const workspace = {

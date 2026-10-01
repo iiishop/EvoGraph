@@ -13,10 +13,20 @@ const notificationsCode=compile('../../frontend/src/composables/useNotifications
 const {useNotifications}=await import(data(notificationsCode));
 
 test('updates describe changed fields and never exceed 86 characters',()=>{
- const before={milestones:[{id:'A',title:'登录',scope:['old']}],architectures:[],uml_diagrams:[],diagrams:[],targets:[]};
+ const before={id:'P1',name:'登录项目',milestones:[{id:'A',title:'登录',scope:['old']}],architectures:[],uml_diagrams:[],diagrams:[],targets:[]};
  const after={...before,milestones:[{...before.milestones[0],scope:['new']}]};
  assert.equal(changeSummary(before,after),'「登录」更新范围');
  assert.equal(Array.from(truncate('字'.repeat(100))).length,86);
+});
+
+test('background updates never compare unrelated project snapshots',()=>{
+ const selected={id:'B',name:'库存项目',milestones:[{id:'B1',title:'库存校验'}],architectures:[],uml_diagrams:[],diagrams:[],targets:[]};
+ const updated={id:'A',name:'目录项目',milestones:[{id:'A1',title:'目录查询'}],architectures:[{number:2}],uml_diagrams:[],diagrams:[],targets:[{}]};
+ for(const previous of [selected,null]) {
+  const summary=changeSummary(previous,updated,'更新里程碑');
+  assert.equal(summary,'「目录项目」更新里程碑');
+  assert.doesNotMatch(summary,/新增|移除|架构更新|项目目标已更新/);
+ }
 });
 
 test('new notices append below old notices and expire independently at five seconds',t=>{

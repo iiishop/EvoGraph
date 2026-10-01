@@ -25,6 +25,12 @@ const imports = {
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../lib/turnSummary': summaryUrl,
+  '../../composables/useAgentDrafts': moduleUrl(
+    transpile(read('composables/useAgentDrafts.ts')).replace(
+      "from 'vue'",
+      `from ${JSON.stringify(pathToFileURL(require.resolve('vue')).href)}`,
+    ),
+  ),
   '../../api/client': moduleUrl('export const command = async () => ({ items: [] });'),
   '../../composables/useWorkspace': moduleUrl(`export const useWorkspace = () => ({
     state: { busy: false, settings: { provider: { config: { model: 'test' } } } },

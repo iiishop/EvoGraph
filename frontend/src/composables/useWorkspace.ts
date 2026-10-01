@@ -3,6 +3,7 @@ import { command, readyTransport } from '../api/client';
 import type { Project, ProjectSummary, Settings } from '../types';
 import type { PageId } from '../lib/navigation';
 import { useNotifications } from './useNotifications';
+import { agentDrafts } from './useAgentDrafts';
 
 const state = reactive({
   projects: [] as ProjectSummary[],
@@ -16,36 +17,83 @@ const state = reactive({
   page: 'projects' as PageId,
   selectedId: null as string | null,
 });
+// User navigation and background refreshes have different ordering domains.
+// A refresh must never become a newer selection intent merely by starting later.
 let selectSequence = 0;
+let refreshSequence = 0;
+let pendingSelection: { id: string; sequence: number } | null = null;
 
-async function loadProject(id: string) {
+async function loadProject(id: string, navigate = false) {
   const sequence = ++selectSequence;
-  const project = await command<Project>('projects.get', { project_id: id });
-  if (sequence === selectSequence) {
+  pendingSelection = { id, sequence };
+  if (navigate) {
+    state.page = 'projects';
+    state.selectedId = null;
+  }
+  state.error = '';
+  try {
+    const project = await command<Project>('projects.get', { project_id: id });
+    if (sequence !== selectSequence) return;
+    agentDrafts.activate(id);
     state.project = project;
     localStorage.setItem('evograph.project', id);
+  } catch (error) {
+    if (sequence === selectSequence) state.error = String(error);
+  } finally {
+    if (pendingSelection?.sequence === sequence) pendingSelection = null;
   }
 }
 
-async function refresh() {
-  const [projects, settings] = await Promise.all([
-    command<ProjectSummary[]>('projects.list'),
-    command<Settings>('settings.get'),
-  ]);
-  state.projects = [...new Map(projects.map((p) => [p.id, p])).values()];
-  state.settings = settings;
-  if (state.project && !state.projects.some((p) => p.id === state.project!.id)) {
-    // 删掉的正好是当前项目时不再自动跳到列表第一个：主区域回到空态，
-    // 用户还能在 toast 里撤销删除，而不是被静默换到另一个项目。
+function discardProject(id: string) {
+  agentDrafts.discard(id);
+  // Deleting the rendered A must not cancel an in-flight user selection of B.
+  if (pendingSelection?.id === id || (!pendingSelection && state.project?.id === id)) {
+    selectSequence++;
+    pendingSelection = null;
+  }
+  if (state.project?.id === id) {
     state.project = null;
     state.selectedId = null;
-  } else if (state.project) await loadProject(state.project.id);
+  }
+  state.projects = state.projects.filter((project) => project.id !== id);
+}
+
+async function refresh() {
+  const sequence = ++refreshSequence;
+  const selection = selectSequence;
+  const projectId = state.project?.id;
+  const selecting = Boolean(pendingSelection);
+  const current = () => sequence === refreshSequence && selection === selectSequence;
+  try {
+    const [projects, settings] = await Promise.all([
+      command<ProjectSummary[]>('projects.list'),
+      command<Settings>('settings.get'),
+    ]);
+    if (sequence !== refreshSequence) return;
+    state.projects = [...new Map(projects.map((p) => [p.id, p])).values()];
+    state.settings = settings;
+    // A list fetched across a selection may predate that project (for example,
+    // creation or restore). It is not authority to discard the newer draft.
+    if (!current() || selecting || pendingSelection) return;
+    agentDrafts.retain(state.projects.map((project) => project.id));
+    if (state.project && !state.projects.some((p) => p.id === state.project!.id)) {
+      discardProject(state.project.id);
+      return;
+    }
+    if (!projectId || state.project?.id !== projectId) return;
+    const project = await command<Project>('projects.get', { project_id: projectId });
+    if (current() && !pendingSelection && state.project?.id === projectId) state.project = project;
+  } catch (error) {
+    // Superseded refresh failures are as stale as superseded project data.
+    if (current()) throw error;
+  }
 }
 
 async function perform<T>(
   action: string,
   params: object = {},
   notice = '',
+  onSuccess?: (result: T) => void,
 ): Promise<T | undefined> {
   if (state.busy) return undefined;
   state.busy = true;
@@ -53,6 +101,7 @@ async function perform<T>(
   state.notice = '';
   try {
     const result = await command<T>(action, params);
+    onSuccess?.(result);
     await refresh();
     useNotifications().push(notice);
     return result;
@@ -66,6 +115,7 @@ async function perform<T>(
 }
 
 async function init() {
+  const selection = selectSequence;
   state.loading = true;
   state.error = '';
   try {
@@ -74,23 +124,16 @@ async function init() {
     await refresh();
     const saved = localStorage.getItem('evograph.project');
     const id = state.projects.find((p) => p.id === saved)?.id ?? state.projects[0]?.id;
-    if (id) await loadProject(id);
+    if (id && selection === selectSequence) await loadProject(id);
   } catch (error) {
-    state.error = String(error);
+    if (selection === selectSequence) state.error = String(error);
   } finally {
     state.loading = false;
   }
 }
 
 async function selectProject(id: string) {
-  state.page = 'projects';
-  state.selectedId = null;
-  state.error = '';
-  try {
-    await loadProject(id);
-  } catch (error) {
-    state.error = String(error);
-  }
+  await loadProject(id, true);
 }
 
 export function useWorkspace() {
@@ -110,16 +153,22 @@ export function useWorkspace() {
       state.busy = value;
     },
     deleteProject: async (project: ProjectSummary) => {
-      const result = await perform<{ deleted: boolean }>('projects.delete', {
-        project_id: project.id,
-      });
-      if (result?.deleted) {
-        state.deletedProject = { id: project.id, name: project.name };
-        state.notice = `已删除「${project.name}」，仓库文件保留`;
-      }
+      await perform<{ deleted: boolean }>(
+        'projects.delete',
+        { project_id: project.id },
+        '',
+        (result) => {
+          if (!result.deleted) return;
+          // Clear as soon as deletion is confirmed, even if refresh fails.
+          discardProject(project.id);
+          state.deletedProject = { id: project.id, name: project.name };
+          state.notice = `已删除「${project.name}」，仓库文件保留`;
+        },
+      );
     },
     undoDelete: async () => {
       if (!state.deletedProject) return;
+      const selection = selectSequence;
       const result = await perform<Project>(
         'projects.restore',
         { project_id: state.deletedProject.id },
@@ -127,7 +176,7 @@ export function useWorkspace() {
       );
       if (result) {
         state.deletedProject = null;
-        await selectProject(result.id);
+        if (selection === selectSequence) await selectProject(result.id);
       }
     },
     selected: computed(

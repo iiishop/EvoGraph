@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
 import AgentTurnSummary from './AgentTurnSummary.vue';
 import { latestTurnSummary } from '../../lib/turnSummary';
@@ -9,6 +9,7 @@ import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
 import { ArrowUp, Orbit, Square, CornerDownLeft, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { useAgent } from '../../composables/useAgent';
+import { agentDrafts, useAgentDraft, type DraftAttempt } from '../../composables/useAgentDrafts';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
@@ -21,10 +22,15 @@ const latestReply = computed(() =>
 );
 const turnSummary = computed(() => latestTurnSummary(props.project));
 const agent = useAgent();
-const { state, setPage, setError } = useWorkspace();
-
-const content = ref('');
-const attachmentIds = ref<string[]>([]);
+const { state, setPage, setError, selectProject } = useWorkspace();
+const { content, attachmentIds, failures, pending, failureRestored } = useAgentDraft(
+  () => props.project.id,
+);
+const failedAttempt = computed(() => failures.value[0]);
+let mounted = true;
+onUnmounted(() => {
+  mounted = false;
+});
 const message = ref<HTMLTextAreaElement>();
 const attachmentPicker = ref<InstanceType<typeof AttachmentPicker>>();
 const mentionPicker = ref<InstanceType<typeof ReferenceMentionPicker>>();
@@ -35,18 +41,9 @@ const mentionOpen = ref(false);
 const mentionQuery = ref('');
 const mentionStart = ref(0);
 const mentionCursor = ref(0);
-// Drafts survive a trip to another project and back.
-const drafts = new Map<string, { text: string; ids: string[] }>();
-const failedAttempt = ref<{ text: string; ids: string[]; questionId?: string } | null>(null);
-
 watch(
   () => props.project.id,
-  (next, previous) => {
-    if (previous) drafts.set(previous, { text: content.value, ids: [...attachmentIds.value] });
-    const saved = drafts.get(next);
-    content.value = saved?.text ?? '';
-    attachmentIds.value = saved?.ids ?? [];
-    failedAttempt.value = null;
+  () => {
     references.value = [];
     referencesLoadedFor.value = '';
     mentionOpen.value = false;
@@ -88,6 +85,7 @@ const blocker = computed(() => {
   // 运行中时不再给提示行挂"停止"：右侧停止按钮就在同一行，重复一个操作
   if (runningHere.value) return { text: '上一轮仍在处理，可随时停止', action: '' };
   if (state.busy) return { text: '正在处理上一步操作', action: '' };
+  if (pending.value) return { text: '正在确认上一条请求的结果', action: '' };
   return null;
 });
 const canSend = computed(() => Boolean(content.value.trim()) && !blocker.value);
@@ -109,36 +107,45 @@ watch(
 
 function runBlockerAction() {
   if (!state.settings?.provider) return setPage('settings');
-  if (runningElsewhere.value) return setPage('projects');
+  if (runningElsewhere.value) return selectProject(agent.state.projectId);
+}
+
+async function deliver(attempt: DraftAttempt) {
+  let delivered = false;
+  try {
+    delivered = await agent.send(
+      attempt.projectId,
+      attempt.text.trim(),
+      attempt.questionId,
+      attempt.ids,
+    );
+  } catch (error) {
+    setError(error instanceof Error ? error.message : '请求未完成');
+  }
+  const restored = agentDrafts.settle(attempt, delivered);
+  if (restored && mounted && props.project.id === attempt.projectId) {
+    await nextTick();
+    if (mounted && props.project.id === attempt.projectId) message.value?.focus();
+  }
 }
 
 async function submit(text = content.value, questionId = props.project.question?.id) {
-  const value = text.trim();
   mentionOpen.value = false;
-  // 判的是"这一条内容能不能发"，而不是"输入框里有没有东西"：点选项走的就是这条路
-  if (!value || blocker.value) return;
-  const ids = [...attachmentIds.value];
-  failedAttempt.value = null;
-  content.value = '';
-  attachmentIds.value = [];
-  const ok = await agent.send(props.project.id, value, questionId, ids);
-  if (ok) return;
-  // Hand the text back rather than dropping a paragraph the user just wrote.
-  const attempt = { text: value, ids, questionId };
-  failedAttempt.value = attempt;
-  content.value = attempt.text;
-  attachmentIds.value = attempt.ids;
-  await nextTick();
-  message.value?.focus();
+  // Keep the exact draft for recovery; trim only the submitted payload.
+  if (!text.trim() || blocker.value) return;
+  const attempt = agentDrafts.start(
+    props.project.id,
+    { text, ids: attachmentIds.value, questionId },
+    text === content.value || content.value === '',
+  );
+  if (attempt) await deliver(attempt);
 }
 
 async function retry() {
-  const attempt = failedAttempt.value;
-  if (!attempt) return;
-  content.value = attempt.text;
-  attachmentIds.value = attempt.ids;
-  await nextTick();
-  await submit(attempt.text, attempt.questionId);
+  const failure = failedAttempt.value;
+  if (!failure || blocker.value) return;
+  const attempt = agentDrafts.retry(props.project.id, failure.id);
+  if (attempt) await deliver(attempt);
 }
 
 function onEnter(event: KeyboardEvent) {
@@ -376,7 +383,7 @@ function choose(option: string) {
         ref="message"
         v-model="content"
         :aria-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
-        :disabled="agent.state.running"
+        :disabled="runningHere"
         rows="2"
         maxlength="16000"
         :placeholder="placeholder"
@@ -419,20 +426,45 @@ function choose(option: string) {
       </div>
     </form>
     <div v-show="!dockCollapsed" class="agent-dock-note" :class="{ failed: failedAttempt }">
-      <template v-if="failedAttempt"
-        >本轮未完成，内容已放回输入框；已保存的修改会保留。<button
+      <template v-if="failedAttempt">
+        {{
+          failureRestored
+            ? '本轮未完成，内容已放回输入框；已保存的修改会保留。'
+            : '未完成请求已保留，当前草稿未改动；已保存的修改会保留。'
+        }}
+        <details v-if="!failureRestored" class="agent-recovery">
+          <summary>查看未完成请求（{{ failures.length }}）</summary>
+          <p>{{ failedAttempt.text }}</p>
+          <small v-if="failedAttempt.ids.length">附带 {{ failedAttempt.ids.length }} 份资料</small>
+        </details>
+        <button type="button" class="text-button" :disabled="Boolean(blocker)" @click="retry">
+          重试这条请求
+        </button>
+        <button
           type="button"
           class="text-button"
-          @click="retry"
+          @click="agentDrafts.dismissFailure(project.id, failedAttempt.id)"
         >
-          重试
-        </button></template
+          {{ failureRestored ? '关闭提示' : '丢弃这条请求' }}
+        </button> </template
       ><template v-else>缺少信息时会向你提问 · 不会自动修改仓库代码</template>
     </div>
   </section>
 </template>
 
 <style scoped>
+/* Recovery actions remain reachable when small-window styles hide passive hints. */
+.agent-dock-note.failed {
+  display: block;
+}
+
+.agent-recovery p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
 /* History yields space before the composer or the graph can leave the viewport. */
 .agent-dock {
   display: flex;
