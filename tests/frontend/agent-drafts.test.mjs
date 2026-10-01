@@ -275,6 +275,7 @@ async function harness() {
     '../graph/MilestoneGraph.vue',
     '../graph/MilestoneInspector.vue',
     '../graph/SourceInspector.vue',
+    '../graph/MilestoneFinder.vue',
     './components/sidebar/AppSidebar.vue',
     './components/projects/ProjectDialog.vue',
     './components/ui/NotificationStack.vue',

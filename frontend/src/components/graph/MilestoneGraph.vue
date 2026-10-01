@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, watch, shallowRef } from 'vue';
+import { computed, nextTick, watch, shallowRef, onBeforeUnmount } from 'vue';
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
-import { GitBranch } from 'lucide-vue-next';
+import { GitBranch, Maximize } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
 import GraphEdge from './GraphEdge.vue';
 import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
@@ -11,6 +11,7 @@ import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
+import { fitMilestoneBounds, graphBounds, keepMilestoneVisible } from '../../lib/milestoneViewport';
 import BaselineMilestoneStatus from './BaselineMilestoneStatus.vue';
 import GoalMarker from './GoalMarker.vue';
 
@@ -21,7 +22,7 @@ const allMilestones = computed(() => [
   ...props.project.milestones,
 ]);
 const flowId = `milestones-${props.project.id}`;
-const { fitView, setCenter, findNode } = useVueFlow(flowId);
+const { dimensions, setViewport, getViewport } = useVueFlow(flowId);
 const { state, selectNode, perform } = useWorkspace();
 const agent = useAgent();
 const follows = computed(() => agent.state.follow[props.project.id] !== false);
@@ -123,22 +124,165 @@ const edges = computed(() =>
     })),
   ),
 );
+type CameraMode = 'overview' | 'selected' | 'agent' | 'manual';
+let cameraMode: CameraMode = 'overview';
+let focusedId = '';
+let readableFocus = false;
+let frame = 0;
+let disposed = false;
+let cameraSequence = 0;
+let applicationSequence = 0;
+let pendingApplication = 0;
+const size = computed(() => ({ width: dimensions.value.width, height: dimensions.value.height }));
+const overview = computed(() => fitMilestoneBounds(graphBounds(boxes.value), size.value));
+const minZoom = computed(() => Math.min(0.25, (overview.value?.zoom ?? 0.02) / 2));
+const duration = (milliseconds: number) =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 0
+    : milliseconds;
+
+function applyCamera(milliseconds = 0, sequence = cameraSequence) {
+  if (disposed || cameraMode === 'manual' || sequence !== cameraSequence) return;
+  const current = getViewport();
+  const focused = boxes.value.find((box) => box.id === focusedId);
+  const target =
+    cameraMode === 'overview'
+      ? overview.value
+      : focused
+        ? readableFocus
+          ? fitMilestoneBounds(focused, size.value, 0.95)
+          : keepMilestoneVisible(focused, size.value, current)
+        : null;
+  if (!target) return;
+  const unchanged =
+    Math.abs(target.x - current.x) < 0.01 &&
+    Math.abs(target.y - current.y) < 0.01 &&
+    Math.abs(target.zoom - current.zoom) < 0.00001;
+  if (unchanged && !pendingApplication) {
+    readableFocus = false;
+    return;
+  }
+  const application = ++applicationSequence;
+  pendingApplication = application;
+  void setViewport(target, { duration: unchanged ? 0 : duration(milliseconds) })
+    .then((applied) => {
+      if (disposed || sequence !== cameraSequence || application !== pendingApplication) return;
+      pendingApplication = 0;
+      // Resizing mid-animation must retain the readable target rather than
+      // adopting its intermediate overview zoom. Only the latest settled
+      // application can release that intent.
+      if (applied) readableFocus = false;
+    })
+    .catch(() => {
+      if (sequence === cameraSequence && application === pendingApplication) pendingApplication = 0;
+    });
+}
+function scheduleCamera(milliseconds = 0) {
+  const sequence = ++cameraSequence;
+  cancelAnimationFrame(frame);
+  if (disposed || cameraMode === 'manual') return;
+  // Inspector/composer updates and Vue Flow measurement settle before the
+  // camera uses the actual remaining viewport, not the previous frame's size.
+  frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      applyCamera(milliseconds, sequence);
+    });
+  });
+}
+function manual() {
+  stopCamera();
+  cameraMode = 'manual';
+  readableFocus = false;
+  agent.freeView(props.project.id);
+}
+function stopCamera() {
+  cameraSequence++;
+  cancelAnimationFrame(frame);
+  if (pendingApplication) {
+    pendingApplication = 0;
+    // A zero-duration transform interrupts Vue Flow's in-flight D3 transition
+    // without replacing the user's current pan/zoom position.
+    void setViewport(getViewport(), { duration: 0 });
+  }
+}
 function fit() {
   agent.freeView(props.project.id);
-  fitView({ padding: 0.17, maxZoom: 1, duration: 250 });
+  cameraMode = 'overview';
+  readableFocus = false;
+  scheduleCamera(250);
 }
 function initialized() {
-  fitView({ padding: 0.22, maxZoom: 1, duration: 0 });
+  scheduleCamera();
 }
-async function follow() {
+function locate(id: string) {
+  if (!allMilestones.value.some((milestone) => milestone.id === id)) return false;
+  agent.freeView(props.project.id);
+  cameraMode = 'selected';
+  focusedId = id;
+  readableFocus = true;
+  scheduleCamera(220);
+  return true;
+}
+function follow() {
   if (!follows.value || agent.state.projectId !== props.project.id) return;
-  await nextTick();
-  const node = findNode(agent.state.focusId);
-  if (node) setCenter(node.position.x + 118, node.position.y + 75, { zoom: 0.95, duration: 450 });
+  if (!allMilestones.value.some((milestone) => milestone.id === agent.state.focusId)) return;
+  cameraMode = 'agent';
+  focusedId = agent.state.focusId;
+  readableFocus = true;
+  scheduleCamera(450);
 }
 function moved({ event }: { event: unknown }) {
-  if (event) agent.freeView(props.project.id);
+  if (event) manual();
 }
+watch(
+  () => state.selectedId,
+  (id) => {
+    if (id) locate(id);
+    else {
+      stopCamera();
+      cameraMode = 'manual';
+      readableFocus = false;
+    }
+  },
+  { flush: 'sync' },
+);
+watch(
+  () => allMilestones.value.map((milestone) => milestone.id).join('\0'),
+  () => {
+    if (
+      state.selectedId &&
+      !allMilestones.value.some((milestone) => milestone.id === state.selectedId)
+    ) {
+      const automatic = cameraMode !== 'manual';
+      selectNode(null);
+      if (automatic) {
+        cameraMode = 'overview';
+        scheduleCamera();
+      }
+    }
+  },
+  { flush: 'sync' },
+);
+watch(boxes, () => scheduleCamera());
+watch(computedLayout, () => {
+  // A focus pulse can precede the graph's remount or the new node's layout.
+  // Preserve explicit Follow ownership until the node is actually available.
+  if (follows.value && agent.state.projectId === props.project.id) follow();
+});
+watch(
+  () => [size.value.width, size.value.height],
+  () => scheduleCamera(),
+);
+onBeforeUnmount(() => {
+  disposed = true;
+  cameraSequence++;
+  pendingApplication = 0;
+  layoutGeneration++;
+  cancelAnimationFrame(frame);
+});
+if (follows.value && agent.state.projectId === props.project.id) follow();
+else if (state.selectedId) locate(state.selectedId);
 async function reset() {
   await perform('graph.positions', {
     project_id: props.project.id,
@@ -148,8 +292,8 @@ async function reset() {
   fit();
 }
 watch(() => agent.state.pulse, follow);
-watch(computedLayout, follow);
-defineExpose({ fit, reset });
+
+defineExpose({ fit, reset, locate });
 </script>
 <template>
   <div class="milestone-stage">
@@ -161,7 +305,7 @@ defineExpose({ fit, reset });
         :id="flowId"
         :nodes="nodes"
         :edges="edges"
-        :min-zoom="0.25"
+        :min-zoom="minZoom"
         :max-zoom="1.6"
         :nodes-connectable="false"
         :nodes-draggable="!agent.state.running"
@@ -169,14 +313,25 @@ defineExpose({ fit, reset });
         :fit-view-on-init="false"
         @nodes-initialized="initialized"
         @move-start="moved"
-        @node-drag-start="agent.freeView(project.id)"
+        @node-drag-start="manual"
         @node-click="({ node }) => selectNode(node.id)"
         @pane-click="selectNode(null)"
         @node-drag-stop="dragged"
         ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
           :show-interactive="false"
           position="bottom-left"
-        /><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
+          @zoom-in="manual"
+          @zoom-out="manual"
+          ><template #control-fit-view
+            ><button
+              type="button"
+              class="vue-flow__controls-button"
+              title="适应画布"
+              aria-label="适应画布"
+              @click="fit"
+            >
+              <Maximize :size="16" /></button></template></Controls
+        ><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
         <template #edge-prerequisite="edgeProps"><GraphEdge v-bind="edgeProps" /></template>
       </VueFlow>
       <div v-else class="empty-state">

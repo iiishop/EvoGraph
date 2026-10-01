@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { workspaceViews } from '../../lib/workspaceViews';
-import { Maximize, RotateCcw } from 'lucide-vue-next';
+import { Maximize, RotateCcw, Search } from 'lucide-vue-next';
 defineProps<{ tab: string; count: number }>();
-defineEmits<{ tab: [tab: string]; fit: []; reset: [] }>();
+defineEmits<{ tab: [tab: string]; fit: []; reset: []; find: [] }>();
 const tabs = workspaceViews;
 </script>
 <template>
@@ -21,6 +21,15 @@ const tabs = workspaceViews;
       </button>
     </div>
     <div v-if="tab === 'graph'" class="graph-actions">
+      <button
+        class="icon-button"
+        type="button"
+        title="查找里程碑：ID、标题或范围"
+        aria-label="查找里程碑"
+        @click="$emit('find')"
+      >
+        <Search :size="15" />
+      </button>
       <span class="prerequisite-label">仅前置依赖</span
       ><button class="icon-button" title="自动布局" aria-label="自动布局" @click="$emit('reset')">
         <RotateCcw :size="15" /></button
@@ -30,3 +39,17 @@ const tabs = workspaceViews;
     </div>
   </div>
 </template>
+
+<style scoped>
+.view-tabs {
+  min-width: 0;
+  overflow-x: auto;
+}
+.view-tabs > button,
+.graph-actions {
+  flex-shrink: 0;
+}
+.view-tabs > button {
+  white-space: nowrap;
+}
+</style>
