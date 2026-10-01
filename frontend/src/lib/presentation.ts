@@ -1,3 +1,5 @@
+import { parseTurnSummary, turnSummaryMessage } from './turnSummary';
+
 export const statusLabels: Record<string, string> = {
   PLANNED: '待开始',
   IN_PROGRESS: '进行中',
@@ -56,6 +58,10 @@ export function eventDetail(event: { kind: string; detail: string }) {
       return '图已更新';
     }
   }
-  if (event.kind === 'agent_turn_finished') return '本轮已结束，已完成的修改已保存';
+  if (event.kind === 'agent_turn_finished') {
+    const summary = parseTurnSummary(event.detail);
+    if (summary) return turnSummaryMessage(summary);
+    return event.detail.slice(0, 250) || '历史规划记录';
+  }
   return event.detail.slice(0, 250) || '状态已保存到本地数据库';
 }

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
+import AgentTurnSummary from './AgentTurnSummary.vue';
+import { latestTurnSummary } from '../../lib/turnSummary';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
@@ -17,6 +19,7 @@ const dockCollapsed = ref(false);
 const latestReply = computed(() =>
   props.project.messages.filter((item) => item.role === 'assistant').at(-1),
 );
+const turnSummary = computed(() => latestTurnSummary(props.project));
 const agent = useAgent();
 const { state, setPage, setError } = useWorkspace();
 
@@ -312,24 +315,39 @@ function choose(option: string) {
         @resume="$emit('resume')"
       />
     </div>
-    <details
-      v-if="project.messages.length"
+    <div
+      v-if="project.messages.length || (turnSummary && !runningHere)"
       v-show="!dockCollapsed"
-      class="agent-conversation"
-      :open="conversationOpen"
-      @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
+      class="agent-review"
+      aria-label="对话与本轮变更"
+      tabindex="0"
     >
-      <summary>
-        <span>{{ latestReply ? '最近回复' : '对话记录' }}</span
-        ><span class="reply-preview">{{ latestReply?.content || '查看已发送的请求' }}</span>
-      </summary>
-      <div class="agent-conversation-scroll" aria-label="项目对话记录">
-        <article v-for="item in project.messages" :key="item.id" :class="item.role">
-          <strong>{{ item.role === 'assistant' ? 'Agent' : '你' }}</strong>
-          <p>{{ item.content }}</p>
-        </article>
-      </div>
-    </details>
+      <details
+        v-if="project.messages.length"
+        v-show="!dockCollapsed"
+        class="agent-conversation"
+        :open="conversationOpen"
+        @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
+      >
+        <summary>
+          <span>{{ latestReply ? '最近回复' : '对话记录' }}</span
+          ><span class="reply-preview">{{ latestReply?.content || '查看已发送的请求' }}</span>
+        </summary>
+        <div class="agent-conversation-scroll" aria-label="项目对话记录">
+          <article v-for="item in project.messages" :key="item.id" :class="item.role">
+            <strong>{{ item.role === 'assistant' ? 'Agent' : '你' }}</strong>
+            <p>{{ item.content }}</p>
+          </article>
+        </div>
+      </details>
+      <AgentTurnSummary
+        v-if="turnSummary && !runningHere"
+        v-show="!dockCollapsed"
+        :key="`${project.id}-${turnSummary.turn_id}`"
+        :summary="turnSummary"
+        :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
+      />
+    </div>
     <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
       松开以上传文档或图片
     </div>
@@ -402,7 +420,11 @@ function choose(option: string) {
     </form>
     <div v-show="!dockCollapsed" class="agent-dock-note" :class="{ failed: failedAttempt }">
       <template v-if="failedAttempt"
-        >发送未完成，内容已放回输入框。<button type="button" class="text-button" @click="retry">
+        >本轮未完成，内容已放回输入框；已保存的修改会保留。<button
+          type="button"
+          class="text-button"
+          @click="retry"
+        >
           重试
         </button></template
       ><template v-else>缺少信息时会向你提问 · 不会自动修改仓库代码</template>
@@ -411,6 +433,38 @@ function choose(option: string) {
 </template>
 
 <style scoped>
+/* History yields space before the composer or the graph can leave the viewport. */
+.agent-dock {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+.agent-dock-heading,
+.agent-input,
+.agent-dock-note {
+  flex-shrink: 0;
+}
+.agent-review {
+  flex: 0 1 auto;
+  min-height: 36px;
+  max-height: min(220px, 30dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.agent-review:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+/* One review scroller, rather than nested transcript/receipt scroll traps. */
+.agent-review .agent-conversation-scroll,
+.agent-review :deep(.turn-summary-scroll) {
+  max-height: none;
+  overflow: visible;
+}
+
 .agent-collapse-toggle {
   margin-left: auto;
   min-height: 30px;

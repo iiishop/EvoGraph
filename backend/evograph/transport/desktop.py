@@ -35,18 +35,44 @@ class DesktopBridge:
                 with self._guard:
                     self._streams[request_id] = (loop, task)
                     cancelled = request_id in self._cancelled
+                turn_id = None
+
+                def deliver(event):
+                    detail = json.dumps(
+                        {"request_id": request_id, "event": event}, ensure_ascii=True
+                    )
+                    self._window.evaluate_js(
+                        f"window.dispatchEvent(new CustomEvent('evograph:agent', {{detail: {detail}}}))"
+                    )
+
                 try:
                     if cancelled:
-                        return
+                        # Enter the runtime before cancellation so an admitted turn can
+                        # record its stopped outcome instead of leaving the UI waiting.
+                        loop.call_soon(task.cancel)
                     async for event in self._application.agent.stream(**request.model_dump()):
-                        detail = json.dumps(
-                            {"request_id": request_id, "event": event}, ensure_ascii=True
-                        )
-                        self._window.evaluate_js(
-                            f"window.dispatchEvent(new CustomEvent('evograph:agent', {{detail: {detail}}}))"
-                        )
+                        if event.get("turn_id"):
+                            turn_id = event["turn_id"]
+                        deliver(event)
                 except asyncio.CancelledError:
-                    pass
+                    # The runtime has finished committing any in-flight tool and its
+                    # terminal summary before cancellation reaches this boundary.
+                    result = (
+                        self._application.agent.turn_result(request.project_id, turn_id)
+                        if turn_id
+                        else {"summary": None}
+                    )
+                    summary = result["summary"]
+                    deliver(
+                        {
+                            "type": "done",
+                            "turn_id": turn_id,
+                            "summary": summary,
+                            "changed": bool(summary and summary["changed"]),
+                            "cancelled": True,
+                            "project": self._application.projects.get(request.project_id),
+                        }
+                    )
                 finally:
                     with self._guard:
                         self._cancelled.discard(request_id)

@@ -73,3 +73,13 @@ const tab = ref('graph'),
     </section>
   </main>
 </template>
+
+<style scoped>
+.workspace-body {
+  overflow-y: auto;
+}
+/* A fixed graph-canvas minimum must not overflow a shorter flex viewport. */
+.workspace-body .planning-content :deep(.milestone-stage > .graph-canvas) {
+  min-height: 0;
+}
+</style>

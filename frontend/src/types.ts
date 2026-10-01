@@ -141,6 +141,52 @@ export interface Architecture {
   decisions: string[];
   diagram: Diagram;
 }
+export interface ProjectEvent {
+  id: string;
+  kind: string;
+  detail: string;
+  created_at: string;
+}
+export interface TurnSummary {
+  version: 1;
+  turn_id: string;
+  status: 'completed' | 'waiting' | 'stopped' | 'failed';
+  changed: boolean;
+  before_revision: number;
+  after_revision: number;
+  changes: {
+    milestones: {
+      added: { id: string; title: string; fields: string[] }[];
+      updated: { id: string; title: string; fields: string[] }[];
+      removed: { id: string; title: string; fields: string[] }[];
+    };
+    dependencies: {
+      added: { source: string; target: string; reason: string; type: string }[];
+      updated: {
+        source: string;
+        target: string;
+        fields: string[];
+        before: { reason: string; type: string };
+        after: { reason: string; type: string };
+      }[];
+      removed: { source: string; target: string; reason: string; type: string }[];
+    };
+    target: {
+      before_version: number | null;
+      after_version: number | null;
+      statement_changed: boolean;
+      required_behavior_ids: { added: string[]; removed: string[] };
+      required_behavior_changes: {
+        behavior_key: string;
+        before_id: string | null;
+        after_id: string | null;
+        fields: string[];
+      }[];
+    } | null;
+    architecture: { before_revision: number | null; after_revision: number | null } | null;
+    other: string[];
+  };
+}
 export interface Project extends ProjectSummary {
   class_model_state: { current: boolean; reasons: string[] };
   uml_diagrams: UmlDiagram[];
@@ -181,7 +227,7 @@ export interface Project extends ProjectSummary {
   >;
   proposal: Proposal | null;
   messages: Message[];
-  events: { id: string; kind: string; detail: string; created_at: string }[];
+  events: ProjectEvent[];
   metrics: Record<string, number>;
 }
 export interface LightCheck {
@@ -204,6 +250,9 @@ export interface PendingQuestion {
   options: string[];
 }
 export interface AgentEvent {
+  cancelled?: boolean;
+  turn_id?: string;
+  summary?: TurnSummary;
   view?: string;
   diagram_id?: string;
   diagram_kind?: string;

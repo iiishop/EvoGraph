@@ -71,6 +71,7 @@ class Application:
             "uml.save": self.uml.save,
             "uml.preview": self.uml.preview,
             "agent.chat": self.planning.chat,  # Legacy API compatibility; new UI uses streaming tools.
+            "agent.turn_result": self.agent.turn_result,
             "plan.apply": self.planning.apply,
             "plan.discard": self.planning.discard,
             "baseline.refresh": self.execution.refresh,
@@ -113,6 +114,7 @@ class Application:
             "uml.preview",
             "architecture.class_detail",
             "references.list",
+            "agent.turn_result",
         }
         if not readonly:
             key = params.get("project_id", "__global__")

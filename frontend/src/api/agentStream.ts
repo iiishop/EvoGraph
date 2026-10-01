@@ -10,14 +10,17 @@ export async function agentStream(
   },
   receive: (event: AgentEvent) => void,
   signal: AbortSignal,
+  cancellationTimeoutMs = 5000,
 ) {
   if (window.pywebview?.api) {
     const api = window.pywebview.api;
     const requestId = crypto.randomUUID();
     await new Promise<void>((resolve, reject) => {
+      let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
         window.removeEventListener('evograph:agent', listener);
         signal.removeEventListener('abort', abort);
+        if (cancellationTimer !== undefined) clearTimeout(cancellationTimer);
       };
       const listener = (raw: Event) => {
         const detail = (raw as CustomEvent).detail;
@@ -28,17 +31,29 @@ export async function agentStream(
           resolve();
         }
       };
+      let started: Promise<{ started: boolean }>;
       const abort = () => {
-        api.cancel_agent(requestId);
-        cleanup();
-        resolve();
+        cancellationTimer = setTimeout(() => {
+          cleanup();
+          reject(new Error('停止结果尚未送达，正在核对已保存的状态'));
+        }, cancellationTimeoutMs);
+        // Wait for admission, then keep the listener until the backend has
+        // finalized partial edits and sends its terminal project snapshot.
+        void started
+          .then(() => api.cancel_agent(requestId))
+          .catch((error) => {
+            cleanup();
+            reject(error);
+          });
       };
       window.addEventListener('evograph:agent', listener);
       signal.addEventListener('abort', abort, { once: true });
-      api.start_agent(requestId, params).catch((error) => {
+      started = api.start_agent(requestId, params);
+      started.catch((error) => {
         cleanup();
         reject(error);
       });
+      if (signal.aborted) abort();
     });
     return;
   }

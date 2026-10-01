@@ -45,6 +45,12 @@ Change the code afterwards and that evidence goes stale. The artifact that passe
 | Evidence | The result of a local command, pinned to a milestone, the milestone's behavior revisions, and one baseline |
 | Current evidence | Evidence whose baseline id and fingerprint both match the latest baseline and whose result is PASS. Everything else is stale |
 
+## See what changed in a planning turn
+
+The composer shows a compact, expandable turn summary derived from the saved project before and after the turn. It lists added, updated and removed milestones, prerequisite changes, final-target membership changes and architecture changes. It records the net result after target finalization, rather than repeating the model's explanation or counting transient edits. The same summary is retained in activity history and survives reopening the project.
+
+Completed, waiting-for-answer, stopped and failed turns are distinguished. Stopping or failing does not roll back tool edits already saved: partial changes remain visible in the summary. The UI waits for the admitted turn's terminal result before refreshing after an interruption. Legacy history remains readable without fabricated summaries. This is a change report, not proof that code was implemented or acceptance passed.
+
 ## Final goals and step acceptance
 
 A roadmap can contain temporary states. For example, a first PR may write inventory to CSV, while a later PR migrates writes to PostgreSQL and retires CSV persistence. Those two checks should not both become final requirements.

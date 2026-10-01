@@ -11,6 +11,7 @@ from ..domain.design_review import review_design
 from ..domain.models import uid
 from .design_workflow import DESIGN_WORKFLOW
 from .tool_execution import ToolExecutor
+from .turn_summary import build_turn_summary, read_turn_summary
 from .uml_lifecycle import class_model_state
 
 SYSTEM = """You are EvoGraph, an evidence-aware project evolution agent. Communicate in Chinese.
@@ -43,6 +44,22 @@ SYSTEM += DESIGN_WORKFLOW
 class AgentRuntime:
     def __init__(self, application):
         self.app = application
+        self.active_turns: dict[str, str] = {}
+
+    def turn_result(self, project_id: str, turn_id: str) -> dict:
+        # Read activity first: a completion racing the event read may cause one
+        # extra poll, but can never look finished before its outcome is visible.
+        pending = self.active_turns.get(project_id) == turn_id
+        summary = next(
+            (
+                result
+                for event in self.app.db.events(project_id)
+                if event["kind"] == "agent_turn_finished"
+                and (result := read_turn_summary(event["detail"], turn_id)) is not None
+            ),
+            None,
+        )
+        return {"turn_id": turn_id, "pending": pending and summary is None, "summary": summary}
 
     async def stream(
         self,
@@ -52,12 +69,18 @@ class AgentRuntime:
         attachment_ids: list[str] | None = None,
         verification_milestone: str | None = None,
     ):
+        turn_id = uid()
         lock = self.app.operation_lock(project_id)
         if not lock.acquire(blocking=False):
             yield {"type": "error", "message": "此项目的 Agent 或其他操作仍在运行"}
-            yield {"type": "done", "changed": False}
+            yield {"type": "done", "changed": False, "turn_id": turn_id}
             return
+        self.active_turns[project_id] = turn_id
         executor = None
+        before_snapshot = None
+        summary = None
+        status = "completed"
+        finalization_error = None
         changed = False
         started = time.monotonic()
         token_count = 0
@@ -66,6 +89,7 @@ class AgentRuntime:
             if not content.strip() or len(content) > 16000:
                 raise ValueError("请输入 1–16000 字符的修改建议")
             p = self.app.db.get(project_id)
+            before_snapshot = p.model_copy(deep=True)
             design_review_reminded = False
             if p.archived:
                 raise ValueError("项目已删除")
@@ -137,7 +161,7 @@ class AgentRuntime:
                     if a.id in (attachment_ids or []) and a.media_type.startswith("image/")
                 }
             executor = ToolExecutor(ctx, registry)
-            yield {"type": "started", "project_id": project_id}
+            yield {"type": "started", "project_id": project_id, "turn_id": turn_id}
             round_number = 0
             last_round_signature = None
             repeated_rounds = 0
@@ -277,9 +301,13 @@ class AgentRuntime:
                         break
                 if ctx.paused:
                     break
-        except asyncio.CancelledError:
+            if ctx.paused:
+                status = "waiting"
+        except (asyncio.CancelledError, GeneratorExit):
+            status = "stopped"
             raise
         except Exception as exc:
+            status = "failed"
             message = (
                 str(exc)[:1000]
                 if isinstance(exc, (ValueError, OSError))
@@ -289,23 +317,38 @@ class AgentRuntime:
         finally:
             changed |= executor.changed if executor else False
             try:
-                if changed:
-                    reduced = self.app.graph.finalize(project_id)
-                p = self.app.db.get(project_id)
-                if changed:
-                    p = self.app.db.save(
-                        p,
-                        "design_review",
-                        json.dumps(review_design(p), ensure_ascii=False),
+                try:
+                    if changed:
+                        reduced = self.app.graph.finalize(project_id)
+                    p = self.app.db.get(project_id)
+                    if changed:
+                        self.app.db.save(
+                            p,
+                            "design_review",
+                            json.dumps(review_design(p), ensure_ascii=False),
+                        )
+                except Exception:
+                    if status != "stopped":
+                        status = "failed"
+                    finalization_error = "规划收尾未完成，请刷新项目检查已保存的更改"
+                # Record the committed outcome even when a provider or finalize
+                # failed. Never replace cancellation with a finalization error.
+                try:
+                    p = self.app.db.get(project_id)
+                    outcome = build_turn_summary(before_snapshot or p, p, turn_id, status)
+                    p.metrics["planning_seconds"] += time.monotonic() - started
+                    p.metrics["model_tokens"] += token_count
+                    self.app.db.save(
+                        p, "agent_turn_finished", json.dumps(outcome, ensure_ascii=False)
                     )
-                p.metrics["planning_seconds"] += time.monotonic() - started
-                p.metrics["model_tokens"] += token_count
-                self.app.db.save(
-                    p, "agent_turn_finished", f"graph_changed={changed}; tokens={token_count}"
-                )
-            except ValueError:
-                pass
-            lock.release()
+                    summary = outcome
+                except Exception:
+                    finalization_error = "本轮结果未能保存，请刷新项目检查已保存的更改"
+            finally:
+                self.active_turns.pop(project_id, None)
+                lock.release()
+        if finalization_error:
+            yield {"type": "error", "message": finalization_error}
         try:
             snapshot = self.app.projects.get(project_id)
         except ValueError:
@@ -319,4 +362,10 @@ class AgentRuntime:
                 "label": "整理依赖",
                 "project": snapshot,
             }
-        yield {"type": "done", "changed": changed, "project": snapshot}
+        yield {
+            "type": "done",
+            "changed": changed,
+            "project": snapshot,
+            "turn_id": turn_id,
+            **({"summary": summary} if summary is not None else {}),
+        }

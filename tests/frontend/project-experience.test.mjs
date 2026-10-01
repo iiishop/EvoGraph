@@ -14,7 +14,9 @@ const transpile = (code) =>
   ts.transpileModule(code, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText;
+const turnSummaryUrl = moduleUrl(transpile(readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8')));
 const imports = {
+  '../../lib/turnSummary': turnSummaryUrl,
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../composables/useWorkspace': moduleUrl(`export const workspace = {
@@ -39,11 +41,12 @@ const imports = {
   '../../lib/presentation': moduleUrl(
     transpile(
       readFileSync(new URL('../../frontend/src/lib/presentation.ts', import.meta.url), 'utf8'),
-    ),
+    ).replace("'./turnSummary'", JSON.stringify(turnSummaryUrl)),
   ),
 };
 for (const name of [
   './AgentQuestion.vue',
+  './AgentTurnSummary.vue',
   '../graph/FollowAgentButton.vue',
   '../attachments/AttachmentPicker.vue',
   './ReferenceMentionPicker.vue',
@@ -87,6 +90,7 @@ const project = (overrides) => ({
   evidence: [],
   evidence_validity: {},
   messages: [],
+  events: [],
   source_milestones: [], diagrams: [], attachments: [],
   ...overrides,
 });
