@@ -1,6 +1,14 @@
 import { computed, reactive } from 'vue';
+import type { PendingQuestion } from '../types';
 
-type DraftContent = { text: string; ids: string[]; questionId?: string };
+type DraftContent = {
+  text: string;
+  ids: string[];
+  questionId?: string;
+  question?: Pick<PendingQuestion, 'id' | 'prompt' | 'context' | 'verification_milestone'>;
+  verificationMilestone?: string;
+};
+export type DraftRequest = { text: string; questionId?: string; verificationMilestone?: string };
 export type FailedDraft = DraftContent & { id: number; restoredRevision?: number };
 type DraftEntry = {
   text: string;
@@ -8,12 +16,22 @@ type DraftEntry = {
   revision: number;
   failures: FailedDraft[];
   pending: Set<number>;
+  recoveryError: string;
+  composerOrigin: FailedDraft | null;
 };
 export type DraftAttempt = DraftContent & {
   id: number;
   projectId: string;
   entry: DraftEntry;
   restoreRevision: number | null;
+  request?: DraftRequest;
+};
+export type RetryPreparation = {
+  id: number;
+  projectId: string;
+  entry: DraftEntry;
+  failure: FailedDraft;
+  restoreRevision?: number;
 };
 
 // Deliberately session-only: unsent prompts and attachment references should not
@@ -21,12 +39,21 @@ export type DraftAttempt = DraftContent & {
 export function createAgentDraftStore() {
   const entries = reactive(new Map<string, DraftEntry>());
   const deleted = reactive(new Set<string>());
+  const preparations = new Map<number, RetryPreparation>();
   let sequence = 0;
 
   function entry(projectId: string) {
     if (deleted.has(projectId)) return undefined;
     if (!entries.has(projectId)) {
-      entries.set(projectId, { text: '', ids: [], revision: 0, failures: [], pending: new Set() });
+      entries.set(projectId, {
+        text: '',
+        ids: [],
+        revision: 0,
+        failures: [],
+        pending: new Set(),
+        recoveryError: '',
+        composerOrigin: null,
+      });
     }
     return entries.get(projectId)!;
   }
@@ -38,6 +65,7 @@ export function createAgentDraftStore() {
   ): DraftAttempt | undefined {
     const draft = entry(projectId);
     if (!draft || draft.pending.size || !content.text.trim()) return;
+    draft.recoveryError = '';
     const id = ++sequence;
     if (clearDraft) {
       // A normal resubmission of an unchanged restored draft consumes its
@@ -45,12 +73,16 @@ export function createAgentDraftStore() {
       draft.failures = draft.failures.filter((item) => item.restoredRevision !== draft.revision);
       draft.text = '';
       draft.ids = [];
+      draft.composerOrigin = null;
       draft.revision++;
     }
     draft.pending.add(id);
     return {
       ...content,
       ids: [...content.ids],
+      question: content.question ? { ...content.question } : undefined,
+      verificationMilestone:
+        content.verificationMilestone ?? content.question?.verification_milestone ?? undefined,
       id,
       projectId,
       entry: draft,
@@ -78,18 +110,82 @@ export function createAgentDraftStore() {
       text: attempt.text,
       ids: [...attempt.ids],
       questionId: attempt.questionId,
+      question: attempt.question ? { ...attempt.question } : undefined,
+      verificationMilestone: attempt.verificationMilestone,
     };
     const restored = attempt.restoreRevision === draft.revision;
     if (restored) {
       draft.text = attempt.text;
       draft.ids = [...attempt.ids];
       failure.restoredRevision = ++draft.revision;
+      draft.composerOrigin = failure;
     }
     draft.failures.push(failure);
     return restored;
   }
 
+  function recoverComposer(projectId: string) {
+    const draft = entries.get(projectId);
+    const origin = draft?.composerOrigin;
+    if (!draft || !origin) return;
+    if (!draft.failures.some((item) => item.id === origin.id))
+      draft.failures.push({ ...origin, ids: [...origin.ids] });
+    return origin;
+  }
+
+  function prepareRetry(projectId: string, failureId: number, fromComposer = false) {
+    const draft = entries.get(projectId);
+    const failure = draft?.failures.find((item) => item.id === failureId);
+    if (!draft || !failure || draft.pending.size) return;
+    draft.recoveryError = '';
+    const useComposer = fromComposer && draft.composerOrigin?.id === failureId;
+    const preparation: RetryPreparation = {
+      id: ++sequence,
+      projectId,
+      entry: draft,
+      restoreRevision: useComposer ? draft.revision : failure.restoredRevision,
+      failure: {
+        ...failure,
+        ids: [...(useComposer ? draft.ids : failure.ids)],
+        question: failure.question ? { ...failure.question } : undefined,
+      },
+    };
+    draft.pending.add(preparation.id);
+    preparations.set(preparation.id, preparation);
+    return preparation;
+  }
+
+  function retryIsCurrent(preparation: RetryPreparation) {
+    const draft = entries.get(preparation.projectId);
+    return Boolean(
+      draft === preparation.entry &&
+      draft.pending.has(preparation.id) &&
+      draft.failures.some((item) => item.id === preparation.failure.id),
+    );
+  }
+
+  function cancelRetry(preparation: RetryPreparation) {
+    preparations.delete(preparation.id);
+    if (entries.get(preparation.projectId) === preparation.entry)
+      preparation.entry.pending.delete(preparation.id);
+  }
+
+  function detachRestored(projectId: string, failureId: number) {
+    const draft = entries.get(projectId);
+    const failure = draft?.failures.find((item) => item.id === failureId);
+    if (!draft || !failure || draft.composerOrigin?.id !== failureId) return;
+    // The old answer remains in recovery, rather than becoming an implicit
+    // answer to a different current question. Never clear a newer edit.
+    draft.text = '';
+    if (failure.restoredRevision === draft.revision) draft.ids = [];
+    draft.composerOrigin = null;
+    draft.revision++;
+    failure.restoredRevision = undefined;
+  }
+
   function discard(projectId: string) {
+    for (const preparation of preparations.values())
+      if (preparation.projectId === projectId) cancelRetry(preparation);
     deleted.add(projectId);
     entries.delete(projectId);
   }
@@ -97,6 +193,31 @@ export function createAgentDraftStore() {
   return {
     start,
     retry,
+    prepareRetry,
+    retryIsCurrent,
+    cancelRetry,
+    detachRestored,
+    recoverComposer,
+    setRecoveryError: (projectId: string, message: string) => {
+      const draft = entries.get(projectId);
+      if (draft) draft.recoveryError = message;
+    },
+    commitRetry: (preparation: RetryPreparation, request: DraftRequest) => {
+      if (!retryIsCurrent(preparation)) return;
+      cancelRetry(preparation);
+      const attempt = start(
+        preparation.projectId,
+        preparation.failure,
+        preparation.restoreRevision === preparation.entry.revision,
+      );
+      if (attempt) {
+        preparation.entry.failures = preparation.entry.failures.filter(
+          (item) => item.id !== preparation.failure.id,
+        );
+        attempt.request = { ...request };
+      }
+      return attempt;
+    },
     settle,
     discard,
     activate: (projectId: string) => {
@@ -107,8 +228,14 @@ export function createAgentDraftStore() {
       for (const id of entries.keys()) if (!present.has(id)) discard(id);
     },
     dismissFailure: (projectId: string, failureId: number) => {
+      for (const preparation of preparations.values())
+        if (preparation.projectId === projectId && preparation.failure.id === failureId)
+          cancelRetry(preparation);
       const draft = entries.get(projectId);
-      if (draft) draft.failures = draft.failures.filter((item) => item.id !== failureId);
+      if (draft) {
+        draft.failures = draft.failures.filter((item) => item.id !== failureId);
+        if (!draft.failures.length) draft.recoveryError = '';
+      }
     },
     bind: (projectId: () => string) => ({
       content: computed({
@@ -117,6 +244,7 @@ export function createAgentDraftStore() {
           const draft = entry(projectId());
           if (!draft || draft.text === text) return;
           draft.text = text;
+          draft.composerOrigin = null;
           draft.revision++;
         },
       }),
@@ -135,6 +263,10 @@ export function createAgentDraftStore() {
       }),
       failures: computed(() => entry(projectId())?.failures ?? []),
       pending: computed(() => Boolean(entry(projectId())?.pending.size)),
+      recoveryError: computed(() => entry(projectId())?.recoveryError ?? ''),
+      // Closing a hint or editing attachments never reinterprets the answer
+      // text. Only a text edit or an explicit new-question answer releases it.
+      restoredFailure: computed(() => entry(projectId())?.composerOrigin ?? undefined),
       failureRestored: computed(() => {
         const draft = entry(projectId());
         return Boolean(draft && draft.failures[0]?.restoredRevision === draft.revision);

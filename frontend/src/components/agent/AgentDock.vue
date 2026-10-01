@@ -3,13 +3,19 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
 import AgentTurnSummary from './AgentTurnSummary.vue';
 import { latestTurnSummary } from '../../lib/turnSummary';
+import { planAgentRetry, waitForRetryRead } from '../../lib/agentRetry';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
 import { ArrowUp, Orbit, Square, CornerDownLeft, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { useAgent } from '../../composables/useAgent';
-import { agentDrafts, useAgentDraft, type DraftAttempt } from '../../composables/useAgentDrafts';
+import {
+  agentDrafts,
+  useAgentDraft,
+  type DraftAttempt,
+  type FailedDraft,
+} from '../../composables/useAgentDrafts';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
@@ -22,11 +28,21 @@ const latestReply = computed(() =>
 );
 const turnSummary = computed(() => latestTurnSummary(props.project));
 const agent = useAgent();
-const { state, setPage, setError, selectProject } = useWorkspace();
-const { content, attachmentIds, failures, pending, failureRestored } = useAgentDraft(
-  () => props.project.id,
-);
+const { state, setPage, setError, selectProject, applyProject } = useWorkspace();
+const {
+  content,
+  attachmentIds,
+  failures,
+  pending,
+  failureRestored,
+  restoredFailure,
+  recoveryError,
+} = useAgentDraft(() => props.project.id);
 const failedAttempt = computed(() => failures.value[0]);
+const failedQuestion = computed(() => {
+  const prompt = failedAttempt.value?.question?.prompt ?? '';
+  return prompt.length > 240 ? `${prompt.slice(0, 240)}…` : prompt;
+});
 let mounted = true;
 onUnmounted(() => {
   mounted = false;
@@ -115,9 +131,10 @@ async function deliver(attempt: DraftAttempt) {
   try {
     delivered = await agent.send(
       attempt.projectId,
-      attempt.text.trim(),
-      attempt.questionId,
+      attempt.request?.text ?? attempt.text.trim(),
+      attempt.request ? attempt.request.questionId : attempt.questionId,
       attempt.ids,
+      attempt.request ? attempt.request.verificationMilestone : attempt.verificationMilestone,
     );
   } catch (error) {
     setError(error instanceof Error ? error.message : '请求未完成');
@@ -129,23 +146,86 @@ async function deliver(attempt: DraftAttempt) {
   }
 }
 
-async function submit(text = content.value, questionId = props.project.question?.id) {
+async function submit(
+  text = content.value,
+  questionId = props.project.question?.id,
+  chosenOption = false,
+) {
   mentionOpen.value = false;
   // Keep the exact draft for recovery; trim only the submitted payload.
   if (!text.trim() || blocker.value) return;
+  const restored = restoredFailure.value;
+  if (!chosenOption && restored && text === content.value) {
+    // Sending the untouched restored answer is also a retry, not permission to
+    // silently bind it to a different question that arrived in the meantime.
+    agentDrafts.recoverComposer(props.project.id);
+    await retry(restored, true);
+    return;
+  }
+  if (chosenOption && restored && restored.questionId !== questionId) {
+    agentDrafts.recoverComposer(props.project.id);
+    agentDrafts.detachRestored(props.project.id, restored.id);
+  }
+  const question = props.project.question;
   const attempt = agentDrafts.start(
     props.project.id,
-    { text, ids: attachmentIds.value, questionId },
+    {
+      text,
+      ids: attachmentIds.value,
+      questionId,
+      question:
+        question && question.id === questionId
+          ? {
+              id: question.id,
+              prompt: question.prompt,
+              context: question.context,
+              verification_milestone: question.verification_milestone,
+            }
+          : undefined,
+    },
     text === content.value || content.value === '',
   );
   if (attempt) await deliver(attempt);
 }
 
-async function retry() {
-  const failure = failedAttempt.value;
+async function retry(failure: FailedDraft | undefined = failedAttempt.value, fromComposer = false) {
   if (!failure || blocker.value) return;
-  const attempt = agentDrafts.retry(props.project.id, failure.id);
-  if (attempt) await deliver(attempt);
+  const projectId = props.project.id;
+  const preparation = agentDrafts.prepareRetry(projectId, failure.id, fromComposer);
+  if (!preparation) return;
+  const report = (message: string) => {
+    agentDrafts.setRecoveryError(projectId, message);
+    if (state.project?.id === projectId) setError(message);
+  };
+  try {
+    const current = await waitForRetryRead(
+      command<Project>('projects.get', { project_id: projectId }),
+    );
+    if (!agentDrafts.retryIsCurrent(preparation)) return;
+    if (current.id !== projectId) throw new Error('项目状态不匹配，原请求已保留，请重新打开项目');
+    if (agent.state.running || state.busy) {
+      report('其他操作正在进行，原请求已保留，请稍后重试');
+      return;
+    }
+    if (state.project?.id === projectId && state.project.revision > current.revision) {
+      report('项目在读取期间已更新，原请求已保留，请重新重试以使用最新状态');
+      return;
+    }
+    applyProject(current);
+    const plan = planAgentRetry(preparation.failure, current);
+    if (plan.kind === 'blocked') {
+      if (plan.differentQuestion) agentDrafts.detachRestored(projectId, failure.id);
+      report(plan.message);
+      return;
+    }
+    const attempt = agentDrafts.commitRetry(preparation, plan.request);
+    if (attempt) await deliver(attempt);
+  } catch (error) {
+    if (agentDrafts.retryIsCurrent(preparation))
+      report(error instanceof Error ? error.message : '无法读取当前项目，原请求已保留');
+  } finally {
+    agentDrafts.cancelRetry(preparation);
+  }
 }
 
 function onEnter(event: KeyboardEvent) {
@@ -274,7 +354,7 @@ function onDrop(event: DragEvent) {
 function choose(option: string) {
   // 选项本身就是一条完整回答，此时输入框通常是空的：不能用 canSend（它要求输入框非空）
   if (blocker.value) return;
-  void submit(option);
+  void submit(option, props.project.question?.id, true);
 }
 </script>
 <template>
@@ -427,6 +507,7 @@ function choose(option: string) {
     </form>
     <div v-show="!dockCollapsed" class="agent-dock-note" :class="{ failed: failedAttempt }">
       <template v-if="failedAttempt">
+        <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
         {{
           failureRestored
             ? '本轮未完成，内容已放回输入框；已保存的修改会保留。'
@@ -434,10 +515,11 @@ function choose(option: string) {
         }}
         <details v-if="!failureRestored" class="agent-recovery">
           <summary>查看未完成请求（{{ failures.length }}）</summary>
+          <p v-if="failedQuestion" class="agent-recovery-question">原问题：{{ failedQuestion }}</p>
           <p>{{ failedAttempt.text }}</p>
           <small v-if="failedAttempt.ids.length">附带 {{ failedAttempt.ids.length }} 份资料</small>
         </details>
-        <button type="button" class="text-button" :disabled="Boolean(blocker)" @click="retry">
+        <button type="button" class="text-button" :disabled="Boolean(blocker)" @click="retry()">
           重试这条请求
         </button>
         <button

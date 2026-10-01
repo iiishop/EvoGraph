@@ -244,6 +244,7 @@ export interface LightCheck {
 }
 export interface PendingQuestion {
   id: string;
+  verification_milestone?: string | null;
   prompt: string;
   category: 'missing_design_input' | 'agent_blocked' | 'decision';
   context: string;

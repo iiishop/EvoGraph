@@ -25,6 +25,7 @@ const imports = {
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../lib/turnSummary': summaryUrl,
+  '../../lib/agentRetry': moduleUrl(transpile(read('lib/agentRetry.ts'))),
   '../../composables/useAgentDrafts': moduleUrl(
     transpile(read('composables/useAgentDrafts.ts')).replace(
       "from 'vue'",

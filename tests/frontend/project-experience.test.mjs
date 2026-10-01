@@ -17,6 +17,9 @@ const transpile = (code) =>
 const turnSummaryUrl = moduleUrl(transpile(readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8')));
 const imports = {
   '../../lib/turnSummary': turnSummaryUrl,
+  '../../lib/agentRetry': moduleUrl(
+    transpile(readFileSync(new URL('../../frontend/src/lib/agentRetry.ts', import.meta.url), 'utf8')),
+  ),
   '../../composables/useAgentDrafts': moduleUrl(
     transpile(
       readFileSync(new URL('../../frontend/src/composables/useAgentDrafts.ts', import.meta.url), 'utf8'),

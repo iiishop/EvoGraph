@@ -233,13 +233,17 @@ async function harness() {
       send: (...args) => { env.calls.push(args); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
     export const useAgent = () => agent; // ${id}`);
   const workspaceUrl = moduleUrl(`import { reactive, computed } from ${JSON.stringify(vueUrl)};
-    const project = (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [] });
+    const project = (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null });
     export const workspace = { state: reactive({ project: project('A'), projects: [], page: 'projects', loading: false, busy: false, settings: { provider: { config: { model: 'Test model' } } } }),
       selected: computed(() => null), calls: [], init() {}, dismiss() {}, undoDelete() {},
+      applyProject: project => { if (workspace.state.project.id === project.id) workspace.state.project = project; },
       setPage(page) { this.state.page = page; }, setError(error) { this.state.error = error; },
       selectProject: async (id) => { workspace.calls.push(id); workspace.state.project = project(id); workspace.state.page = 'projects'; } };
     workspace.setPage = workspace.setPage.bind(workspace); workspace.setError = workspace.setError.bind(workspace);
     export const useWorkspace = () => workspace; // ${id}`);
+  const apiUrl =
+    moduleUrl(`export const api = { calls: [], load: async (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null }) };
+    export const command = async (action, params) => { api.calls.push([action, params]); return action === 'projects.get' ? api.load(params.project_id) : { items: [] }; }; // ${id}`);
   const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
   const imports = {
     vue: vueUrl,
@@ -249,7 +253,8 @@ async function harness() {
     '../../composables/useWorkspace': workspaceUrl,
     './composables/useWorkspace': workspaceUrl,
     '../../lib/turnSummary': moduleUrl(transpile(source('lib/turnSummary.ts'))),
-    '../../api/client': moduleUrl('export const command = async () => ({ items: [] });'),
+    '../../lib/agentRetry': moduleUrl(transpile(source('lib/agentRetry.ts'))),
+    '../../api/client': apiUrl,
     '../../composables/useEntrance': moduleUrl('export const useEntrance = () => {};'),
     '../../lib/workspaceViews': moduleUrl(
       `export const workspaceViews = ['graph', 'architecture'].map(id => ({ id, component: { render() { return null; } } }));`,
@@ -300,6 +305,7 @@ async function harness() {
   const { workspace } = await import(workspaceUrl);
   const { agent, env } = await import(agentUrl);
   const { agentDrafts } = await import(draftsUrl);
+  const { api } = await import(apiUrl);
   const find = (tag) => all(root).find((node) => node.tag === tag);
   const button = (text) =>
     all(root).find((node) => node.tag === 'button' && textOf(node).trim() === text);
@@ -309,6 +315,7 @@ async function harness() {
     agent,
     env,
     agentDrafts,
+    api,
     find,
     button,
     input: async (text) => {
@@ -389,7 +396,7 @@ test('an unmounted submit restores exact text and IDs to A without writing or fo
     const sending = h.submit();
     await tick();
     assert.equal(h.find('textarea').value, '');
-    assert.deepEqual(h.env.calls[0], ['A', 'original request', undefined, ['A1']]);
+    assert.deepEqual(h.env.calls[0], ['A', 'original request', undefined, ['A1'], undefined]);
     await h.workspace.selectProject('B');
     await tick();
     await h.input('B newer');
@@ -434,7 +441,7 @@ test('late failure, remount, and explicit retry preserve newer text and attachme
     h.env.send = async () => true;
     await h.button('重试这条请求').onClick();
     await tick();
-    assert.deepEqual(h.env.calls[1], ['A', 'older A', undefined, ['old']]);
+    assert.deepEqual(h.env.calls[1], ['A', 'older A', undefined, ['old'], undefined]);
     assert.equal(h.find('textarea').value, 'newer A');
     assert.deepEqual(h.find('attachments').selected, ['new']);
     assert.equal(h.button('重试这条请求'), undefined);
@@ -486,7 +493,7 @@ test('quick answers preserve unrelated typed drafts on success and failure, reta
       h.env.send = async () => delivered;
       h.find('question').choose('option');
       await tick();
-      assert.deepEqual(h.env.calls[0], ['A', 'option', 'Q1', ['draft-file']]);
+      assert.deepEqual(h.env.calls[0], ['A', 'option', 'Q1', ['draft-file'], undefined]);
       assert.equal(h.find('textarea').value, 'unrelated typed plan');
       assert.deepEqual(h.find('attachments').selected, ['draft-file']);
       if (!delivered) {
@@ -520,6 +527,519 @@ test('another project running allows draft edits but blocks sending; the active 
     await h.workspace.selectProject('B');
     await tick();
     assert.equal(h.find('textarea').value, 'B draft while A works');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('retry preparation leaves the recovery intact and captures immutable original question context', () => {
+  const store = createAgentDraftStore();
+  const draft = store.bind(() => 'A');
+  const question = {
+    id: 'Q1',
+    prompt: 'original prompt',
+    context: 'original context',
+    verification_milestone: 'M1',
+  };
+  draft.content.value = ' answer ';
+  const attempt = store.start('A', {
+    text: draft.content.value,
+    ids: ['asset'],
+    questionId: 'Q1',
+    question,
+  });
+  question.prompt = 'external mutation';
+  store.settle(attempt, false);
+  const failure = draft.failures.value[0];
+  const preparing = store.prepareRetry('A', failure.id);
+  assert.equal(preparing.failure.question.prompt, 'original prompt');
+  assert.equal(preparing.failure.verificationMilestone, 'M1');
+  assert.equal(draft.failures.value[0].id, failure.id);
+  assert.equal(draft.content.value, ' answer ');
+  assert.equal(draft.pending.value, true);
+  assert.equal(store.prepareRetry('A', failure.id), undefined);
+  assert.equal(store.start('A', { text: 'new send', ids: [] }), undefined);
+  store.cancelRetry(preparing);
+  assert.equal(draft.pending.value, false);
+  assert.equal(draft.failures.value[0].id, failure.id);
+  const next = store.prepareRetry('A', failure.id);
+  const retry = store.commitRetry(next, {
+    text: 'outgoing continuation context',
+    verificationMilestone: 'M1',
+  });
+  assert.equal(retry.text, ' answer ');
+  assert.equal(retry.request.text, 'outgoing continuation context');
+  store.settle(retry, false);
+  assert.equal(draft.failures.value[0].text, ' answer ');
+  assert.equal(draft.failures.value[0].request, undefined);
+  assert.equal(draft.failures.value[0].question.prompt, 'original prompt');
+});
+
+const recoveryQuestion = (extra = {}) => ({
+  id: 'Q1',
+  prompt: '原路线选择？',
+  context: '保留已经完成的模块',
+  category: 'decision',
+  options: ['路线 A'],
+  verification_milestone: 'M1',
+  ...extra,
+});
+const recoveryProject = (question = null, extra = {}) => ({
+  id: 'A',
+  name: 'A',
+  repository: '',
+  messages: [],
+  milestones: [{ id: 'M1', title: 'Delivery' }],
+  source_milestones: [],
+  attachments: [],
+  question,
+  ...extra,
+});
+async function failedAnswer(h) {
+  h.workspace.state.project = recoveryProject(recoveryQuestion());
+  h.env.send = async () => false;
+  await h.input(' \n路线 A \n ');
+  await h.attach(['original-asset']);
+  await h.submit();
+  await tick();
+  return h.agentDrafts.bind(() => 'A').failures.value[0];
+}
+
+test('explicit retry fetches the current project before resending a still-pending answer', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    h.api.load = async () => recoveryProject(recoveryQuestion());
+    h.env.send = async () => {
+      assert.equal(h.api.calls.at(-1)[0], 'projects.get');
+      return true;
+    };
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.deepEqual(h.env.calls[1], ['A', '路线 A', 'Q1', ['original-asset'], 'M1']);
+    assert.equal(h.find('textarea').value, '');
+    assert.deepEqual(h.agentDrafts.bind(() => 'A').failures.value, []);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('consumed-answer retry survives navigation and repeated failure without wrapping the saved answer twice', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    h.workspace.setPage('settings');
+    await tick();
+    h.workspace.setPage('projects');
+    await tick();
+    h.api.load = async () => recoveryProject(null, { revision: 41 });
+    h.env.send = async () => false;
+    await h.button('重试这条请求').onClick();
+    await tick();
+    const first = h.env.calls[1];
+    assert.equal(first[0], 'A');
+    assert.equal(first[2], undefined);
+    assert.equal(first[4], 'M1');
+    assert.match(first[1], /当前已保存/);
+    assert.match(first[1], /原路线选择/);
+    assert.match(first[1], /路线 A/);
+    assert.equal(h.workspace.state.project.revision, 41);
+    assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+    const saved = h.agentDrafts.bind(() => 'A').failures.value[0];
+    assert.equal(saved.questionId, 'Q1');
+    assert.equal(saved.question.prompt, '原路线选择？');
+    h.env.send = async () => true;
+    await h.submit();
+    await tick();
+    assert.deepEqual(h.env.calls[2], first);
+    assert.equal(h.find('textarea').value, '');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('new questions block explicit Retry and untouched restored Send without reusing the old answer', async () => {
+  for (const viaSend of [false, true]) {
+    const h = await harness();
+    try {
+      const saved = await failedAnswer(h);
+      h.api.load = async () =>
+        recoveryProject(recoveryQuestion({ id: 'Q2', prompt: '新的问题？' }));
+      if (viaSend) {
+        h.workspace.state.project.question = recoveryQuestion({ id: 'Q2', prompt: '新的问题？' });
+        await tick();
+        await h.submit();
+      } else await h.button('重试这条请求').onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.workspace.state.project.question.id, 'Q2');
+      assert.equal(h.find('textarea').value, '');
+      assert.deepEqual(h.find('attachments').selected, []);
+      assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+      assert.match(h.workspace.state.error, /不会复用旧回答/);
+      h.env.send = async () => true;
+      h.find('question').choose('明确回答新问题');
+      await tick();
+      assert.equal(h.env.calls[1][1], '明确回答新问题');
+      assert.equal(h.env.calls[1][2], 'Q2');
+      assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('a new-question option is an explicit new answer while the untouched old recovery stays retained', async () => {
+  const h = await harness();
+  try {
+    const saved = await failedAnswer(h);
+    h.workspace.state.project.question = recoveryQuestion({ id: 'Q2' });
+    await tick();
+    h.env.send = async () => true;
+    h.find('question').choose('路线 A');
+    await tick();
+    assert.equal(h.env.calls[1][2], 'Q2');
+    assert.equal(h.find('textarea').value, '');
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    assert.equal(
+      h.api.calls.length,
+      0,
+      'Explicit current-question options are new answers, not old retries',
+    );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('fresh-read failures and missing verification targets preserve recovery and release preparation', async () => {
+  for (const reason of ['offline', 'missing-target']) {
+    const h = await harness();
+    try {
+      const saved = await failedAnswer(h);
+      h.api.load = async () => {
+        if (reason === 'offline') throw new Error('fresh read offline');
+        return recoveryProject(null, { milestones: [], source_milestones: [{ id: 'M1' }] });
+      };
+      await h.button('重试这条请求').onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+      assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+      assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+      assert.match(h.workspace.state.error, reason === 'offline' ? /offline/ : /M1.*已不存在/);
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('double-click retry coalesces its read and a newer draft survives the read and continuation failure', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    const retry = h.button('重试这条请求').onClick();
+    await h.button('重试这条请求').onClick();
+    assert.equal(h.api.calls.length, 1);
+    await h.input('newer unsent request');
+    await h.attach(['newer-asset']);
+    read.resolve(recoveryProject());
+    await retry;
+    await tick();
+    assert.equal(h.env.calls.length, 2);
+    assert.equal(h.find('textarea').value, 'newer unsent request');
+    assert.deepEqual(h.find('attachments').selected, ['newer-asset']);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].text, ' \n路线 A \n ');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('navigation during the fresh read keeps the retry scoped to A without writing or focusing B', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    const retry = h.button('重试这条请求').onClick();
+    await h.workspace.selectProject('B');
+    await tick();
+    await h.input('B draft');
+    await h.attach(['B-asset']);
+    const b = h.find('textarea');
+    read.resolve(recoveryProject());
+    await retry;
+    await tick();
+    assert.equal(h.env.calls[1][0], 'A');
+    assert.equal(h.workspace.state.project.id, 'B');
+    assert.equal(b.value, 'B draft');
+    assert.equal(b.focused, undefined);
+    assert.deepEqual(h.find('attachments').selected, ['B-asset']);
+    assert.equal(h.agentDrafts.bind(() => 'A').content.value, ' \n路线 A \n ');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('another running turn during the fresh read leaves the recovery unsent and usable', async () => {
+  const h = await harness();
+  try {
+    const saved = await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    const retry = h.button('重试这条请求').onClick();
+    Object.assign(h.agent.state, { running: true, projectId: 'B' });
+    h.workspace.state.busy = true;
+    h.workspace.state.project = recoveryProject(recoveryQuestion({ id: 'Q-new' }), {
+      revision: 42,
+    });
+    read.resolve(recoveryProject(null, { revision: 41 }));
+    await retry;
+    await tick();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+    assert.match(h.workspace.state.error, /其他操作正在进行/);
+    assert.equal(h.workspace.state.project.revision, 42);
+    assert.equal(h.workspace.state.project.question.id, 'Q-new');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('dismissal or deletion during a fresh read invalidates late sends and releases the reservation', async () => {
+  for (const action of ['dismiss', 'delete-and-restore']) {
+    const h = await harness();
+    try {
+      const saved = await failedAnswer(h);
+      const read = deferred();
+      h.api.load = () => read.promise;
+      const retry = h.button('重试这条请求').onClick();
+      if (action === 'dismiss') h.agentDrafts.dismissFailure('A', saved.id);
+      else {
+        h.agentDrafts.discard('A');
+        h.agentDrafts.activate('A');
+        h.agentDrafts.bind(() => 'A').content.value = 'new incarnation';
+      }
+      assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+      read.resolve(recoveryProject());
+      await retry;
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.deepEqual(h.agentDrafts.bind(() => 'A').failures.value, []);
+      if (action !== 'dismiss') assert.equal(h.find('textarea').value, 'new incarnation');
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('a delayed fresh read cannot roll back a newer visible project revision before retrying', async () => {
+  const h = await harness();
+  try {
+    const saved = await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    const retry = h.button('重试这条请求').onClick();
+    h.workspace.state.project = recoveryProject(recoveryQuestion({ id: 'Q-new' }), {
+      revision: 42,
+    });
+    read.resolve(recoveryProject(null, { revision: 41 }));
+    await retry;
+    await tick();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.workspace.state.project.revision, 42);
+    assert.equal(h.workspace.state.project.question.id, 'Q-new');
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+    assert.match(h.workspace.state.error, /读取期间已更新/);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a retry read failure after navigation stays with its original project', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    const retry = h.button('重试这条请求').onClick();
+    await h.workspace.selectProject('B');
+    await tick();
+    await h.input('B independent');
+    read.reject(new Error('A read unavailable'));
+    await retry;
+    await tick();
+    assert.equal(h.workspace.state.project.id, 'B');
+    assert.equal(h.workspace.state.error, undefined);
+    assert.equal(h.find('textarea').value, 'B independent');
+    assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+    await h.workspace.selectProject('A');
+    await tick();
+    assert.match(textOf(h.root), /A read unavailable/);
+    assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a newer draft survives a different-question retry block', async () => {
+  const h = await harness();
+  try {
+    const saved = await failedAnswer(h);
+    await h.input('newer edited draft');
+    await h.attach(['newer-asset']);
+    h.api.load = async () => recoveryProject(recoveryQuestion({ id: 'Q2' }));
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.find('textarea').value, 'newer edited draft');
+    assert.deepEqual(h.find('attachments').selected, ['newer-asset']);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    assert.equal(h.workspace.state.project.question.id, 'Q2');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('closing the failure hint or editing only attachments cannot rebind an untouched old answer to Q2', async () => {
+  for (const change of ['dismiss-hint', 'attachments', 'both']) {
+    const h = await harness();
+    try {
+      const saved = await failedAnswer(h);
+      if (change !== 'attachments') {
+        h.button('关闭提示').onClick();
+        await tick();
+      }
+      if (change !== 'dismiss-hint') await h.attach(['new-context-asset']);
+      h.workspace.state.project.question = recoveryQuestion({ id: 'Q2' });
+      h.api.load = async () => recoveryProject(recoveryQuestion({ id: 'Q2' }));
+      await tick();
+      await h.submit();
+      await tick();
+      assert.equal(h.env.calls.length, 1, change);
+      assert.equal(h.find('textarea').value, '', change);
+      assert.deepEqual(
+        h.find('attachments').selected,
+        change === 'dismiss-hint' ? [] : ['new-context-asset'],
+      );
+      assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+      assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].text, ' \n路线 A \n ');
+      assert.match(h.workspace.state.error, /不会复用旧回答/);
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('normal Send retries the original answer with intentionally edited attachments and clears only that snapshot', async () => {
+  for (const question of [recoveryQuestion(), null]) {
+    const h = await harness();
+    try {
+      await failedAnswer(h);
+      h.button('关闭提示').onClick();
+      await tick();
+      await h.attach(['new-context-asset']);
+      h.api.load = async () => recoveryProject(question);
+      h.env.send = async () => true;
+      await h.submit();
+      await tick();
+      assert.equal(h.env.calls.length, 2);
+      assert.deepEqual(h.env.calls[1][3], ['new-context-asset']);
+      assert.equal(h.env.calls[1][2], question?.id);
+      assert.equal(h.env.calls[1][4], 'M1');
+      assert.equal(h.find('textarea').value, '');
+      assert.deepEqual(h.find('attachments').selected, []);
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('a real text edit after hint dismissal is a deliberate new answer', async () => {
+  const h = await harness();
+  try {
+    await failedAnswer(h);
+    h.button('关闭提示').onClick();
+    await tick();
+    h.workspace.state.project.question = recoveryQuestion({ id: 'Q2' });
+    await tick();
+    await h.input('new answer for Q2');
+    h.env.send = async () => true;
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls[1][1], 'new answer for Q2');
+    assert.equal(h.env.calls[1][2], 'Q2');
+    assert.equal(h.api.calls.length, 0);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a hung retry read times out, preserves the recovery, releases pending, and ignores its late response', async () => {
+  const h = await harness();
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let expire,
+    deadline,
+    cleared = false;
+  const token = {};
+  try {
+    const saved = await failedAnswer(h);
+    const read = deferred();
+    h.api.load = () => read.promise;
+    globalThis.setTimeout = (callback, ms, ...args) => {
+      if (ms !== 30000) return originalSetTimeout(callback, ms, ...args);
+      expire = callback;
+      deadline = ms;
+      return token;
+    };
+    globalThis.clearTimeout = (timer) => {
+      if (timer === token) cleared = true;
+      else originalClearTimeout(timer);
+    };
+    const retry = h.button('重试这条请求').onClick();
+    assert.equal(deadline, 30000);
+    assert.equal(h.agentDrafts.bind(() => 'A').pending.value, true);
+    expire();
+    await retry;
+    await tick();
+    assert.equal(cleared, true);
+    assert.equal(h.agentDrafts.bind(() => 'A').pending.value, false);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
+    assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+    assert.match(h.workspace.state.error, /超时/);
+    read.resolve(recoveryProject());
+    await tick();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.workspace.state.project.question.id, 'Q1');
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    h.dispose();
+  }
+});
+
+test('detached recovery identifies the original question with a bounded compact prompt preview', async () => {
+  const h = await harness();
+  try {
+    const longPrompt = '原问题线索'.repeat(70);
+    h.workspace.state.project = recoveryProject(recoveryQuestion({ prompt: longPrompt }));
+    h.env.send = async () => false;
+    await h.input('标题与作者');
+    await h.submit();
+    await tick();
+    h.api.load = async () => recoveryProject(recoveryQuestion({ id: 'Q2', prompt: '新的问题' }));
+    await h.button('重试这条请求').onClick();
+    await tick();
+    const preview = all(h.root).find((node) => node.class === 'agent-recovery-question');
+    assert.ok(preview);
+    assert.equal(textOf(preview), `原问题：${longPrompt.slice(0, 240)}…`);
+    assert.equal(textOf(preview).length, 245);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].question.prompt, longPrompt);
+    assert.match(textOf(h.root), /标题与作者/);
   } finally {
     h.dispose();
   }
