@@ -1045,3 +1045,24 @@ test('detached recovery identifies the original question with a bounded compact 
     h.dispose();
   }
 });
+
+test('attachment preparation blocks sending with an upload explanation rather than a model-turn result message', async () => {
+  const h = await harness();
+  try {
+    await h.input('draft waiting for its document');
+    const transfer = h.agentDrafts.beginAttachmentTransfer('A', 1, 'preparing');
+    await tick();
+    assert.match(textOf(h.root), /正在读取资料格式，暂不能发送/);
+    assert.doesNotMatch(textOf(h.root), /正在确认上一条请求的结果/);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    h.agentDrafts.attachmentPhase(transfer, 'uploading', 0);
+    await tick();
+    assert.match(textOf(h.root), /资料正在保存，确认后可发送/);
+    h.agentDrafts.finishAttachmentTransfer(transfer, null);
+    await tick();
+    assert.equal(h.find('textarea').value, 'draft waiting for its document');
+  } finally {
+    h.dispose();
+  }
+});

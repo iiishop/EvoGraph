@@ -3,14 +3,32 @@ import { computed, onMounted, ref } from 'vue';
 import { LoaderCircle, Plus } from 'lucide-vue-next';
 import { useAttachments } from '../../composables/useAttachments';
 import { useWorkspace } from '../../composables/useWorkspace';
+import { useNotifications } from '../../composables/useNotifications';
+import { agentDrafts, useAgentDraft } from '../../composables/useAgentDrafts';
 import type { Project } from '../../types';
 
 const props = defineProps<{ project: Project }>();
 const selected = defineModel<string[]>({ default: () => [] });
 const { state } = useWorkspace();
-const { formats, uploading, loadFormats, upload } = useAttachments();
+const { formats, formatError, loadFormats, uploadBatch } = useAttachments();
+const { confirmedAttachments, attachmentTransfer } = useAgentDraft(() => props.project.id);
+const uploading = computed(() =>
+  Boolean(attachmentTransfer.value && attachmentTransfer.value.phase !== 'done'),
+);
+const report = computed(() => attachmentTransfer.value?.report);
+const available = computed(() => [
+  ...new Map(
+    [
+      ...(report.value?.assets ?? []),
+      ...confirmedAttachments.value,
+      ...props.project.attachments,
+    ].map((asset) => [asset.id, asset]),
+  ).values(),
+]);
+const referenced = computed(
+  () => report.value?.assets.filter((asset) => selected.value.includes(asset.id)).length ?? 0,
+);
 const input = ref<HTMLInputElement>();
-const overflow = ref(0);
 const LIMIT = 6;
 const atLimit = computed(() => selected.value.length >= LIMIT);
 onMounted(loadFormats);
@@ -43,29 +61,64 @@ function normalizedFiles(files: FileList | File[]) {
 }
 
 async function acceptFiles(files: FileList | File[]) {
-  const normalized = normalizedFiles(files);
-  if (!normalized.length || state.busy || uploading.value) return;
+  const chosen = Array.from(files);
+  if (!chosen.length || state.busy || uploading.value) return;
   const projectId = props.project.id;
-  const uploaded = [...new Set(await upload(projectId, normalized))].filter(
-    (id) => !selected.value.includes(id),
-  );
-  if (props.project.id !== projectId) return;
-  const room = LIMIT - selected.value.length;
-  selected.value = [...selected.value, ...uploaded.slice(0, Math.max(room, 0))];
-  overflow.value = Math.max(uploaded.length - Math.max(room, 0), 0);
+  const projectName = props.project.name || projectId;
+  // Reserve the original draft incarnation before the first await. A format
+  // read must not admit an old selection into a deleted/restored project.
+  const transfer = agentDrafts.beginAttachmentTransfer(projectId, chosen.length, 'preparing');
+  if (!transfer) return;
+  const notUploaded = (message: string) =>
+    agentDrafts.finishAttachmentTransfer(transfer, {
+      assets: [],
+      confirmedFiles: [],
+      refresh: 'not_needed',
+      failure: { name: chosen[0].name, status: 'not_uploaded', message },
+      unattempted: chosen.slice(1).map((file) => file.name),
+    });
+  const ready = formats.value.extensions.length > 0 || (await loadFormats());
+  if (!agentDrafts.attachmentTransferIsCurrent(transfer)) {
+    useNotifications().push(
+      `「${projectName}」原项目已删除或改变，所选文件尚未上传，请重新选择项目和文件`,
+    );
+    return;
+  }
+  if (!ready) {
+    notUploaded('格式信息尚未就绪，文件尚未上传，请重试后重新选择');
+    return;
+  }
+  if (state.busy) {
+    notUploaded('另一项操作正在进行，文件尚未上传，请稍后重新选择');
+    if (state.project?.id !== projectId)
+      useNotifications().push(`「${projectName}」所选文件尚未上传，请稍后重新选择`);
+    return;
+  }
+  const normalized = normalizedFiles(chosen);
+  const result = await uploadBatch(projectId, normalized, {
+    isCurrent: () => agentDrafts.attachmentTransferIsCurrent(transfer),
+    onConfirmed: (asset) => {
+      agentDrafts.confirmAttachment(transfer, asset, LIMIT);
+    },
+    onPhase: (phase, completed) => agentDrafts.attachmentPhase(transfer, phase, completed),
+    onComplete: (outcome) => agentDrafts.finishAttachmentTransfer(transfer, outcome),
+  });
+  if (!result) notUploaded('另一项操作正在进行，文件尚未上传，请稍后重新选择');
 }
 
 async function changed(event: Event) {
   const target = event.target as HTMLInputElement;
-  if (target.files) await acceptFiles(target.files);
-  target.value = '';
+  try {
+    if (target.files) await acceptFiles(target.files);
+  } finally {
+    target.value = '';
+  }
 }
 
 defineExpose({ acceptFiles });
 function toggle(id: string) {
   if (selected.value.includes(id)) {
     selected.value = selected.value.filter((x) => x !== id);
-    overflow.value = 0;
     return;
   }
   if (atLimit.value) return;
@@ -83,15 +136,18 @@ function toggle(id: string) {
       aria-label="上传文档或图片"
       @change="changed"
     />
+    <small class="attachment-upload-help"
+      >所选文件上传成功后都会保存到项目；本条消息最多引用 {{ LIMIT }} 份资料内容</small
+    >
     <button
       type="button"
       class="attachment-add"
       :disabled="state.busy || uploading"
-      :aria-label="uploading ? '正在上传资料' : '添加资料'"
+      :aria-label="uploading ? '正在处理资料' : '添加资料'"
       :title="
         atLimit
-          ? `最多 ${LIMIT} 份，取消一份才能再加`
-          : `上传文档或图片，选中的资料会随本条消息发给模型（最多 ${LIMIT} 份）`
+          ? `本条引用已满；所选文件上传成功后仍会保存到当前项目，最多引用 ${LIMIT} 份资料内容`
+          : `所选文件上传成功后都会保存到当前项目；每条消息最多引用 ${LIMIT} 份资料内容`
       "
       @click="input?.click()"
     >
@@ -99,13 +155,17 @@ function toggle(id: string) {
       <Plus v-else :size="17" aria-hidden="true" />
     </button>
     <button
-      v-for="asset in project.attachments"
+      v-for="asset in available"
       :key="asset.id"
       type="button"
       :disabled="state.busy || (atLimit && !selected.includes(asset.id))"
       :class="['attachment-chip', { selected: selected.includes(asset.id) }]"
       :aria-pressed="selected.includes(asset.id)"
-      :title="atLimit && !selected.includes(asset.id) ? '最多 6 份，取消一份才能再加' : asset.name"
+      :title="
+        atLimit && !selected.includes(asset.id)
+          ? '本条最多引用 6 份；资料已保存在项目中，取消一份后可选择'
+          : asset.name
+      "
       @click="toggle(asset.id)"
     >
       {{ asset.media_type.startsWith('image/') ? '▧' : '≡' }} {{ asset.name }}
@@ -113,10 +173,85 @@ function toggle(id: string) {
     <small
       v-if="selected.length"
       class="attachment-count"
-      :title="`${selected.length}/${LIMIT} 份资料将在发送时提供给当前模型${atLimit ? '，已满' : ''}`"
+      :title="`${selected.length}/${LIMIT} 份资料内容将在发送时提供给当前模型${atLimit ? '，已满' : ''}`"
       >{{ selected.length }}/{{ LIMIT }}</small
-    ><small v-if="overflow" class="attachment-overflow" :title="`超出 ${LIMIT} 份的部分没有上传`"
-      >+{{ overflow }}</small
     >
+    <div
+      v-if="uploading || report || formatError"
+      class="attachment-upload-status"
+      role="status"
+      tabindex="0"
+      aria-label="资料上传状态"
+    >
+      <p v-if="uploading">
+        {{
+          attachmentTransfer?.phase === 'preparing'
+            ? '正在读取资料格式，文件尚未上传…'
+            : attachmentTransfer?.phase === 'refreshing'
+              ? '正在同步已处理的资料…'
+              : `正在处理资料（已确认 ${attachmentTransfer?.completed}/${attachmentTransfer?.total} 个文件）…`
+        }}
+      </p>
+      <template v-if="report">
+        <p v-if="report.assets.length">
+          本次已保存/复用 {{ report.assets.length }} 份资料；其中当前已引用 {{ referenced }} 份，{{
+            report.assets.length - referenced
+          }}
+          份未引用<span v-if="report.assets.length > referenced"
+            >（本条最多 {{ LIMIT }} 份，可稍后选择）</span
+          >
+        </p>
+        <p v-if="report.failure">
+          {{ report.failure.status === 'not_uploaded' ? '未上传' : '未确认保存' }}「{{
+            report.failure.name
+          }}」：{{ report.failure.message }}。<span v-if="report.unattempted.length"
+            >其余 {{ report.unattempted.length }} 个文件尚未尝试。</span
+          >
+        </p>
+        <p v-if="report.failure || report.selectionError">
+          请先检查项目资料，再重新选择未确认或尚未尝试的文件；重复文件会复用已有资料。
+        </p>
+        <details v-if="report.unattempted.length" class="attachment-unattempted">
+          <summary>查看尚未尝试的文件（{{ report.unattempted.length }}）</summary>
+          <ul>
+            <li v-for="(name, index) in report.unattempted" :key="index">{{ name }}</li>
+          </ul>
+        </details>
+        <p v-if="report.selectionError">{{ report.selectionError }}</p>
+        <p v-if="report.refresh === 'failed' || report.refresh === 'timeout'">
+          项目同步暂未完成；已确认保存的资料仍可引用。
+        </p>
+      </template>
+      <p v-if="formatError">
+        {{ formatError }}
+        <button type="button" class="text-button" @click="loadFormats">重试读取格式</button>
+      </p>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.attachment-picker {
+  max-height: min(180px, 24vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.attachment-upload-help,
+.attachment-upload-status {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.attachment-unattempted li {
+  overflow-wrap: anywhere;
+}
+.attachment-upload-status p {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+.attachment-upload-status {
+  max-height: 112px;
+  overflow-y: auto;
+}
+</style>

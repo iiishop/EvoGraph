@@ -27,6 +27,7 @@ const project = (id, version = 0) => ({
   milestones: [],
   source_milestones: [],
   version,
+  revision: version,
 });
 let sequence = 0;
 async function harness(initialize = true) {
@@ -297,4 +298,76 @@ test('undo restores the project without overriding a newer explicit selection', 
   assert.equal(workspace.state.project.id, 'B');
   assert.equal(workspace.state.deletedProject, null);
   assert.ok(workspace.state.projects.some((item) => item.id === 'A'));
+});
+
+test('a late background read cannot roll back an authoritative streamed revision or same-revision history', async () => {
+  for (const sameRevision of [false, true]) {
+    const { workspace, handlers } = await harness();
+    const read = deferred();
+    handlers['projects.get'] = () => read.promise;
+    const pending = workspace.refresh();
+    await tick();
+    const current = {
+      ...project('A', 20),
+      attachments: [{ id: 'confirmed-asset' }],
+      messages: [{ content: 'new saved receipt' }],
+    };
+    workspace.applyProject(current);
+    read.resolve({ ...project('A', sameRevision ? 20 : 19), attachments: [], messages: [] });
+    await pending;
+    assert.equal(workspace.state.project.revision, 20);
+    assert.deepEqual(workspace.state.project.attachments, current.attachments);
+    assert.deepEqual(workspace.state.project.messages, current.messages);
+  }
+});
+
+test('older same-project snapshots are ignored but fresh equal-revision details remain refreshable', async () => {
+  const { workspace, handlers } = await harness();
+  workspace.applyProject({ ...project('A', 20), messages: ['current'] });
+  workspace.applyProject({ ...project('A', 19), messages: ['old stream'] });
+  assert.deepEqual(workspace.state.project.messages, ['current']);
+  handlers['projects.get'] = () => ({ ...project('A', 19), messages: ['old read'] });
+  await workspace.refresh();
+  assert.deepEqual(workspace.state.project.messages, ['current']);
+  handlers['projects.get'] = () => ({ ...project('A', 20), messages: ['fresh equal revision'] });
+  await workspace.refresh();
+  assert.deepEqual(workspace.state.project.messages, ['fresh equal revision']);
+  handlers['projects.get'] = () => ({ ...project('A', 21), attachments: ['next saved file'] });
+  await workspace.refresh();
+  assert.equal(workspace.state.project.revision, 21);
+  assert.deepEqual(workspace.state.project.attachments, ['next saved file']);
+});
+
+test('a late refresh failure is obsolete after a live snapshot, without cancelling newer navigation', async () => {
+  const { workspace, handlers } = await harness();
+  const read = deferred();
+  handlers['projects.get'] = ({ project_id }) =>
+    project_id === 'A' ? read.promise : project('B', 1);
+  const pending = workspace.refresh();
+  await tick();
+  workspace.applyProject(project('A', 2));
+  await workspace.selectProject('B');
+  read.reject(new Error('late failed read'));
+  await pending;
+  assert.equal(workspace.state.project.id, 'B');
+  assert.equal(workspace.state.error, '');
+});
+
+test('a delayed read from before deletion cannot overwrite a restored project incarnation', async () => {
+  const { workspace, handlers, records, drafts } = await harness();
+  const oldRead = deferred();
+  let calls = 0;
+  handlers['projects.get'] = ({ project_id }) =>
+    ++calls === 1 ? oldRead.promise : structuredClone(records.get(project_id));
+  const pending = workspace.refresh();
+  await tick();
+  await workspace.deleteProject({ id: 'A', name: 'A' });
+  await workspace.undoDelete();
+  drafts.bind(() => 'A').content.value = 'restored project draft';
+  workspace.applyProject({ ...project('A', 1), messages: ['restored'] });
+  oldRead.resolve({ ...project('A', 50), messages: ['deleted incarnation'] });
+  await pending;
+  assert.equal(workspace.state.project.revision, 1);
+  assert.deepEqual(workspace.state.project.messages, ['restored']);
+  assert.equal(drafts.bind(() => 'A').content.value, 'restored project draft');
 });

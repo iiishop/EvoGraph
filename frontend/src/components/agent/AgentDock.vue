@@ -37,6 +37,7 @@ const {
   failureRestored,
   restoredFailure,
   recoveryError,
+  attachmentTransfer,
 } = useAgentDraft(() => props.project.id);
 const failedAttempt = computed(() => failures.value[0]);
 const failedQuestion = computed(() => {
@@ -100,6 +101,16 @@ const blocker = computed(() => {
   if (runningElsewhere.value) return { text: 'Agent 正在其他项目运行', action: '查看' };
   // 运行中时不再给提示行挂"停止"：右侧停止按钮就在同一行，重复一个操作
   if (runningHere.value) return { text: '上一轮仍在处理，可随时停止', action: '' };
+  const transfer = attachmentTransfer.value;
+  if (transfer && transfer.phase !== 'done') {
+    const text =
+      transfer.phase === 'preparing'
+        ? '正在读取资料格式，暂不能发送'
+        : transfer.phase === 'refreshing'
+          ? '正在同步资料结果，完成后可发送'
+          : '资料正在保存，确认后可发送';
+    return { text, action: '' };
+  }
   if (state.busy) return { text: '正在处理上一步操作', action: '' };
   if (pending.value) return { text: '正在确认上一条请求的结果', action: '' };
   return null;

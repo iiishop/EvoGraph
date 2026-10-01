@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue';
-import type { PendingQuestion } from '../types';
+import type { Attachment, PendingQuestion } from '../types';
+import type { AttachmentUploadResult } from '../lib/attachmentUpload';
 
 type DraftContent = {
   text: string;
@@ -18,6 +19,14 @@ type DraftEntry = {
   pending: Set<number>;
   recoveryError: string;
   composerOrigin: FailedDraft | null;
+  confirmedAttachments: Attachment[];
+  attachmentTransfer: {
+    id: number;
+    total: number;
+    completed: number;
+    phase: 'preparing' | 'uploading' | 'refreshing' | 'done';
+    report: AttachmentUploadResult | null;
+  } | null;
 };
 export type DraftAttempt = DraftContent & {
   id: number;
@@ -33,6 +42,7 @@ export type RetryPreparation = {
   failure: FailedDraft;
   restoreRevision?: number;
 };
+export type AttachmentTransfer = { id: number; projectId: string; entry: DraftEntry };
 
 // Deliberately session-only: unsent prompts and attachment references should not
 // acquire a new plaintext browser-persistence lifetime just to survive a view.
@@ -53,6 +63,8 @@ export function createAgentDraftStore() {
         pending: new Set(),
         recoveryError: '',
         composerOrigin: null,
+        confirmedAttachments: [],
+        attachmentTransfer: null,
       });
     }
     return entries.get(projectId)!;
@@ -190,6 +202,15 @@ export function createAgentDraftStore() {
     entries.delete(projectId);
   }
 
+  function attachmentTransferIsCurrent(transfer: AttachmentTransfer) {
+    const draft = entries.get(transfer.projectId);
+    return Boolean(
+      draft === transfer.entry &&
+      draft.attachmentTransfer?.id === transfer.id &&
+      draft.attachmentTransfer.phase !== 'done',
+    );
+  }
+
   return {
     start,
     retry,
@@ -198,6 +219,50 @@ export function createAgentDraftStore() {
     cancelRetry,
     detachRestored,
     recoverComposer,
+    beginAttachmentTransfer: (
+      projectId: string,
+      total: number,
+      phase: 'preparing' | 'uploading' = 'uploading',
+    ): AttachmentTransfer | undefined => {
+      const draft = entry(projectId);
+      if (!draft || (draft.attachmentTransfer && draft.attachmentTransfer.phase !== 'done')) return;
+      const id = ++sequence;
+      draft.attachmentTransfer = { id, total, completed: 0, phase, report: null };
+      draft.pending.add(id);
+      return { id, projectId, entry: draft };
+    },
+    attachmentTransferIsCurrent,
+    confirmAttachment: (transfer: AttachmentTransfer, asset: Attachment, limit = 6) => {
+      if (!attachmentTransferIsCurrent(transfer)) return false;
+      const draft = transfer.entry;
+      draft.confirmedAttachments = [
+        ...draft.confirmedAttachments.filter((item) => item.id !== asset.id),
+        { ...asset, excerpt: '' },
+      ];
+      if (!draft.ids.includes(asset.id) && draft.ids.length < limit) {
+        draft.ids = [...draft.ids, asset.id];
+        draft.revision++;
+      }
+      draft.attachmentTransfer!.completed++;
+      return true;
+    },
+    attachmentPhase: (
+      transfer: AttachmentTransfer,
+      phase: 'uploading' | 'refreshing',
+      completed: number,
+    ) => {
+      if (!attachmentTransferIsCurrent(transfer)) return;
+      Object.assign(transfer.entry.attachmentTransfer!, { phase, completed });
+    },
+    finishAttachmentTransfer: (
+      transfer: AttachmentTransfer,
+      report: AttachmentUploadResult | null,
+    ) => {
+      if (!attachmentTransferIsCurrent(transfer)) return;
+      transfer.entry.attachmentTransfer!.phase = 'done';
+      transfer.entry.attachmentTransfer!.report = report;
+      transfer.entry.pending.delete(transfer.id);
+    },
     setRecoveryError: (projectId: string, message: string) => {
       const draft = entries.get(projectId);
       if (draft) draft.recoveryError = message;
@@ -264,6 +329,8 @@ export function createAgentDraftStore() {
       failures: computed(() => entry(projectId())?.failures ?? []),
       pending: computed(() => Boolean(entry(projectId())?.pending.size)),
       recoveryError: computed(() => entry(projectId())?.recoveryError ?? ''),
+      confirmedAttachments: computed(() => entry(projectId())?.confirmedAttachments ?? []),
+      attachmentTransfer: computed(() => entry(projectId())?.attachmentTransfer ?? null),
       // Closing a hint or editing attachments never reinterprets the answer
       // text. Only a text edit or an explicit new-question answer releases it.
       restoredFailure: computed(() => entry(projectId())?.composerOrigin ?? undefined),

@@ -21,6 +21,9 @@ const state = reactive({
 // A refresh must never become a newer selection intent merely by starting later.
 let selectSequence = 0;
 let refreshSequence = 0;
+// Live agent snapshots can advance messages/history without changing the
+// project revision. A background read started before one is no longer current.
+let snapshotSequence = 0;
 let pendingSelection: { id: string; sequence: number } | null = null;
 
 async function loadProject(id: string, navigate = false) {
@@ -61,15 +64,17 @@ function discardProject(id: string) {
 async function refresh() {
   const sequence = ++refreshSequence;
   const selection = selectSequence;
+  const snapshot = snapshotSequence;
   const projectId = state.project?.id;
   const selecting = Boolean(pendingSelection);
-  const current = () => sequence === refreshSequence && selection === selectSequence;
+  const current = () =>
+    sequence === refreshSequence && selection === selectSequence && snapshot === snapshotSequence;
   try {
     const [projects, settings] = await Promise.all([
       command<ProjectSummary[]>('projects.list'),
       command<Settings>('settings.get'),
     ]);
-    if (sequence !== refreshSequence) return;
+    if (sequence !== refreshSequence || snapshot !== snapshotSequence) return;
     state.projects = [...new Map(projects.map((p) => [p.id, p])).values()];
     state.settings = settings;
     // A list fetched across a selection may predate that project (for example,
@@ -82,7 +87,13 @@ async function refresh() {
     }
     if (!projectId || state.project?.id !== projectId) return;
     const project = await command<Project>('projects.get', { project_id: projectId });
-    if (current() && !pendingSelection && state.project?.id === projectId) state.project = project;
+    if (
+      current() &&
+      !pendingSelection &&
+      state.project?.id === projectId &&
+      project.revision >= state.project.revision
+    )
+      state.project = project;
   } catch (error) {
     // Superseded refresh failures are as stale as superseded project data.
     if (current()) throw error;
@@ -144,7 +155,10 @@ export function useWorkspace() {
     perform,
     selectProject,
     applyProject: (project: Project) => {
-      if (state.project?.id === project.id) state.project = project;
+      if (state.project?.id === project.id && project.revision >= state.project.revision) {
+        snapshotSequence++;
+        state.project = project;
+      }
     },
     setError: (error: string) => {
       state.error = error;

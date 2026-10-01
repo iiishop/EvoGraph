@@ -5,7 +5,6 @@ import json
 from copy import deepcopy
 
 import pytest
-
 from evograph.domain.models import PendingQuestion
 
 
