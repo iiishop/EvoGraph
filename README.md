@@ -159,6 +159,16 @@ uv run python run.py
 
 Start-up checks the frontend itself: if `dist/` is missing, or anything under `frontend/` is newer than the built output, it runs `npm run build` (about 15 seconds) before launching, so a frontend edit needs no manual rebuild. A failed build does not block start-up: npm's output is printed and the existing `dist/` is used; only a missing `dist/` is fatal.
 
+uv manages Python packages only. After pulling changes to frontend dependencies, run `npm ci` from the repository root, then launch again. This replaces `node_modules/` using the committed lockfile; it does not change EvoGraph's saved projects. Before building, the launcher checks for missing or out-of-date npm dependencies and prints an install command; it never installs them automatically.
+
+If a build still fails, run `npm run build` directly in that directory to diagnose it. The launcher also prints the complete combined build output, so npm configuration warnings cannot hide TypeScript errors. These commands work in Windows PowerShell too; run them on separate lines:
+
+```powershell
+npm ci
+npm run build
+uv run evograph
+```
+
 Both launch modes:
 
 ```bash
