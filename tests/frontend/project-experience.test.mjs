@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -11,15 +16,24 @@ import ts from 'typescript';
 const require = createRequire(import.meta.url);
 const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const transpile = (code) =>
-  ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  ts
+    .transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
 const turnSummaryUrl = moduleUrl(
   transpile(
     readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8'),
   ),
 );
 const imports = {
+  [composerDocumentUrl]: composerDocumentUrl,
+  '../../lib/composerDocument': composerDocumentUrl,
+  './ComposerEditor.vue': composerEditorStubUrl,
+  './MessageContent.vue': messageContentStubUrl,
   '../../lib/turnSummary': turnSummaryUrl,
   '../../lib/agentRetry': moduleUrl(
     transpile(

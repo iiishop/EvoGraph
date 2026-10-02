@@ -12,3 +12,5 @@ import './styles/design.css';
 import './styles/workbench.css';
 import './styles/studio.css';
 import './styles/spatial.css';
+
+import './styles/composer.css';

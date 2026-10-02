@@ -26,7 +26,24 @@ EXCLUDED = {
     ".vscode",
     "test-results",
 }
-SECRET_NAMES = {".env", "credentials.json", "id_rsa", "id_ed25519"}
+SECRET_NAMES = {
+    ".env",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    "_netrc",
+    ".git-credentials",
+    "credentials",
+    "credentials.json",
+    "credentials.yaml",
+    "credentials.yml",
+    "auth.json",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+}
+SECRET_DIRECTORIES = {".aws", ".ssh", ".azure", ".kube", ".gnupg"}
 
 
 def root_path(value: str) -> Path:
@@ -87,10 +104,19 @@ def snapshot(repository: str, number: int) -> Baseline:
 
 
 def readable(path: Path) -> bool:
+    # Apply the same conservative name policy to the picker, source tools and
+    # class extraction. Normalize Windows separators/case even on POSIX so a
+    # copied path cannot acquire different privacy semantics across platforms.
+    parts = [part.casefold().rstrip(" .") for part in str(path).replace("\\", "/").split("/")]
+    name = parts[-1]
+    private_directory = any(part in SECRET_DIRECTORIES for part in parts[:-1]) or any(
+        left == ".config" and right == "gcloud" for left, right in zip(parts, parts[1:])
+    )
     return not (
-        path.name in SECRET_NAMES
-        or path.name.startswith(".env.")
-        or path.suffix in {".pem", ".key", ".p12", ".pfx", ".sqlite", ".db"}
+        private_directory
+        or name in SECRET_NAMES
+        or name.startswith(".env.")
+        or Path(name).suffix in {".pem", ".key", ".p12", ".pfx", ".sqlite", ".db"}
     )
 
 

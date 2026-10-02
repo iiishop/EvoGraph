@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -12,9 +17,14 @@ const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toS
 const source = (path) =>
   readFileSync(new URL(`../../frontend/src/${path}`, import.meta.url), 'utf8');
 const transpile = (code) =>
-  ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  ts
+    .transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
 const vueUrl = pathToFileURL(require.resolve('vue')).href;
 const draftCode = transpile(source('composables/useAgentDrafts.ts')).replace(
   "from 'vue'",
@@ -242,10 +252,14 @@ async function harness() {
     workspace.setPage = workspace.setPage.bind(workspace); workspace.setError = workspace.setError.bind(workspace);
     export const useWorkspace = () => workspace; // ${id}`);
   const apiUrl =
-    moduleUrl(`export const api = { calls: [], load: async (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null }) };
-    export const command = async (action, params) => { api.calls.push([action, params]); return action === 'projects.get' ? api.load(params.project_id) : { items: [] }; }; // ${id}`);
+    moduleUrl(`export const api = { calls: [], catalog: [], load: async (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null }) };
+    export const command = async (action, params) => { api.calls.push([action, params]); return action === 'projects.get' ? api.load(params.project_id) : { items: api.catalog }; }; // ${id}`);
   const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
   const imports = {
+    [composerDocumentUrl]: composerDocumentUrl,
+    '../../lib/composerDocument': composerDocumentUrl,
+    './ComposerEditor.vue': composerEditorStubUrl,
+    './MessageContent.vue': messageContentStubUrl,
     vue: vueUrl,
     'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
     '../../composables/useAgentDrafts': draftsUrl,
@@ -398,7 +412,14 @@ test('an unmounted submit restores exact text and IDs to A without writing or fo
     const sending = h.submit();
     await tick();
     assert.equal(h.find('textarea').value, '');
-    assert.deepEqual(h.env.calls[0], ['A', 'original request', undefined, ['A1'], undefined]);
+    assert.deepEqual(h.env.calls[0], [
+      'A',
+      'original request',
+      undefined,
+      ['A1'],
+      undefined,
+      { version: 1, parts: [{ type: 'text', text: 'original request' }] },
+    ]);
     await h.workspace.selectProject('B');
     await tick();
     await h.input('B newer');
@@ -443,7 +464,14 @@ test('late failure, remount, and explicit retry preserve newer text and attachme
     h.env.send = async () => true;
     await h.button('重试这条请求').onClick();
     await tick();
-    assert.deepEqual(h.env.calls[1], ['A', 'older A', undefined, ['old'], undefined]);
+    assert.deepEqual(h.env.calls[1], [
+      'A',
+      'older A',
+      undefined,
+      ['old'],
+      undefined,
+      { version: 1, parts: [{ type: 'text', text: 'older A' }] },
+    ]);
     assert.equal(h.find('textarea').value, 'newer A');
     assert.deepEqual(h.find('attachments').selected, ['new']);
     assert.equal(h.button('重试这条请求'), undefined);
@@ -495,7 +523,14 @@ test('quick answers preserve unrelated typed drafts on success and failure, reta
       h.env.send = async () => delivered;
       h.find('question').choose('option');
       await tick();
-      assert.deepEqual(h.env.calls[0], ['A', 'option', 'Q1', ['draft-file'], undefined]);
+      assert.deepEqual(h.env.calls[0], [
+        'A',
+        'option',
+        'Q1',
+        ['draft-file'],
+        undefined,
+        { version: 1, parts: [{ type: 'text', text: 'option' }] },
+      ]);
       assert.equal(h.find('textarea').value, 'unrelated typed plan');
       assert.deepEqual(h.find('attachments').selected, ['draft-file']);
       if (!delivered) {
@@ -618,7 +653,14 @@ test('explicit retry fetches the current project before resending a still-pendin
     };
     await h.button('重试这条请求').onClick();
     await tick();
-    assert.deepEqual(h.env.calls[1], ['A', '路线 A', 'Q1', ['original-asset'], 'M1']);
+    assert.deepEqual(h.env.calls[1], [
+      'A',
+      '路线 A',
+      'Q1',
+      ['original-asset'],
+      'M1',
+      { version: 1, parts: [{ type: 'text', text: '路线 A' }] },
+    ]);
     assert.equal(h.find('textarea').value, '');
     assert.deepEqual(h.agentDrafts.bind(() => 'A').failures.value, []);
   } finally {
@@ -675,8 +717,8 @@ test('new questions block explicit Retry and untouched restored Send without reu
       await tick();
       assert.equal(h.env.calls.length, 1);
       assert.equal(h.workspace.state.project.question.id, 'Q2');
-      assert.equal(h.find('textarea').value, '');
-      assert.deepEqual(h.find('attachments').selected, []);
+      assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+      assert.deepEqual(h.find('attachments').selected, ['original-asset']);
       assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
       assert.match(h.workspace.state.error, /不会复用旧回答/);
       h.env.send = async () => true;
@@ -922,10 +964,10 @@ test('closing the failure hint or editing only attachments cannot rebind an unto
       await h.submit();
       await tick();
       assert.equal(h.env.calls.length, 1, change);
-      assert.equal(h.find('textarea').value, '', change);
+      assert.equal(h.find('textarea').value, ' \n路线 A \n ', change);
       assert.deepEqual(
         h.find('attachments').selected,
-        change === 'dismiss-hint' ? [] : ['new-context-asset'],
+        change === 'dismiss-hint' ? ['original-asset'] : ['new-context-asset'],
       );
       assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].id, saved.id);
       assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].text, ' \n路线 A \n ');
@@ -1188,6 +1230,40 @@ test('collapsing history keeps a pending question outside its scroller and prese
     assert.equal(h.env.calls[0][1], 'Title and author');
     assert.equal(h.env.calls[0][2], 'Q-visible');
     assert.equal(h.find('textarea').value, 'A separate custom draft');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('saved retry ignores stale token in a newer unsent draft', async () => {
+  const h = await harness();
+  try {
+    h.env.send = async () => false;
+    await h.input('valid older request');
+    await h.submit();
+    await tick();
+    const binding = h.agentDrafts.bind(() => 'A');
+    const newer = {
+      version: 1,
+      parts: [
+        { type: 'text', text: 'newer draft ' },
+        { type: 'reference', kind: 'milestone', id: 'missing', project_id: 'A', label: 'deleted' },
+      ],
+    };
+    binding.composerDocument.value = newer;
+    await tick();
+    assert.equal(binding.failures.value.length, 1);
+    assert.equal(
+      h.button('重试这条请求').disabled,
+      false,
+      'A saved valid retry must be enabled despite invalid unrelated draft',
+    );
+    h.env.send = async () => true;
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls.length, 2);
+    assert.equal(h.env.calls[1][1], 'valid older request');
+    assert.deepEqual(binding.composerDocument.value, newer, 'Newer draft must remain unchanged');
   } finally {
     h.dispose();
   }

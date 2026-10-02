@@ -65,6 +65,7 @@ class Application:
             "attachments.read": self.attachments.read,
             "attachments.formats": self.attachments.formats,
             "references.list": self.references.list,
+            "references.catalog": self.references.catalog,
             "design.update": self.design.update,
             "design.diagram": self.design.save_diagram,
             "architecture.class_detail": self.uml.class_detail,
@@ -114,6 +115,7 @@ class Application:
             "uml.preview",
             "architecture.class_detail",
             "references.list",
+            "references.catalog",
             "agent.turn_result",
         }
         if not readonly:

@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -9,9 +14,14 @@ const require = createRequire(import.meta.url);
 const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const vueUrl = pathToFileURL(require.resolve('vue')).href;
 const compile = (path) =>
-  ts.transpileModule(readFileSync(new URL(`../../frontend/src/${path}`, import.meta.url), 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  ts
+    .transpileModule(readFileSync(new URL(`../../frontend/src/${path}`, import.meta.url), 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((a, b) => {
@@ -42,6 +52,10 @@ async function harness(initialize = true) {
     ) + `\n// ${id}`,
   );
   const imports = {
+    [composerDocumentUrl]: composerDocumentUrl,
+    '../../lib/composerDocument': composerDocumentUrl,
+    './ComposerEditor.vue': composerEditorStubUrl,
+    './MessageContent.vue': messageContentStubUrl,
     vue: vueUrl,
     '../api/client': apiUrl,
     './useAgentDrafts': draftsUrl,

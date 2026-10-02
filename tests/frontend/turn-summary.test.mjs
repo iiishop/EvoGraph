@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -11,9 +16,14 @@ import ts from 'typescript';
 const require = createRequire(import.meta.url);
 const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const transpile = (code) =>
-  ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  ts
+    .transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
 const read = (path) => readFileSync(new URL(`../../frontend/src/${path}`, import.meta.url), 'utf8');
 const summaryUrl = moduleUrl(transpile(read('lib/turnSummary.ts')));
 const {
@@ -30,6 +40,10 @@ const { eventDetail } = await import(
   )
 );
 const imports = {
+  [composerDocumentUrl]: composerDocumentUrl,
+  '../../lib/composerDocument': composerDocumentUrl,
+  './ComposerEditor.vue': composerEditorStubUrl,
+  './MessageContent.vue': messageContentStubUrl,
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../lib/turnSummary': summaryUrl,

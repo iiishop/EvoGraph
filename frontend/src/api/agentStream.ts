@@ -1,9 +1,10 @@
-import type { AgentEvent } from '../types';
+import type { AgentEvent, ComposerDocument } from '../types';
 
 export async function agentStream(
   params: {
     project_id: string;
     content: string;
+    composer_document?: ComposerDocument;
     question_id?: string;
     attachment_ids?: string[];
     verification_milestone?: string;

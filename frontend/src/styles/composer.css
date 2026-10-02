@@ -1,0 +1,183 @@
+.composer-editor {
+  grid-area: input;
+  min-width: 0;
+}
+.composer-editor .tiptap {
+  position: relative;
+  min-height: 50px;
+  max-height: min(120px, 16dvh);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding: 4px 4px 8px;
+  outline: none;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  caret-color: var(--accent);
+}
+.composer-editor .tiptap p {
+  margin: 0;
+}
+.composer-editor .tiptap[data-empty='true']::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  color: var(--muted);
+  pointer-events: none;
+}
+.composer-editor .tiptap[contenteditable='false'] {
+  opacity: 0.7;
+}
+.composer-reference,
+.message-reference {
+  display: inline-block;
+  max-width: min(320px, 100%);
+  padding: 0 5px;
+  margin: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: #eeebfb;
+  color: #5e50ab;
+  vertical-align: baseline;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-reference {
+  cursor: pointer;
+}
+.composer-reference.material,
+.message-reference.material {
+  background: #e8f0fb;
+  color: #385f93;
+}
+.composer-reference.invalid {
+  background: #fff0e6;
+  color: #8a481a;
+  border-color: #dbad8f;
+  text-decoration: underline dotted;
+}
+.composer-reference.ProseMirror-selectednode {
+  border-color: var(--accent);
+}
+.message-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.composer-suggestions,
+.composer-reference-detail {
+  position: fixed;
+  z-index: 120;
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px #53678622;
+  padding: 7px;
+  max-width: calc(100vw - 24px);
+}
+.composer-suggestions header,
+.composer-reference-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.composer-suggestions header small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.composer-suggestion-list {
+  max-height: min(222px, 35dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.composer-suggestion-list > button {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  padding: 10px;
+  width: 100%;
+  text-align: left;
+}
+.composer-suggestion-list > button.active {
+  background: var(--spatial-soft);
+}
+.composer-suggestion-list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.composer-suggestion-list strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.composer-suggestion-list small {
+  font-size: 10px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.composer-suggestion-list p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 10px;
+}
+.composer-suggestions footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 10px 3px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--muted);
+}
+.reference-catalog-warning {
+  padding: 6px 10px;
+  font-size: 10px;
+  color: var(--warning);
+  line-height: 1.6;
+}
+.composer-reference-detail {
+  width: 328px;
+  padding: 10px;
+}
+.composer-reference-detail header strong {
+  overflow-wrap: anywhere;
+}
+.composer-reference-detail p,
+.composer-reference-detail small {
+  display: block;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.composer-reference-detail code {
+  display: block;
+  padding: 5px 10px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.composer-reference-detail .reference-invalid-note {
+  color: var(--warning);
+}
+@media (max-height: 800px) {
+  .composer-editor .tiptap {
+    min-height: 43px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-suggestions,
+  .composer-reference-detail {
+    animation: none;
+    transition: none;
+    scroll-behavior: auto;
+  }
+}

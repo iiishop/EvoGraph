@@ -24,6 +24,7 @@ class Database:
                 INSERT OR IGNORE INTO schema_version VALUES(1);
                 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS message_documents(message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, document TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, created_at);
@@ -126,18 +127,37 @@ class Database:
             )
         return project
 
-    def message(self, project_id: str, role: str, content: str):
+    def message(
+        self, project_id: str, role: str, content: str, composer_document: dict | None = None
+    ):
+        message_id = uid()
         with self.connect() as db:
             db.execute(
-                "INSERT INTO messages VALUES(?,?,?,?,?)", (uid(), project_id, role, content, now())
+                "INSERT INTO messages VALUES(?,?,?,?,?)",
+                (message_id, project_id, role, content, now()),
             )
+            if composer_document:
+                # A separate table keeps old clients' five-column inserts valid.
+                # Content and its document commit together, never partially.
+                db.execute(
+                    "INSERT INTO message_documents VALUES(?,?)",
+                    (message_id, json.dumps(composer_document, ensure_ascii=False)),
+                )
 
     def messages(self, project_id: str):
         with self.connect() as db:
             return [
-                dict(r)
+                {
+                    **dict(r),
+                    "composer_document": json.loads(r["composer_document"])
+                    if r["composer_document"]
+                    else None,
+                }
                 for r in db.execute(
-                    "SELECT * FROM messages WHERE project_id=? ORDER BY created_at", (project_id,)
+                    "SELECT m.*, d.document AS composer_document FROM messages m "
+                    "LEFT JOIN message_documents d ON d.message_id=m.id "
+                    "WHERE m.project_id=? ORDER BY m.created_at",
+                    (project_id,),
                 )
             ]
 

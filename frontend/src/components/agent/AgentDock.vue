@@ -7,7 +7,16 @@ import { planAgentRetry, waitForRetryRead } from '../../lib/agentRetry';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import AttachmentReceipt from '../attachments/AttachmentReceipt.vue';
-import ReferenceMentionPicker from './ReferenceMentionPicker.vue';
+import ComposerEditor from './ComposerEditor.vue';
+import MessageContent from './MessageContent.vue';
+import {
+  cloneComposerDocument,
+  trimComposerDocument,
+  renderComposerDocument,
+  textDocument,
+  documentAttachmentIds,
+  composerDocumentIssue,
+} from '../../lib/composerDocument';
 import { ArrowUp, Square, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { useAgent } from '../../composables/useAgent';
@@ -32,6 +41,7 @@ const agent = useAgent();
 const { state, setPage, setError, selectProject, applyProject } = useWorkspace();
 const {
   content,
+  composerDocument,
   attachmentIds,
   failures,
   pending,
@@ -49,25 +59,60 @@ let mounted = true;
 onUnmounted(() => {
   mounted = false;
 });
-const message = ref<HTMLTextAreaElement>();
+const message = ref<InstanceType<typeof ComposerEditor>>();
 const attachmentPicker = ref<InstanceType<typeof AttachmentPicker>>();
-const mentionPicker = ref<InstanceType<typeof ReferenceMentionPicker>>();
 const dragDepth = ref(0);
-const references = ref<ReferenceItem[]>([]);
-const referencesLoadedFor = ref('');
-const mentionOpen = ref(false);
-const mentionQuery = ref('');
-const mentionStart = ref(0);
-const mentionCursor = ref(0);
-watch(
-  () => props.project.id,
-  () => {
-    references.value = [];
-    referencesLoadedFor.value = '';
-    mentionOpen.value = false;
-    conversationOpen.value = false;
+const references = ref<ReferenceItem[] | null>(null);
+const referenceError = ref('');
+const referenceWarnings = ref<string[]>([]);
+const editorError = ref('');
+let referenceSequence = 0;
+let loadedCatalogKey = '';
+let pendingCatalogKey = '';
+const catalogKey = () => `${props.project.id}:${props.project.revision ?? 0}`;
+const editorDocument = computed({
+  get: () => composerDocument.value ?? textDocument(content.value),
+  set: (value) => {
+    composerDocument.value = value;
   },
+});
+const inlineAttachmentIds = computed(() => documentAttachmentIds(composerDocument.value));
+const referencedAttachmentIds = computed(() => [
+  ...new Set([...attachmentIds.value, ...inlineAttachmentIds.value]),
+]);
+const documentIssue = computed(() =>
+  composerDocument.value
+    ? composerDocumentIssue(
+        composerDocument.value,
+        props.project.id,
+        references.value,
+        attachmentIds.value,
+      )
+    : null,
 );
+watch(
+  () => [props.project.id, props.project.revision],
+  () => {
+    referenceSequence++;
+    references.value = null;
+    loadedCatalogKey = '';
+    pendingCatalogKey = '';
+    referenceError.value = '';
+    referenceWarnings.value = [];
+    editorError.value = '';
+    message.value?.closeSuggestions();
+    if (composerDocument.value?.parts.some((part) => part.type === 'reference'))
+      void loadReferences();
+  },
+  { immediate: true },
+);
+watch(composerDocument, (document) => {
+  if (
+    document?.parts.some((part) => part.type === 'reference') &&
+    loadedCatalogKey !== catalogKey()
+  )
+    void loadReferences();
+});
 
 const runningHere = computed(
   () => agent.state.running && agent.state.projectId === props.project.id,
@@ -129,7 +174,7 @@ watch(
 );
 
 // Why the send button is dead, spelled out instead of silently ignored.
-const blocker = computed(() => {
+const operationBlocker = computed(() => {
   if (!state.settings?.provider) return { text: '未配置模型，无法发送', action: '配置 Provider' };
   if (runningElsewhere.value) return { text: 'Agent 正在其他项目运行', action: '查看' };
   // 运行中时不再给提示行挂"停止"：右侧停止按钮就在同一行，重复一个操作
@@ -148,37 +193,45 @@ const blocker = computed(() => {
   if (pending.value) return { text: '正在确认上一条请求的结果', action: '' };
   return null;
 });
+const blocker = computed(
+  () =>
+    operationBlocker.value ||
+    (documentIssue.value
+      ? {
+          text: referenceError.value || documentIssue.value,
+          action: references.value === null ? '重试引用' : '',
+        }
+      : null),
+);
 const canSend = computed(() => Boolean(content.value.trim()) && !blocker.value);
 
-const sampleMilestone = computed(() => props.project.milestones?.[0]?.title ?? '第一个里程碑');
 const placeholder = computed(() =>
   answering.value
     ? '也可以在这里自己写回答，或直接点上方选项…'
-    : `例如：把「${sampleMilestone.value}」拆成两个里程碑`,
+    : '描述想法、补充约束，或说明希望调整的地方…',
 );
 const counter = computed(() => content.value.length);
-watch(
-  () => [props.project.repository, props.project.attachments],
-  () => {
-    referencesLoadedFor.value = '';
-    if (mentionOpen.value) void loadReferences();
-  },
-);
 
 function runBlockerAction() {
   if (!state.settings?.provider) return setPage('settings');
   if (runningElsewhere.value) return selectProject(agent.state.projectId);
+  if (documentIssue.value && references.value === null) return loadReferences();
 }
 
 async function deliver(attempt: DraftAttempt) {
   let delivered = false;
   try {
+    const document = attempt.request ? attempt.request.composerDocument : attempt.composerDocument;
+    const outgoingDocument = document ? trimComposerDocument(document) : undefined;
     delivered = await agent.send(
       attempt.projectId,
-      attempt.request?.text ?? attempt.text.trim(),
+      outgoingDocument
+        ? renderComposerDocument(outgoingDocument)
+        : (attempt.request?.text ?? attempt.text.trim()),
       attempt.request ? attempt.request.questionId : attempt.questionId,
       attempt.ids,
       attempt.request ? attempt.request.verificationMilestone : attempt.verificationMilestone,
+      outgoingDocument,
     );
   } catch (error) {
     setError(error instanceof Error ? error.message : '请求未完成');
@@ -195,9 +248,9 @@ async function submit(
   questionId = props.project.question?.id,
   chosenOption = false,
 ) {
-  mentionOpen.value = false;
+  message.value?.closeSuggestions();
   // Keep the exact draft for recovery; trim only the submitted payload.
-  if (!text.trim() || blocker.value) return;
+  if (!text.trim() || (chosenOption ? operationBlocker.value : blocker.value)) return;
   const restored = restoredFailure.value;
   if (!chosenOption && restored && text === content.value) {
     // Sending the untouched restored answer is also a retry, not permission to
@@ -215,6 +268,9 @@ async function submit(
     props.project.id,
     {
       text,
+      composerDocument: chosenOption
+        ? textDocument(text)
+        : cloneComposerDocument(composerDocument.value),
       ids: attachmentIds.value,
       questionId,
       question:
@@ -233,7 +289,9 @@ async function submit(
 }
 
 async function retry(failure: FailedDraft | undefined = failedAttempt.value, fromComposer = false) {
-  if (!failure || blocker.value) return;
+  // Saved recovery is independent of a newer composer draft. Its own document
+  // is validated under the backend admission lock before anything is consumed.
+  if (!failure || operationBlocker.value || (fromComposer && documentIssue.value)) return;
   const projectId = props.project.id;
   const preparation = agentDrafts.prepareRetry(projectId, failure.id, fromComposer);
   if (!preparation) return;
@@ -258,7 +316,8 @@ async function retry(failure: FailedDraft | undefined = failedAttempt.value, fro
     applyProject(current);
     const plan = planAgentRetry(preparation.failure, current);
     if (plan.kind === 'blocked') {
-      if (plan.differentQuestion) agentDrafts.detachRestored(projectId, failure.id);
+      if (plan.differentQuestion && !preparation.failure.composerDocument)
+        agentDrafts.detachRestored(projectId, failure.id);
       report(plan.message);
       return;
     }
@@ -272,88 +331,30 @@ async function retry(failure: FailedDraft | undefined = failedAttempt.value, fro
   }
 }
 
-function onEnter(event: KeyboardEvent) {
-  // Chinese IMEs dispatch Enter while composing; sending there would ship half
-  // a sentence, so the composing keystroke never reaches submit.
-  if (event.isComposing || event.keyCode === 229) return;
-  if (mentionOpen.value) {
-    mentionPicker.value?.chooseActive();
-    return;
-  }
-  void submit();
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (!mentionOpen.value) return;
-  if (event.key === 'ArrowDown') {
-    event.preventDefault();
-    mentionPicker.value?.move(1);
-  } else if (event.key === 'ArrowUp') {
-    event.preventDefault();
-    mentionPicker.value?.move(-1);
-  } else if (event.key === 'Escape') {
-    event.preventDefault();
-    mentionOpen.value = false;
-  }
-}
-
 async function loadReferences() {
-  if (referencesLoadedFor.value === props.project.id) return;
+  const key = catalogKey();
+  if (loadedCatalogKey === key || pendingCatalogKey === key) return;
+  const sequence = ++referenceSequence;
   const projectId = props.project.id;
+  pendingCatalogKey = key;
+  referenceError.value = '';
   try {
-    const result = await command<{ items: ReferenceItem[] }>('references.list', {
-      project_id: projectId,
-    });
-    if (props.project.id === projectId) {
-      references.value = result.items;
-      referencesLoadedFor.value = projectId;
+    const result = await command<{ items: ReferenceItem[]; warnings?: string[] }>(
+      'references.catalog',
+      { project_id: projectId },
+    );
+    if (!mounted || sequence !== referenceSequence || catalogKey() !== key) return;
+    references.value = result.items;
+    referenceWarnings.value = result.warnings ?? [];
+    loadedCatalogKey = key;
+  } catch {
+    if (mounted && sequence === referenceSequence && catalogKey() === key) {
+      references.value = null;
+      referenceError.value = '引用列表暂时不可用，草稿仍然保留。';
     }
-  } catch (error) {
-    setError(error instanceof Error ? error.message : '资料列表加载失败');
+  } finally {
+    if (sequence === referenceSequence) pendingCatalogKey = '';
   }
-}
-
-function updateMentionState() {
-  const input = message.value;
-  if (!input) return;
-  const cursor = input.selectionStart ?? content.value.length;
-  const prefix = content.value.slice(0, cursor);
-  const match = prefix.match(/@([^\s@]*)$/u);
-  if (!match) {
-    mentionOpen.value = false;
-    return;
-  }
-  mentionQuery.value = match[1];
-  mentionStart.value = cursor - match[1].length - 1;
-  mentionCursor.value = cursor;
-  mentionOpen.value = true;
-  void loadReferences();
-}
-
-async function insertReference(item: ReferenceItem) {
-  const input = message.value;
-  if (!input) return;
-  const cursor = mentionCursor.value;
-  const before = content.value.slice(0, mentionStart.value);
-  const after = content.value.slice(cursor);
-  if (
-    item.kind === 'attachment' &&
-    !attachmentIds.value.includes(item.id) &&
-    attachmentIds.value.length >= 6
-  ) {
-    setError('每次最多引用 6 份资料，请先取消一份');
-    return;
-  }
-  const token = item.kind === 'repository' ? `@[仓库文件:${item.path}]` : `@[${item.name}]`;
-  content.value = `${before}${token} ${after}`;
-  if (item.kind === 'attachment' && !attachmentIds.value.includes(item.id)) {
-    attachmentIds.value = [...attachmentIds.value, item.id];
-  }
-  mentionOpen.value = false;
-  await nextTick();
-  const nextCursor = before.length + token.length + 1;
-  input.focus();
-  input.setSelectionRange(nextCursor, nextCursor);
 }
 
 function clipboardFiles(event: ClipboardEvent) {
@@ -397,7 +398,7 @@ function onDrop(event: DragEvent) {
 
 function choose(option: string) {
   // 选项本身就是一条完整回答，此时输入框通常是空的：不能用 canSend（它要求输入框非空）
-  if (blocker.value) return;
+  if (operationBlocker.value) return;
   void submit(option, props.project.question?.id, true);
 }
 </script>
@@ -468,7 +469,7 @@ function choose(option: string) {
         <div class="agent-conversation-scroll" aria-label="项目对话记录">
           <article v-for="item in project.messages" :key="item.id" :class="item.role">
             <strong>{{ item.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
-            <p>{{ item.content }}</p>
+            <MessageContent :message="item" />
           </article>
         </div>
       </details>
@@ -478,7 +479,7 @@ function choose(option: string) {
         :summary="turnSummary"
         :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
       />
-      <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="attachmentIds" />
+      <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="referencedAttachmentIds" />
       <div v-if="failedAttempt" class="agent-recovery-card">
         <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
         {{
@@ -486,13 +487,24 @@ function choose(option: string) {
             ? '本轮未完成，内容已放回输入框；已保存的修改会保留。'
             : '未完成请求已保留，当前草稿未改动；已保存的修改会保留。'
         }}
-        <details v-if="!failureRestored" class="agent-recovery">
+        <details
+          v-if="
+            !failureRestored ||
+            (project.question && project.question.id !== failedAttempt.questionId)
+          "
+          class="agent-recovery"
+        >
           <summary>查看未完成请求（{{ failures.length }}）</summary>
           <p v-if="failedQuestion" class="agent-recovery-question">原问题：{{ failedQuestion }}</p>
           <p>{{ failedAttempt.text }}</p>
           <small v-if="failedAttempt.ids.length">附带 {{ failedAttempt.ids.length }} 份资料</small>
         </details>
-        <button type="button" class="text-button" :disabled="Boolean(blocker)" @click="retry()">
+        <button
+          type="button"
+          class="text-button"
+          :disabled="Boolean(operationBlocker)"
+          @click="retry()"
+        >
           重试这条请求
         </button>
         <button
@@ -508,35 +520,28 @@ function choose(option: string) {
       松开以上传并保存到项目 · 本条最多引用6份资料内容
     </div>
     <form style="position: relative" class="agent-input" @submit.prevent="submit()">
-      <ReferenceMentionPicker
-        v-if="mentionOpen"
-        ref="mentionPicker"
-        :items="references"
-        :query="mentionQuery"
-        @select="insertReference"
-      />
-      <textarea
-        id="agent-message"
+      <ComposerEditor
+        :key="project.id"
         ref="message"
-        v-model="content"
-        :aria-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
+        v-model="editorDocument"
+        :project-id="project.id"
+        :catalog="references"
+        :catalog-error="referenceError"
+        :catalog-warnings="referenceWarnings"
+        :explicit-attachment-ids="attachmentIds"
+        :input-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
         :disabled="runningHere"
-        rows="2"
-        maxlength="16000"
         :placeholder="placeholder"
-        @input="updateMentionState"
-        @click="updateMentionState"
-        @keyup.left="updateMentionState"
-        @keyup.right="updateMentionState"
-        @blur="mentionOpen = false"
-        @keydown="onKeydown"
-        @keydown.enter.exact.prevent="onEnter"
+        @submit="submit()"
+        @request-catalog="loadReferences"
+        @error="editorError = $event"
       />
       <div class="agent-input-footer">
         <AttachmentPicker
           ref="attachmentPicker"
           :project="project"
           :context-key="`${view}:${compact}:${dockCollapsed}`"
+          :inline-ids="inlineAttachmentIds"
           v-model="attachmentIds"
           @settings="setPage('settings')"
         />
@@ -562,6 +567,7 @@ function choose(option: string) {
         </button>
       </div>
     </form>
+    <p v-if="editorError" class="agent-blocker" role="status">{{ editorError }}</p>
     <div
       v-if="blocker && (content.trim() || runningHere || runningElsewhere || attachmentTransfer)"
       class="agent-blocker"

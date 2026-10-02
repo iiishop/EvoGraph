@@ -47,6 +47,12 @@ Change the code afterwards and that evidence goes stale. The artifact that passe
 
 ## See what changed in a planning turn
 
+Describe a new goal, constraint or change in the shared composer. The agent determines which milestones, dependencies and architecture need to evolve. Optional `#` references identify planned/source milestones or architecture components; `@` references identify saved materials or safe files in the connected repository. Selecting a reference creates a typed token bound to its project and stable ID. Plain `#`/`@` text stays ordinary text, and references provide context rather than limiting the agent's editing scope.
+
+Current names are resolved before a turn is admitted. Deleted, mismatched or cross-project references block the request without consuming a pending answer. Uploaded files selected through the menu and inline file tokens share the six-file limit, with duplicates counted once. Repository tokens only name currently allowed repository paths; they do not fetch arbitrary paths or URLs. Saved message documents preserve the names and identities used in that turn; legacy text history stays readable.
+
+The reference picker and source reader exclude common authentication files/directories (including `.npmrc`, `.netrc`, `.aws` and `.ssh`), known key formats, and symlinks. This is a conservative path policy, not a guarantee that arbitrary source text contains no secrets.
+
 The composer shows a compact, expandable turn summary derived from the saved project before and after the turn. It lists added, updated and removed milestones, prerequisite changes, final-target membership changes and architecture changes. It records the net result after target finalization, rather than repeating the model's explanation or counting transient edits. The same summary is retained in activity history and survives reopening the project.
 
 Completed, waiting-for-answer, stopped and failed turns are distinguished. Stopping or failing does not roll back tool edits already saved: partial changes remain visible in the summary. The UI waits for the admitted turn's terminal result before refreshing after an interruption. Legacy history remains readable without fabricated summaries. This is a change report, not proof that code was implemented or acceptance passed.
@@ -242,4 +248,3 @@ Version 0.1.0, alpha. The graph, baseline, evidence and readiness model is imple
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=iiishop/EvoGraph&type=date&legend=top-left" />
  </picture>
 </a>
-

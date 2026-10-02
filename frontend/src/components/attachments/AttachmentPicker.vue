@@ -7,7 +7,7 @@ import { useNotifications } from '../../composables/useNotifications';
 import { agentDrafts, useAgentDraft } from '../../composables/useAgentDrafts';
 import type { Project } from '../../types';
 
-const props = defineProps<{ project: Project; contextKey?: string }>();
+const props = defineProps<{ project: Project; contextKey?: string; inlineIds?: string[] }>();
 const emit = defineEmits<{ settings: [] }>();
 const selected = defineModel<string[]>({ default: () => [] });
 const { state } = useWorkspace();
@@ -79,7 +79,8 @@ onUnmounted(() => {
 });
 const input = ref<HTMLInputElement>();
 const LIMIT = 6;
-const atLimit = computed(() => selected.value.length >= LIMIT);
+const referencedIds = computed(() => [...new Set([...selected.value, ...(props.inlineIds ?? [])])]);
+const atLimit = computed(() => referencedIds.value.length >= LIMIT);
 onMounted(loadFormats);
 
 function normalizedFiles(files: FileList | File[]) {
@@ -170,7 +171,7 @@ function toggle(id: string) {
     selected.value = selected.value.filter((x) => x !== id);
     return;
   }
-  if (atLimit.value) return;
+  if (atLimit.value && !props.inlineIds?.includes(id)) return;
   selected.value = [...selected.value, id];
 }
 </script>
@@ -245,7 +246,7 @@ function toggle(id: string) {
           @click="savedOpen = !savedOpen"
         >
           <Files :size="16" aria-hidden="true" />引用项目资料<small
-            >{{ selected.length }}/{{ LIMIT }}</small
+            >{{ referencedIds.length }}/{{ LIMIT }}</small
           >
         </button>
         <div v-if="savedOpen" class="attachment-saved-list">
@@ -255,10 +256,13 @@ function toggle(id: string) {
             :key="asset.id"
             type="button"
             class="attachment-tool"
-            :disabled="state.busy || (atLimit && !selected.includes(asset.id))"
+            :disabled="
+              state.busy ||
+              (atLimit && !selected.includes(asset.id) && !inlineIds?.includes(asset.id))
+            "
             :aria-pressed="selected.includes(asset.id)"
             :title="
-              atLimit && !selected.includes(asset.id)
+              atLimit && !selected.includes(asset.id) && !inlineIds?.includes(asset.id)
                 ? '本条最多引用6份；资料已保存在项目中，取消一份后可选择'
                 : asset.name
             "

@@ -3,7 +3,7 @@ import { agentStream } from '../api/agentStream';
 import { bestEffortRefresh, waitForTurnResult } from '../api/turnResult';
 import { turnSummaryStatus } from '../lib/turnSummary';
 import { useWorkspace } from './useWorkspace';
-import type { AgentEvent } from '../types';
+import type { ComposerDocument, AgentEvent } from '../types';
 import { useNotifications } from './useNotifications';
 import { changeSummary } from '../lib/changeSummary';
 
@@ -99,6 +99,7 @@ async function send(
   questionId?: string,
   attachmentIds: string[] = [],
   verificationMilestone?: string,
+  composerDocument?: ComposerDocument,
 ): Promise<boolean> {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return false;
@@ -120,6 +121,7 @@ async function send(
         project_id: projectId,
         content,
         attachment_ids: attachmentIds,
+        ...(composerDocument ? { composer_document: composerDocument } : {}),
         verification_milestone: verificationMilestone,
         ...(questionId ? { question_id: questionId } : {}),
       },

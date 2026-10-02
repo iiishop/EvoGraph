@@ -76,6 +76,7 @@ export interface Message {
   role: string;
   content: string;
   created_at: string;
+  composer_document?: ComposerDocument | null;
 }
 export interface Proposal {
   target: string;
@@ -100,9 +101,29 @@ export interface Attachment {
   size: number;
   excerpt: string;
 }
+export type ReferenceKind =
+  | 'milestone'
+  | 'source_milestone'
+  | 'architecture_component'
+  | 'source_component'
+  | 'attachment'
+  | 'repository';
+export interface ComposerReferencePart {
+  type: 'reference';
+  kind: ReferenceKind;
+  id: string;
+  project_id: string;
+  label: string;
+}
+export type ComposerPart = { type: 'text'; text: string } | ComposerReferencePart;
+export interface ComposerDocument {
+  version: 1;
+  parts: ComposerPart[];
+}
 export interface ReferenceItem {
   id: string;
-  kind: 'attachment' | 'repository';
+  kind: ReferenceKind;
+  project_id: string;
   name: string;
   label: string;
   detail: string;
