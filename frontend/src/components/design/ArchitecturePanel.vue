@@ -97,10 +97,12 @@ const {
   toggle: toggleScope,
   close: closeDetail,
   show: showDetail,
+  reload: reloadDetail,
   showSaved,
 } = useScopedClassDetail(() => ({
   key: contextKey.value,
   projectId: props.project.id,
+  baselineId: props.project.baselines.at(-1)?.id,
   architectureRevision: architectureRevision.value,
   componentIds: diagram.value?.nodes.map((node) => node.id) ?? [],
   componentFiles: Object.fromEntries(
@@ -208,6 +210,15 @@ function changeScope(id: string) {
   agent.freeView(props.project.id);
   toggleScope(id);
 }
+async function returnToOverview() {
+  const key = contextKey.value;
+  closeDetail();
+  await nextTick();
+  if (key === contextKey.value)
+    workbench.value
+      ?.querySelector<HTMLButtonElement>('.class-detail-trigger')
+      ?.focus({ preventScroll: true });
+}
 function openDetail() {
   detailMode.value = 'source';
   agent.freeView(props.project.id);
@@ -222,7 +233,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
 </script>
 <template>
   <section ref="workbench" class="architecture-workbench">
-    <header class="architecture-heading">
+    <header v-show="!detailOpen" class="architecture-heading">
       <h2><Network :size="21" />系统架构</h2>
       <button
         class="button secondary"
@@ -232,7 +243,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         版本记录 {{ project.architectures.length }}
       </button>
     </header>
-    <nav class="architecture-tabs" aria-label="架构视图">
+    <nav v-show="!detailOpen" class="architecture-tabs" aria-label="架构视图">
       <button
         v-for="item in [
           { id: 'current', label: '目标架构' },
@@ -245,7 +256,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         {{ item.label }}
       </button>
     </nav>
-    <div v-if="historyOpen" class="version-track">
+    <div v-if="historyOpen && !detailOpen" class="version-track">
       <button
         v-for="(a, i) in project.architectures"
         :key="a.number"
@@ -261,7 +272,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
       <p v-if="!project.architectures.length">尚无架构版本</p>
     </div>
     <template v-if="diagram">
-      <p v-if="view !== 'source' && view !== 'current'" class="history-banner">
+      <p v-if="!detailOpen && view !== 'source' && view !== 'current'" class="history-banner">
         正在查看 A{{ architecture?.number }} 快照。<button
           class="text-button"
           @click="chooseView('current')"
@@ -449,7 +460,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         :aria-busy="detailLoading"
       >
         <header class="class-detail-heading">
-          <button class="button secondary" @click="closeDetail">
+          <button class="button secondary" @click="returnToOverview">
             <ArrowLeft :size="15" />返回模块总览
           </button>
           <div>
@@ -461,7 +472,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
               }}
             </p>
           </div>
-          <button class="icon-button" aria-label="关闭局部类结构" @click="closeDetail">
+          <button class="icon-button" aria-label="关闭局部类结构" @click="returnToOverview">
             <X :size="18" />
           </button>
         </header>
@@ -494,9 +505,12 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
           </details>
         </template>
         <template v-else>
-          <p class="class-detail-disclaimer">
-            此处展示所选模块已关联源码的静态类结构。目标与历史架构只限定模块范围，不代表设计已实现，也不是历史代码快照。
-          </p>
+          <details class="class-detail-disclaimer">
+            <summary>SRC · 当前源码提取，设计范围不等于实现证据</summary>
+            <p>
+              此处展示所选模块已关联源码的静态类结构。目标与历史架构只限定模块范围，不代表设计已实现，也不是历史代码快照。
+            </p>
+          </details>
           <div v-if="detailLoading" class="class-detail-state" role="status">
             <LoaderCircle :size="24" class="class-detail-spinner" />
             <h3>正在提取所选模块…</h3>
@@ -508,19 +522,29 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
             <button class="button secondary" @click="openDetail">重试当前范围</button>
           </div>
           <template v-else-if="detailResult">
-            <p v-if="detailResult.status === 'ready'" class="class-detail-message" role="status">
+            <p
+              v-if="detailResult.status === 'ready'"
+              class="class-detail-message visually-hidden"
+              role="status"
+            >
               {{ detailResult.message }}
             </p>
             <div v-else class="class-detail-state" role="status">
               <h3>{{ detailResult.message }}</h3>
               <p>{{ classDetailGuidance(detailResult.status) }}</p>
-              <button class="button secondary" @click="closeDetail">返回调整模块范围</button>
+              <button class="button secondary" @click="returnToOverview">返回调整模块范围</button>
             </div>
             <UmlView
               v-if="detailResult.status === 'ready' && detailResult.diagram"
               :diagram="detailResult.diagram"
               :project-id="project.id"
               :preview-image="detailResult.image"
+              :semantic="detailResult.semantic"
+              compact
+              :render-status="detailResult.render_status"
+              :render-error="detailResult.render_error"
+              can-retry-render
+              @retry-source-render="reloadDetail"
             />
             <DiagramImage
               v-else-if="detailResult.status === 'ready' && detailResult.image"
@@ -557,9 +581,11 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
           </template>
         </template>
       </section>
-      <p v-if="view === 'source'" class="source-summary">{{ project.source_summary }}</p>
-      <ArchitectureQuality v-if="architecture" :architecture="architecture" />
-      <details v-if="architecture" class="architecture-foundation">
+      <p v-if="view === 'source' && !detailOpen" class="source-summary">
+        {{ project.source_summary }}
+      </p>
+      <ArchitectureQuality v-if="architecture && !detailOpen" :architecture="architecture" />
+      <details v-if="architecture && !detailOpen" class="architecture-foundation">
         <summary>
           技术选型、决策与来源
           <span
@@ -863,6 +889,12 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
   font-size: 11px;
   line-height: 1.6;
   color: var(--text-secondary);
+}
+.class-detail-disclaimer summary {
+  cursor: pointer;
+}
+.class-detail-disclaimer p {
+  margin: 8px 0 0;
 }
 .class-detail-message {
   font-size: 12px;

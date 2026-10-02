@@ -1,6 +1,7 @@
 """Bounded architecture drill-down. Never traverse an import or execute source code."""
 
 import ast
+import copy
 import hashlib
 import html
 import io
@@ -26,8 +27,10 @@ MAX_UML_BYTES = 40_000
 MAX_UML_LINES = 360
 LIMITATIONS = [
     "只解析所选组件明确引用的文件；不会沿导入读取其他文件。",
-    "仅展示静态类、字段、方法签名与可确定的继承；不推断调用、动态成员或运行时行为。",
+    "仅展示静态类、字段、方法签名与显式继承 / 实现声明；不推断调用、动态成员或运行时行为。",
     "边界节点只表示静态导入或直接架构邻居，不展开其内部实现。",
+    "继承仅匹配所选同文件中的唯一词法名称；未解析别名、导入绑定或编译/运行时类型。",
+    "声明保留类型与绑定结构；默认值、类型中的字面量、可执行表达式和数组长度使用 … 掩码，不展示方法体或装饰器参数。",
 ]
 
 
@@ -220,6 +223,54 @@ def expression(node):
     return value
 
 
+def declaration_expression(node):
+    """Keep type/header shape without exposing arbitrary expressions or constants."""
+
+    class MaskExpressions(ast.NodeTransformer):
+        def visit_Call(self, node):
+            return ast.Name(id="…", ctx=ast.Load())
+
+        visit_Lambda = visit_Call
+        visit_ListComp = visit_Call
+        visit_SetComp = visit_Call
+        visit_DictComp = visit_Call
+        visit_GeneratorExp = visit_Call
+        visit_JoinedStr = visit_Call
+
+        def visit_Constant(self, node):
+            return node if node.value is None else ast.Name(id="…", ctx=ast.Load())
+
+    return expression(MaskExpressions().visit(copy.deepcopy(node))) if node is not None else ""
+
+
+def type_parameters(node):
+    parameters = []
+    for parameter in getattr(node, "type_params", []):
+        prefix = {"TypeVarTuple": "*", "ParamSpec": "**"}.get(type(parameter).__name__, "")
+        value = prefix + parameter.name
+        bound = getattr(parameter, "bound", None)
+        if bound is not None:
+            value += ": " + declaration_expression(bound)
+        if getattr(parameter, "default_value", None) is not None:
+            value += " = …"
+        parameters.append(value)
+    return "[" + ", ".join(parameters) + "]" if parameters else ""
+
+
+def class_declaration(node):
+    parameters = [declaration_expression(base) for base in node.bases]
+    parameters.extend(
+        (keyword.arg + "=" if keyword.arg else "**") + declaration_expression(keyword.value)
+        for keyword in node.keywords
+    )
+    return (
+        "class "
+        + node.name
+        + type_parameters(node)
+        + ("(" + ", ".join(parameters) + ")" if parameters else "")
+    )
+
+
 def classes_in(statements, prefix=""):
     for node in statements:
         if isinstance(node, ast.ClassDef):
@@ -240,7 +291,9 @@ def arguments(args):
     """Keep signature structure/types, but do not copy potentially sensitive defaults."""
 
     def argument(item, default=False):
-        result = item.arg + (": " + expression(item.annotation) if item.annotation else "")
+        result = item.arg + (
+            ": " + declaration_expression(item.annotation) if item.annotation else ""
+        )
         return result + (" = …" if default else "")
 
     positional = [*args.posonlyargs, *args.args]
@@ -271,30 +324,53 @@ def parse_python(name, text):
         tree = ast.parse(text, filename=name)
     except (SyntaxError, ValueError, RecursionError):
         fail("unsupported", "Python 语法无法静态解析：" + name)
-    classes = []
+    classes, limitations = [], []
     for qualified, node in classes_in(tree.body):
         if len(classes) >= MAX_CLASSES:
             fail("too_large", "所选范围超过 24 个类，请拆分组件或缩小选择。")
+        rows, declarations = members(node, with_declarations=True)
+        bases = []
+        for base in node.bases:
+            if any(isinstance(child, (ast.Call, ast.Lambda)) for child in ast.walk(base)):
+                limitations.append("Python 动态基类表达式已省略，未执行调用或推断继承。")
+                continue
+            bases.append(
+                {"name": declaration_expression(base), "kind": "extends", **node_lines(base)}
+            )
         classes.append(
             {
                 "name": qualified,
-                "line": node.lineno,
-                "members": members(node),
-                "bases": [expression(base) for base in node.bases],
+                "declaration": class_declaration(node),
+                **node_lines(node),
+                "members": rows,
+                "member_declarations": declarations,
+                "bases": [base["name"] for base in bases],
+                "base_declarations": bases,
                 "kind": "class",
+                "language": "python",
             }
         )
-    imports = []
+    imports, import_declarations = [], []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imports.extend(item.name for item in node.names)
+            targets = [item.name for item in node.names]
         elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level
-            if node.module:
-                imports.append(prefix + node.module)
-            else:
-                imports.extend(prefix + item.name for item in node.names)
-    return {"classes": classes, "imports": imports, "limitations": []}
+            targets = (
+                [prefix + node.module]
+                if node.module
+                else [prefix + item.name for item in node.names]
+            )
+        else:
+            continue
+        imports.extend(targets)
+        import_declarations.extend({"name": target, **node_lines(node)} for target in targets)
+    return {
+        "classes": classes,
+        "imports": imports,
+        "import_declarations": import_declarations,
+        "limitations": limitations,
+    }
 
 
 def method_assignments(body):
@@ -308,20 +384,52 @@ def method_assignments(body):
         pending.extend(reversed(list(ast.iter_child_nodes(node))))
 
 
-def members(node):
+def node_lines(node):
+    return {"line": node.lineno, "end_line": node.end_lineno or node.lineno}
+
+
+def members(node, *, with_declarations=False):
     fields, methods = {}, []
+    annotated_fields = set()
+
+    def declaration(item, name, kind, text, qualifiers=()):
+        return {
+            "name": name,
+            "kind": kind,
+            "text": text,
+            "visibility": "private" if name.startswith("_") else "public",
+            "qualifiers": list(qualifiers),
+            **node_lines(item),
+        }
+
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             args = arguments(item.args)
-            result = expression(item.returns)
+            result = declaration_expression(item.returns)
+            qualifiers = [
+                decorator.id
+                for decorator in item.decorator_list
+                if isinstance(decorator, ast.Name)
+                and decorator.id in {"staticmethod", "classmethod", "property"}
+            ]
+            if isinstance(item, ast.AsyncFunctionDef):
+                qualifiers.append("async")
             label = ("async " if isinstance(item, ast.AsyncFunctionDef) else "") + item.name
-            methods.append(
-                ("- " if item.name.startswith("_") else "+ ")
-                + label
+            signature = label + "(" + args + ")" + (" : " + result if result else "")
+            canonical_signature = (
+                label
+                + type_parameters(item)
                 + "("
                 + args
                 + ")"
                 + (" : " + result if result else "")
+            )
+            canonical = " ".join([*(q for q in qualifiers if q != "async"), canonical_signature])
+            methods.append(
+                (
+                    ("- " if item.name.startswith("_") else "+ ") + signature,
+                    declaration(item, item.name, "method", canonical, qualifiers),
+                )
             )
             # Explicit instance attributes only; no inferred types or called-object traversal.
             candidates = method_assignments(item.body)
@@ -345,17 +453,32 @@ def members(node):
                     name = target.attr
                 else:
                     continue
-                annotation = expression(getattr(assignment, "annotation", None))
+                annotation_node = getattr(assignment, "annotation", None)
+                if annotation_node is None and name in annotated_fields:
+                    # Keep one actual declaration, including its original span and
+                    # initializer marker. A later assignment supplies no new type
+                    # evidence and must not overwrite an explicit annotation.
+                    continue
+                if annotation_node is not None:
+                    annotated_fields.add(name)
+                annotation = declaration_expression(annotation_node)
                 # Defaults may contain secrets; only show types, never literal source values.
+                signature = name + (" : " + annotation if annotation else "")
                 fields[name] = (
-                    ("- " if name.startswith("_") else "+ ")
-                    + name
-                    + (" : " + annotation if annotation else "")
+                    ("- " if name.startswith("_") else "+ ") + signature,
+                    declaration(
+                        assignment,
+                        name,
+                        "field",
+                        signature
+                        + (" = …" if getattr(assignment, "value", None) is not None else ""),
+                    ),
                 )
     result = list(fields.values()) + methods
     if len(result) > MAX_CLASS_MEMBERS:
         fail("too_large", f"类 {node.name} 超过 32 个成员，请缩小范围或使用接口级设计图。")
-    return result
+    rows = [row for row, _ in result]
+    return (rows, [record for _, record in result]) if with_declarations else rows
 
 
 def selected_import(source_name, target, file_names):
@@ -415,6 +538,7 @@ def selected_import(source_name, target, file_names):
 def extract(project, scope):
     texts, hashes = selected_sources(project, scope)
     classes, parsed, member_count, limitations = [], {}, 0, []
+    declaration_counts = {}
     for name, text in texts.items():
         try:
             result = parse_python(name, text) if name.endswith(".py") else parse_classes(name, text)
@@ -433,7 +557,16 @@ def extract(project, scope):
                 fail("too_large", "类成员或签名超过局部细节上限，请缩小范围。")
             if member_count > MAX_MEMBERS:
                 fail("too_large", "所选范围超过 160 个成员，请缩小组件范围。")
+            declarations = node["member_declarations"]
+            if any(len(member["text"]) > 400 for member in declarations):
+                fail("too_large", "类成员或签名超过局部细节上限，请缩小范围。")
+            if len(node.get("declaration", "")) > 400:
+                fail("too_large", "类声明超过局部细节上限，请缩小范围。")
             qualified = node["name"]
+            key = (name, qualified)
+            occurrence = declaration_counts.get(key, 0)
+            declaration_counts[key] = occurrence + 1
+            node["semantic_id"] = alias("class_", f"{project.id}:{name}:{qualified}:{occurrence}")
             classes.append(
                 (
                     name,
@@ -450,27 +583,63 @@ def extract(project, scope):
             limitations,
         )
     boundaries, edges = {}, set()
+    semantic_boundaries, semantic_relations = {}, {}
     selected_ids = set(scope.component_ids)
     component_alias = {n.id: alias("P_", n.id) for n in scope.nodes}
+    packages = [
+        {"id": alias("package_", project.id + ":" + n.id), "component_id": n.id, "label": n.label}
+        for n in scope.nodes
+    ]
+    semantic_ids = {component_alias[p["component_id"]]: p["id"] for p in packages}
+    semantic_ids.update({cid: node["semantic_id"] for _, _, node, _, cid in classes})
     nodes = {n.id: n for n in scope.diagram.nodes}
 
-    def boundary(key, label):
+    def location(path, declaration):
+        return {"path": path, "line": declaration["line"], "end_line": declaration["end_line"]}
+
+    def boundary(key, label, kind, origin="source", reason="unresolved"):
         if key not in boundaries and len(boundaries) >= MAX_BOUNDARIES:
             fail("too_large", "所选范围超过 24 个边界依赖，请缩小组件范围。")
         boundaries[key] = label
-        return alias("B_", key)
+        diagram_id = alias("B_", key)
+        semantic_id = alias("boundary_", project.id + ":" + key)
+        semantic_ids[diagram_id] = semantic_id
+        semantic_boundaries[semantic_id] = {
+            "id": semantic_id,
+            "label": label,
+            "kind": kind,
+            "origin": origin,
+            "reason": reason,
+        }
+        return diagram_id
+
+    def relation(left, right, kind, label, origin="source", resolution="selected", source=None):
+        source_id, target_id = semantic_ids[left], semantic_ids[right]
+        identity = ":".join(
+            (source_id, target_id, kind, label, origin, source["path"] if source else "")
+        )
+        relation_id = alias("relation_", identity)
+        semantic_relations.setdefault(
+            relation_id,
+            {
+                "id": relation_id,
+                "source": source_id,
+                "target": target_id,
+                "kind": kind,
+                "label": label,
+                "origin": origin,
+                "resolution": resolution,
+                **({"location": source} if source else {}),
+            },
+        )
 
     for edge in scope.diagram.edges:
         mark = "DESIGN" if scope.architecture_revision else "SRC"
+        origin = "design" if scope.architecture_revision else "source"
         if edge.source in selected_ids and edge.target in selected_ids:
-            edges.add(
-                (
-                    component_alias[edge.source],
-                    "..>",
-                    component_alias[edge.target],
-                    mark + " " + edge.label,
-                )
-            )
+            left, right = component_alias[edge.source], component_alias[edge.target]
+            edges.add((left, "..>", right, mark + " " + edge.label))
+            relation(left, right, "architecture", edge.label, origin, "architecture")
             continue
         inside, outside = None, None
         if edge.source in selected_ids and edge.target not in selected_ids:
@@ -478,46 +647,150 @@ def extract(project, scope):
         elif edge.target in selected_ids and edge.source not in selected_ids:
             inside, outside = edge.target, edge.source
         if inside and outside in nodes:
-            other = boundary("architecture:" + outside, mark + " · " + nodes[outside].label)
+            other = boundary(
+                "architecture:" + outside,
+                mark + " · " + nodes[outside].label,
+                "architecture",
+                origin,
+                "architecture_neighbor",
+            )
             left, right = (
                 (component_alias[inside], other)
                 if inside == edge.source
                 else (other, component_alias[inside])
             )
             edges.add((left, "..>", right, mark + " " + edge.label))
+            relation(left, right, "architecture", edge.label, origin, "architecture")
 
     for name, result in parsed.items():
         owners = [n for n in scope.nodes if name in n.source_refs]
-        for target in result["imports"]:
+        for declaration in result["import_declarations"]:
+            target = declaration["name"]
             target_file = selected_import(name, target, texts)
             if target_file is not None:
                 target_owners = [n for n in scope.nodes if target_file in n.source_refs]
                 for owner in owners:
                     for target_owner in target_owners:
                         if owner.id != target_owner.id:
-                            edges.add(
-                                (
-                                    component_alias[owner.id],
-                                    "..>",
-                                    component_alias[target_owner.id],
-                                    "SRC Import",
-                                )
+                            left, right = (
+                                component_alias[owner.id],
+                                component_alias[target_owner.id],
+                            )
+                            edges.add((left, "..>", right, "SRC Import"))
+                            relation(
+                                left,
+                                right,
+                                "import",
+                                "Import · " + target,
+                                source=location(name, declaration),
                             )
                 continue
-            other = boundary("import:" + target, "Import · " + target)
+            other = boundary(
+                "import:" + target, "Import · " + target, "import", reason="external_import"
+            )
             for owner in owners:
-                edges.add((component_alias[owner.id], "..>", other, "SRC Import"))
-    # Conditional declarations can repeat a name; do not pick an arbitrary definition.
+                left = component_alias[owner.id]
+                edges.add((left, "..>", other, "SRC Import"))
+                relation(
+                    left,
+                    other,
+                    "import",
+                    "Import · " + target,
+                    resolution="boundary",
+                    source=location(name, declaration),
+                )
+    # Conditional declarations can repeat a name; never pick an arbitrary definition.
     occurrences = {}
     for name, qualified, _, _, cid in classes:
         occurrences.setdefault((name, qualified), []).append(cid)
-    local_names = {key: ids[0] for key, ids in occurrences.items() if len(ids) == 1}
     for name, qualified, node, _, cid in classes:
-        for identifier in node["bases"]:
-            target = local_names.get((name, identifier))
+        separator = "::" if node["language"] == "cpp" else "."
+        for declaration in node["base_declarations"]:
+            identifier, kind = declaration["name"], declaration["kind"]
+            matches = []
+            # Only lexical, same-file spellings are candidates. No cross-file type resolution.
+            enclosing = qualified.split(separator)[:-1]
+            for depth in range(len(enclosing), -1, -1):
+                candidate = separator.join([*enclosing[:depth], identifier])
+                if (name, candidate) in occurrences:
+                    matches = occurrences[(name, candidate)]
+                    break
+            target = matches[0] if len(matches) == 1 else None
+            resolution = "selected" if target else "boundary"
             if target is None:
-                target = boundary("base:" + identifier, "Base · " + identifier)
-            edges.add((cid, "--|>", target, "SRC Extend"))
+                reason = "ambiguous" if matches else "unresolved"
+                target = boundary(
+                    "base:" + name + ":" + qualified + ":" + identifier,
+                    "Base · " + identifier,
+                    "base",
+                    reason=reason,
+                )
+            edges.add(
+                (
+                    cid,
+                    "..|>" if kind == "implements" else "--|>",
+                    target,
+                    "SRC Implement" if kind == "implements" else "SRC Extend",
+                )
+            )
+            relation(
+                cid,
+                target,
+                kind,
+                identifier,
+                resolution=resolution,
+                source=location(name, declaration),
+            )
+
+    semantic_classes = []
+    for name, qualified, node, _, _ in classes:
+        member_counts, declarations = {}, []
+        for member in node["member_declarations"]:
+            identity = ":".join(
+                (node["semantic_id"], member["kind"], member["name"], member["text"])
+            )
+            occurrence = member_counts.get(identity, 0)
+            member_counts[identity] = occurrence + 1
+            declarations.append(
+                {
+                    "id": alias("member_", identity + ":" + str(occurrence)),
+                    **{
+                        key: member[key]
+                        for key in ("name", "kind", "text", "visibility", "qualifiers")
+                    },
+                    "location": location(name, member),
+                }
+            )
+        semantic_classes.append(
+            {
+                "id": node["semantic_id"],
+                "name": qualified,
+                **({"declaration": node["declaration"]} if node.get("declaration") else {}),
+                "kind": node["kind"],
+                "language": node["language"],
+                "package_ids": [
+                    p["id"] for p in packages if name in nodes[p["component_id"]].source_refs
+                ],
+                "location": location(name, node),
+                "members": declarations,
+            }
+        )
+    # This is declaration data, before rendering. Never reverse-parse the PlantUML display text.
+    semantic = {
+        "schema_version": 1,
+        "origin": "source",
+        "project_id": project.id,
+        "architecture_revision": scope.architecture_revision,
+        "component_ids": list(scope.component_ids),
+        "files": list(scope.files),
+        "baseline_id": project.baseline.id,
+        "source_fingerprints": dict(hashes),
+        "classes": semantic_classes,
+        "packages": packages,
+        "boundaries": sorted(semantic_boundaries.values(), key=lambda item: item["id"]),
+        "relations": sorted(semantic_relations.values(), key=lambda item: item["id"]),
+        "limitations": list(dict.fromkeys([*LIMITATIONS, *limitations])),
+    }
 
     lines = [
         "@startuml",
@@ -592,4 +865,5 @@ def extract(project, scope):
         diagram,
         [value for _, value in sorted(boundaries.items())],
         list(dict.fromkeys(limitations)),
+        semantic,
     )

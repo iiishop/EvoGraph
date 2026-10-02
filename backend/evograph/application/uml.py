@@ -44,6 +44,14 @@ hyperlinks, embedded images, or remote resources.
 """
 
 
+class UmlRenderError(ValueError):
+    """A validated local document could not be compiled by the standard renderer.
+
+    Source validation, scope and freshness failures must not use this exception:
+    only this type may degrade to an explicitly unrendered semantic preview.
+    """
+
+
 def validate_source(source: str):
     lines = source.strip().splitlines()
     if not lines or not lines[0].startswith("@startuml") or lines[-1].strip() != "@enduml":
@@ -63,7 +71,7 @@ def render(source: str) -> bytes:
         jar = Path(__file__).resolve().parents[3] / ".tools" / "plantuml.jar"
     java = shutil.which("java")
     if not java or not jar.is_file():
-        raise ValueError(
+        raise UmlRenderError(
             "本地 UML 渲染需要 Java 与 PlantUML；请运行 python tools/setup_uml.py，或设置 EVOGRAPH_PLANTUML_JAR"
         )
     try:
@@ -88,12 +96,12 @@ def render(source: str) -> bytes:
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError("UML 编译超时，请简化布局约束后重试") from exc
+        raise UmlRenderError("UML 编译超时，请简化布局约束后重试") from exc
+    except OSError as exc:
+        raise UmlRenderError("本地 UML 渲染器无法启动，请检查 Java 与 PlantUML 安装。") from exc
     if result.returncode or b"<svg" not in result.stdout:
-        raise ValueError(
-            "PlantUML 编译失败，请修正语法："
-            + result.stderr.decode("utf-8", errors="replace")[-1000:]
-        )
+        # Compiler diagnostics can echo source text; the response exposes only a safe summary.
+        raise UmlRenderError("PlantUML 编译失败，请查看源码并修正语法后重试。")
     return result.stdout
 
 
@@ -261,21 +269,32 @@ class UmlService:
             result["files"] = scope.files
             if scope.narrowed:
                 result["limitations"].insert(0, "仅展开所选文件，这是组件的局部范围。")
-            diagram, boundaries, limitations = extract(p, scope)
+            diagram, boundaries, limitations, semantic = extract(p, scope)
             result["limitations"].extend(limitations)
             result["boundaries"] = boundaries
             validate_source(diagram.source)
-            svg = render(diagram.source)
-            selected_sources(p, scope)  # Freshness includes edits during rendering.
+            svg, render_error = None, ""
+            try:
+                svg = render(diagram.source)
+            except UmlRenderError as exc:
+                render_error = str(exc)
+            # A failed renderer does not relax the selected-file freshness contract.
+            selected_sources(p, scope)
         except ScopeError as exc:
             result["limitations"].extend(exc.limitations)
             result.update(status=exc.status, message=str(exc))
             return result
+        semantic["limitations"] = list(dict.fromkeys(result["limitations"]))
         result.update(
             status="ready",
+            semantic=semantic,
             message=f"SRC · 已展开 {len(scope.component_ids)} 个组件中的 "
             f"{len(scope.files)} 个文件；边界依赖不展开。",
             diagram=diagram.model_dump(),
-            image="data:image/svg+xml;base64," + base64.b64encode(svg).decode(),
+            render_status="ready" if svg is not None else "unavailable",
         )
+        if svg is not None:
+            result["image"] = "data:image/svg+xml;base64," + base64.b64encode(svg).decode()
+        else:
+            result["render_error"] = render_error
         return result

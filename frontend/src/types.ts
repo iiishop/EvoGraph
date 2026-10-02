@@ -314,7 +314,10 @@ export interface ClassDetailResult {
   status: 'ready' | 'empty' | 'unmapped' | 'too_large' | 'unsupported';
   message: string;
   diagram?: UmlDiagram;
+  semantic?: SourceClassModel;
   image?: string;
+  render_status?: 'ready' | 'unavailable';
+  render_error?: string;
   files: string[];
   component_ids: string[];
   boundaries: string[];
@@ -335,4 +338,62 @@ export interface UmlDiagram {
   milestone_ids: string[];
   revision: number;
   baseline_id: string;
+}
+
+/** Bounded syntax declarations from selected source files, never a parsed PlantUML document. */
+export interface SourceLocation {
+  path: string;
+  line: number;
+  end_line: number;
+}
+export interface SourceClassMember {
+  id: string;
+  name: string;
+  kind: 'field' | 'method';
+  text: string;
+  visibility: 'public' | 'protected' | 'private' | 'unspecified';
+  qualifiers: string[];
+  location: SourceLocation;
+}
+export interface SourceClass {
+  id: string;
+  name: string;
+  declaration?: string;
+  kind: string;
+  language: string;
+  package_ids: string[];
+  location: SourceLocation;
+  members: SourceClassMember[];
+}
+export interface SourceBoundary {
+  id: string;
+  label: string;
+  kind: 'import' | 'base' | 'architecture';
+  origin: 'source' | 'design';
+  reason?: string;
+}
+export interface SourceRelation {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'extends' | 'implements' | 'import' | 'architecture';
+  label: string;
+  origin: 'source' | 'design';
+  resolution?: 'selected' | 'boundary' | 'architecture';
+  location?: SourceLocation;
+}
+export interface SourceClassModel {
+  schema_version: 1;
+  origin: 'source';
+  project_id: string;
+  architecture_revision: number;
+  component_ids: string[];
+  files: string[];
+  baseline_id: string;
+  source_fingerprints: Record<string, string>;
+  classes: SourceClass[];
+  packages: { id: string; component_id: string; label: string }[];
+  boundaries: SourceBoundary[];
+  relations: SourceRelation[];
+  limitations: string[];
 }
