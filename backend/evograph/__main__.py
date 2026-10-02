@@ -34,8 +34,9 @@ def main():
         ok, message = rebuild(root)
         print(message, flush=True)
         if not ok and not (dist / "index.html").exists():
+            install = "npm ci" if (root / "package-lock.json").is_file() else "npm install"
             raise SystemExit(
-                "前端未构建，且自动构建不可用。请手动运行：npm install && npm run build"
+                f"前端未构建，且自动构建不可用。请在 {root} 依次运行：\n{install}\nnpm run build"
             )
 
     if args.browser and args.gui:

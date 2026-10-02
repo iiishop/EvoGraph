@@ -156,6 +156,16 @@ uv run python run.py
 
 启动时会自己检查前端：`dist/` 缺失，或者 `frontend/` 下的源码比 `dist/` 新，就自动跑一次 `npm run build`（约 15 秒）再启动。改完前端不必再手动 build。构建失败不会挡住启动：会打印 npm 的输出并沿用现有的 `dist/`，只有 `dist/` 也不存在时才退出。
 
+uv 只管理 Python 依赖。拉取包含前端依赖变更的代码后，请在仓库根目录运行 `npm ci`，再启动程序。这会按照已提交的锁文件替换 `node_modules/`，不会改动 EvoGraph 已保存的项目。启动器会在构建前检查 npm 依赖是否缺失或过期，并给出安装命令，不会自动安装。
+
+如果构建仍然失败，可以在同一目录直接运行 `npm run build` 查看原因。启动器也会打印完整的合并输出，避免 npm 配置警告遮住真正的 TypeScript 错误。Windows PowerShell 同样适用，依次运行即可：
+
+```powershell
+npm ci
+npm run build
+uv run evograph
+```
+
 两种启动方式：
 
 ```bash
