@@ -1,7 +1,7 @@
 """Opt-in native WebView integration smoke test; uses disposable project data.
 
-Run from the checkout: QT_QPA_PLATFORM=offscreen QT_API=pyside6 \
-    .venv/bin/python tools/smoke_desktop.py
+Run from the checkout: QT_QPA_PLATFORM=offscreen \
+    uv run python tools/smoke_desktop.py
 Offscreen success does not verify a visible desktop session. No model calls or keys.
 """
 
@@ -48,7 +48,7 @@ def wrapped(**kwargs):
 
 webview.start = wrapped
 with tempfile.TemporaryDirectory(prefix="evograph-desktop-smoke-") as data_dir:
-    launch(Application(Path(data_dir)), Path.cwd() / "dist", gui="qt")
+    launch(Application(Path(data_dir)), Path.cwd() / "dist")
 if not (
     result.get("document", {}).get("bridge")
     and "里程碑图" in result["document"]["text"]

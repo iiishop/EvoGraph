@@ -108,14 +108,51 @@ def check_desktop_environment():
         )
 
 
+def desktop_gui(gui: str | None = None) -> str | None:
+    """Use the bundled Linux Qt binding without changing other OS defaults.
+
+    A CLI override takes precedence over pywebview's supported Linux environment
+    override. On Windows/macOS, pywebview keeps control of its native selection.
+    """
+    if gui is not None or not sys.platform.startswith("linux"):
+        return gui
+    override = os.environ.get("PYWEBVIEW_GUI", "").lower()
+    return override if override in {"qt", "gtk"} else "qt"
+
+
+def desktop_error(error: Exception, gui: str | None) -> str:
+    message = f"Desktop WebView could not start: {error}. "
+    if sys.platform.startswith("linux"):
+        if gui == "gtk":
+            return message + (
+                "GTK was explicitly selected. Install GTK/WebKit2GTK and the matching Python "
+                "bindings in this environment, or use uv run evograph --gui qt. See docs/linux.md."
+            )
+        return message + (
+            "uv run evograph installs the Linux Qt Python backend automatically; "
+            "run uv sync to repair an incomplete Python environment. Missing native graphics "
+            "libraries must be installed for your distribution. See docs/linux.md."
+        )
+    if sys.platform == "win32":
+        return message + "Check the Microsoft Edge WebView2 Runtime and run uv sync."
+    if sys.platform == "darwin":
+        return message + "Check the system WebKit/PyObjC backend and run uv sync."
+    return message + "Check pywebview's supported platforms and installed native backend."
+
+
 def launch(application: Application, dist: Path, gui: str | None = None):
     import webview
 
     check_desktop_environment()
+    gui = desktop_gui(gui)
+    if sys.platform.startswith("linux") and gui == "qt":
+        # QtPy otherwise prefers an unrelated PyQt installation when one exists.
+        # Keep an explicit user binding override, and never load Qt for browser mode.
+        os.environ.setdefault("QT_API", "pyside6")
     configure_asset_types()
     index = dist / "index.html"
     if not index.exists():
-        raise SystemExit("前端尚未构建。请先运行 npm install 和 npm run build。")
+        raise SystemExit("前端尚未构建。请先运行 npm ci 和 npm run build。")
     bridge = DesktopBridge(application)
     # Pass the absolute file path; pywebview's http_server serves it through its
     # local origin and injects the bridge before the Vue app starts.
@@ -132,8 +169,4 @@ def launch(application: Application, dist: Path, gui: str | None = None):
     try:
         webview.start(http_server=True, gui=gui)
     except webview.errors.WebViewException as exc:
-        raise SystemExit(
-            f"Desktop WebView could not start: {exc}. On Linux install the Qt backend with "
-            "uv sync --extra linux, then run uv run --extra linux python run.py --gui qt. "
-            "See docs/linux.md for native libraries and GTK alternatives."
-        ) from exc
+        raise SystemExit(desktop_error(exc, gui)) from exc

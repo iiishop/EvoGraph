@@ -150,8 +150,8 @@ Python AST 及 TypeScript/Vue、C++ 的 tree-sitter 适配器提取声明与签�
 ```bash
 git clone https://github.com/iiishop/EvoGraph.git
 cd EvoGraph
-npm install
-uv run python run.py
+npm ci
+uv run evograph
 ```
 
 启动时会自己检查前端：`dist/` 缺失，或者 `frontend/` 下的源码比 `dist/` 新，就自动跑一次 `npm run build`（约 15 秒）再启动。改完前端不必再手动 build。构建失败不会挡住启动：会打印 npm 的输出并沿用现有的 `dist/`，只有 `dist/` 也不存在时才退出。
@@ -169,18 +169,18 @@ uv run evograph
 两种启动方式：
 
 ```bash
-uv run python run.py            # 桌面窗口，用 pywebview 打开
-uv run python run.py --browser  # 本地 HTTP 服务，http://127.0.0.1:8765
+uv run evograph            # 自动识别系统，打开桌面窗口
+uv run evograph --browser  # 本地 HTTP 服务，http://127.0.0.1:8765
 ```
 
-Linux 桌面：先运行 `uv sync --extra linux`，再运行 `uv run --extra linux python run.py --gui qt`。图形会话、系统库、可写数据目录和安全密钥存储要求见 [Linux 安装说明](docs/linux.md)。
+Linux、Windows、macOS 统一使用 `uv run evograph`。uv 会自动安装对应平台的 Python 依赖：Linux 默认 Qt/PySide6，Windows 和 macOS 使用 pywebview 原生后端，无需额外运行 `uv sync` 或添加 `--extra linux`、`--gui qt`。旧的 `--extra linux` 命令仍然兼容。图形会话、系统库、可写数据目录和安全密钥存储要求见 [Linux 安装说明](docs/linux.md)。
 
 
 首次启动会自动建一个示例项目（认证工作台）：一份七个里程碑的注册登录计划，刻意一个都没执行，所以验收取值从 0/7 开始。它的用途是拿来点开看、拆开研究，不是拿来相信的。
 
 其他参数：`--port`（默认 `8765`）、`--data-dir`（默认 `~/.evograph`，或环境变量 `EVOGRAPH_DATA_DIR`）、`--build`（启动前强制重建前端）、`--no-build`（跳过前端检查）。项目状态、事件与证据都存在该目录下的 `evograph.sqlite3`。
 
-桌面模式说明：pywebview 需要一个 WebView 后端，它的安装文档要求 Linux 用户显式选一个，例如 `pip install "pywebview[gtk]"`；Windows 用 WebView2，macOS 用系统自带的 WebKit。浏览器模式和桌面窗口是同一个应用，只是走本地 HTTP，所以不需要这些。
+桌面模式说明：Windows 需要 WebView2 运行时，macOS 使用系统 WebKit，Linux 仍需要真实图形会话和 Qt 原生系统库。启动器不会安装系统包、修改安全设置或配置密钥存储。手动配置 GTK 后可以用 `--gui gtk`；`--gui qt` 也仍然可用。浏览器模式走本地 HTTP，不启动桌面后端。
 
 ### 本地 API
 

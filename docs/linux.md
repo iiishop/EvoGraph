@@ -1,7 +1,7 @@
 # Linux desktop setup
 
-EvoGraph uses pywebview's native bridge in desktop mode. Linux needs an explicit
-WebView backend as well as a logged-in graphical session. Browser mode remains
+EvoGraph uses pywebview's native bridge in desktop mode. The launcher detects
+Linux and selects Qt/PySide6 automatically. A logged-in graphical session is still required. Browser mode remains
 an optional HTTP transport; it is not substituted silently for desktop mode.
 
 ## Recommended: Qt / PySide6
@@ -10,18 +10,22 @@ From the repository checkout, with Python 3.11+ and Node.js/npm installed:
 
 ```sh
 npm ci
-uv sync --extra linux
-uv run --extra linux python run.py --gui qt
+uv run evograph
 ```
 
-The `linux` extra installs PySide6 (including Qt WebEngine) and QtPy through
-pywebview's supported `pyside6` extra. Keep `--extra linux` on subsequent `uv run`
-commands so uv retains these optional dependencies. Without uv:
+This is the same launch command used on Windows and macOS. Platform-marked Python
+dependencies install PySide6 (including Qt WebEngine) and QtPy through pywebview's
+supported `pyside6` extra only on Linux. Normal `uv run` retains them, so neither
+`uv sync`, `--extra linux` nor `--gui qt` is required. The old `linux` extra remains
+as an empty compatibility alias. Windows/macOS do not install Qt by default.
+The initial `npm ci` prepares the frontend; startup builds it when necessary.
+The launcher does not automatically replace an existing `node_modules` tree.
+Without uv:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[linux]'
-.venv/bin/python run.py --gui qt
+.venv/bin/python -m pip install -e .
+.venv/bin/evograph
 ```
 
 Run from a terminal in your Linux desktop, not a headless SSH/container session.
@@ -39,10 +43,14 @@ No system packages or security settings are changed by EvoGraph's launcher.
 
 Install your distribution's GTK 3, WebKit2GTK and GObject introspection development
 packages, then install `pywebview[gtk]` into the **same Python environment** used
-to run EvoGraph. Use `python run.py --gui gtk`. A system `python3-gi` installation
+to run EvoGraph. Use `evograph --gui gtk` in that environment. A system `python3-gi` installation
 is not automatically available to a separately installed Python or isolated venv;
 the Python versions and native bindings must match. Consult pywebview's
 installation guide for the current distro-specific package names.
+An explicit `--gui` takes priority over `PYWEBVIEW_GUI=qt` or `gtk`; either
+overrides Linux's Qt default. The launcher defaults `QT_API` to `pyside6` for
+Linux Qt, but preserves an explicitly configured binding. Browser mode never
+selects or starts a desktop backend.
 
 ## Writable state and secrets
 
@@ -50,7 +58,7 @@ The existing default remains `~/.evograph`. On a restricted system, explicitly
 choose a writable private directory:
 
 ```sh
-uv run --extra linux python run.py --gui qt --data-dir /path/to/writable/evograph
+uv run evograph --data-dir /path/to/writable/evograph
 ```
 
 `EVOGRAPH_DATA_DIR` is equivalent. EvoGraph reports an actionable error if it
@@ -66,24 +74,22 @@ setup step. Tests below do not need real keys or make paid model calls.
 ## Verification
 
 ```sh
-uv sync --extra linux --extra test
-uv run --extra linux --extra test pytest
-uv run --extra linux --extra test ruff check backend tests
+uv run --extra test pytest
+uv run --extra test ruff check backend tests
 npm test
 npm run build
 ```
 
 `QT_QPA_PLATFORM=offscreen` can be used for explicit native integration tests. It
 is not a visible desktop and must not be presented as successful on-screen use.
-Headless HTTP mode is separately available with `python run.py --browser` and
+Headless HTTP mode is separately available with `uv run evograph --browser` and
 binds to loopback only. Do not disable browser or network protections if a hosted
 environment prevents reaching this loopback service.
 
 Native smoke test (disposable data, no model calls):
 
 ```sh
-QT_QPA_PLATFORM=offscreen QT_API=pyside6 \
-  uv run --extra linux python tools/smoke_desktop.py
+QT_QPA_PLATFORM=offscreen uv run python tools/smoke_desktop.py
 ```
 
 This checks that the real Qt WebEngine loads the Vue demo, receives its native

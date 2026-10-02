@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27,<1",
     "pydantic>=2.9,<3",
     "pywebview>=5,<7",
+    "pywebview[pyside6]>=5,<7; sys_platform == 'linux'",
     "keyring>=25,<26",
     "pillow>=11,<13",
     "pypdf>=5,<7",
@@ -23,7 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-linux = ["pywebview[pyside6]>=5,<7"]
+# Compatibility with older launch commands; Linux dependencies are now automatic.
+linux = []
 test = ["pytest>=8,<10", "ruff>=0.12,<1"]
 
 [[tool.uv.index]]

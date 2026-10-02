@@ -292,3 +292,33 @@ def test_launcher_dependency_failure_keeps_existing_bundle(
     assert "@tiptap/core（缺失）" in capsys.readouterr().out
     assert saved_state.read_bytes() == b"existing project state"
     assert build_runner == []
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32", "darwin"])
+def test_browser_cli_never_starts_or_checks_desktop(tmp_path, monkeypatch, platform):
+    from evograph.transport import desktop
+
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "argv", ["evograph", "--browser", "--no-build"])
+    monkeypatch.setattr(launcher, "Application", lambda _: "application")
+    monkeypatch.setattr("evograph.transport.http.create_app", lambda app, dist: app)
+    def forbidden(*args, **kwargs):
+        pytest.fail("browser mode touched the desktop backend")
+    monkeypatch.setattr(desktop, "check_desktop_environment", forbidden)
+    monkeypatch.setattr(desktop, "launch", forbidden)
+    calls = []
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: calls.append((app, kwargs)))
+    launcher.main()
+    assert calls == [("application", {"host": "127.0.0.1", "port": 8765, "ws": "none"})]
+
+
+def test_conflicting_cli_flags_fail_before_build_or_state(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["evograph", "--browser", "--gui", "qt", "--build"])
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid arguments triggered work")
+    monkeypatch.setattr(launcher, "rebuild", forbidden)
+    monkeypatch.setattr(launcher, "Application", forbidden)
+    with pytest.raises(SystemExit) as error:
+        launcher.main()
+    assert error.value.code == 2
+    assert "--gui cannot be combined with --browser" in capsys.readouterr().err

@@ -19,7 +19,11 @@ def main():
         default=Path(os.environ.get("EVOGRAPH_DATA_DIR", Path.home() / ".evograph")),
     )
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--gui", choices=("qt", "gtk"), help="Select a desktop WebView backend")
+    parser.add_argument(
+        "--gui",
+        choices=("qt", "gtk"),
+        help="Override the desktop backend (default: Qt on Linux, native on Windows/macOS)",
+    )
     parser.add_argument(
         "--build",
         action=argparse.BooleanOptionalAction,
@@ -27,6 +31,13 @@ def main():
         help="Rebuild the frontend before starting; default rebuilds only when sources changed",
     )
     args = parser.parse_args()
+
+    if args.browser and args.gui:
+        parser.error("--gui cannot be combined with --browser")
+    if not args.browser:
+        from .transport.desktop import check_desktop_environment
+
+        check_desktop_environment()
 
     root = Path(__file__).resolve().parents[2]
     dist = root / "dist"
@@ -39,12 +50,6 @@ def main():
                 f"前端未构建，且自动构建不可用。请在 {root} 依次运行：\n{install}\nnpm run build"
             )
 
-    if args.browser and args.gui:
-        parser.error("--gui cannot be combined with --browser")
-    if not args.browser:
-        from .transport.desktop import check_desktop_environment
-
-        check_desktop_environment()
     try:
         app = Application(args.data_dir)
     except OSError as exc:
