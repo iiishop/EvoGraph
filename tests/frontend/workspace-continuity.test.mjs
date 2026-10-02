@@ -1,3 +1,4 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import { browseStoreUrl } from './helpers/architecture-fixtures.mjs';
 import {
   composerDocumentUrl,
@@ -68,6 +69,7 @@ async function harness(initialize = true) {
     '../../lib/composerDocument': composerDocumentUrl,
     './ComposerEditor.vue': composerEditorStubUrl,
     './MessageContent.vue': messageContentStubUrl,
+    './MarkdownContent': markdownContentUrl,
     vue: vueUrl,
     '../api/client': apiUrl,
     './useAgentDrafts': draftsUrl,
@@ -910,4 +912,62 @@ test('delete and restore retire the pending retry even when the project ID and t
   assert.equal(workspace.state.project.revision, 0);
   assert.deepEqual(workspace.state.project.messages, []);
   assert.equal(drafts.bind(() => 'A').content.value, '');
+});
+
+test('A/B/settings/reopen keep distinct full histories while saved narration continues offscreen', async () => {
+  const { workspace, records, saved } = await harness();
+  const message = (project_id, id, content) => ({
+    project_id,
+    id,
+    role: 'assistant',
+    content,
+    created_at: '',
+  });
+  records.set('A', { ...project('A'), messages: [message('A', 'A1', '# A saved')], events: [] });
+  records.set('B', { ...project('B'), messages: [message('B', 'B1', '# B saved')], events: [] });
+  await workspace.selectProject('A');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['A1'],
+  );
+  await workspace.selectProject('B');
+  const late = message('A', 'A2', '```ts\nconst saved = true;');
+  records.get('A').messages.push(late);
+  workspace.appendMessage('A', late);
+  workspace.applyProject({ ...records.get('A'), snapshot_mode: 'compact-v1' });
+  assert.equal(workspace.state.project.id, 'B');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['B1'],
+  );
+  workspace.setPage('settings');
+  workspace.appendMessage('A', late);
+  assert.equal(workspace.state.page, 'settings');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['B1'],
+  );
+  await workspace.selectProject('A');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['A1', 'A2'],
+  );
+  workspace.appendMessage('A', late);
+  assert.equal(
+    workspace.state.project.messages.length,
+    2,
+    'saved frames never duplicate reopened history',
+  );
+  await workspace.selectProject('B');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['B1'],
+  );
+  assert.equal(saved.get('evograph.project'), 'B');
+  await workspace.init();
+  assert.equal(workspace.state.project.id, 'B');
+  assert.deepEqual(
+    workspace.state.project.messages.map((item) => item.id),
+    ['B1'],
+  );
 });

@@ -1,3 +1,4 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -102,6 +103,7 @@ async function harness(initialize = true) {
     '../../lib/composerDocument': composerDocumentUrl,
     './ComposerEditor.vue': composerEditorStubUrl,
     './MessageContent.vue': messageContentStubUrl,
+    './MarkdownContent': markdownContentUrl,
     vue: vueUrl,
     '../api/client': apiUrl,
     './useAgentDrafts': draftsUrl,
