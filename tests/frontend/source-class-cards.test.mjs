@@ -276,6 +276,7 @@ async function click(element) {
   await tick();
 }
 async function requestScope(root) {
+  await click(root.querySelector('.architecture-scope-toggle'));
   await click(root.querySelector('.class-scope-options input'));
   await click(button(root, '查看局部类结构'));
 }
@@ -708,8 +709,10 @@ test('embedded source drill-down starts with one contextual bar and keeps overvi
   const view = await mount(Panel, { project: project() });
   await requestScope(view.root);
   await tick();
-  assert.equal(view.root.querySelector('.architecture-heading').style.display, 'none');
-  assert.equal(view.root.querySelector('.architecture-tabs').style.display, 'none');
+  const toolbar = view.root.querySelector('.architecture-toolbar');
+  assert.equal(toolbar.style.display, 'none');
+  assert.ok(toolbar.contains(view.root.querySelector('.architecture-heading')));
+  assert.ok(toolbar.contains(view.root.querySelector('.architecture-tabs')));
   assert.ok(view.root.querySelector('.uml-view.uml-compact'));
   assert.match(
     view.root.querySelector('.class-detail-disclaimer summary').textContent,
@@ -720,8 +723,7 @@ test('embedded source drill-down starts with one contextual bar and keeps overvi
   assert.ok(view.root.querySelector('[aria-label="类结构显示方式"]'));
   assert.ok(button(view.root, '导出 .puml'));
   await click(button(view.root, '返回模块总览'));
-  assert.equal(view.root.querySelector('.architecture-heading').style.display, '');
-  assert.equal(view.root.querySelector('.architecture-tabs').style.display, '');
+  assert.equal(toolbar.style.display, '');
   assert.equal(view.root.querySelector('.architecture-class-detail'), null);
   assert.equal(document.activeElement, view.root.querySelector('.class-detail-trigger'));
   view.destroy();
