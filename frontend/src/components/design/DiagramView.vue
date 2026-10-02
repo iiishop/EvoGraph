@@ -3,6 +3,7 @@ import { shallowRef, watch, useId, nextTick, ref, computed, onMounted, onBeforeU
 import { VueFlow, MarkerType, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
+import { Maximize } from 'lucide-vue-next';
 import { layoutArchitecture } from '../../lib/layoutArchitecture';
 import { routeArchitectureEdge, architectureLabels } from '../../lib/graphGeometry';
 import { useAgent } from '../../composables/useAgent';
@@ -28,6 +29,8 @@ const flowId = `design-${useId()}`;
 const { fitView, updateNodeInternals, setCenter, findNode } = useVueFlow(flowId);
 const canvas = ref<HTMLElement>();
 let viewportMoved = false;
+let disposed = false;
+let focusSequence = 0;
 let frame = 0;
 let resizeObserver: ResizeObserver | undefined;
 let previousSize = '';
@@ -35,9 +38,11 @@ let previousSize = '';
 // subsequent resizes (including returning from local detail) preserve their camera.
 function fitWhenReady() {
   cancelAnimationFrame(frame);
+  if (disposed) return;
   frame = requestAnimationFrame(() => {
     frame = requestAnimationFrame(() => {
       if (
+        disposed ||
         !canvas.value?.clientWidth ||
         !canvas.value.clientHeight ||
         viewportMoved ||
@@ -60,6 +65,8 @@ onMounted(() => {
   fitWhenReady();
 });
 onBeforeUnmount(() => {
+  disposed = true;
+  focusSequence++;
   generation++;
   cancelAnimationFrame(frame);
   resizeObserver?.disconnect();
@@ -69,11 +76,18 @@ const error = ref('');
 const agent = useAgent();
 const workspace = useWorkspace();
 const follows = computed(() => agent.state.follow[workspace.state.project?.id ?? ''] !== false);
+function manual() {
+  focusSequence++;
+  cancelAnimationFrame(frame);
+  viewportMoved = true;
+  if (workspace.state.project) agent.freeView(workspace.state.project.id);
+}
 function moved({ event }: { event: unknown }) {
-  if (event) {
-    viewportMoved = true;
-    if (workspace.state.project) agent.freeView(workspace.state.project.id);
-  }
+  if (event) manual();
+}
+function fit() {
+  manual();
+  void fitView({ padding: 0.2, duration: 0 });
 }
 const visible = computed(() => {
   const ids = new Set(
@@ -191,10 +205,13 @@ watch(
       if (ticket !== generation) return;
       positions.value = result;
       await nextTick();
+      if (ticket !== generation || disposed) return;
       updateNodeInternals(diagram.nodes.map((n) => n.id));
       await nextTick();
+      if (ticket !== generation || disposed) return;
       fitWhenReady();
     } catch {
+      if (ticket !== generation || disposed) return;
       error.value = '布局未完成，请切换版本后重试';
     }
   },
@@ -203,24 +220,30 @@ watch(
 watch(
   () => props.focusedId,
   async (id) => {
+    const sequence = ++focusSequence;
     await nextTick();
+    if (disposed || sequence !== focusSequence || id !== props.focusedId) return;
     const node = findNode(id);
     if (node) {
       viewportMoved = true;
       setCenter(node.position.x + 118, node.position.y + 75, {
         zoom: 0.95,
-        duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220,
+        duration: 0,
       });
     }
   },
+  { flush: 'sync' },
 );
 watch(
   () => agent.state.pulse,
   () => {
-    if (follows.value) fitView({ padding: 0.2 });
+    if (follows.value) {
+      focusSequence++;
+      void fitView({ padding: 0.2, duration: 0 });
+    }
   },
 );
-defineExpose({ fit: () => fitView({ padding: 0.2 }), reset: () => fitView({ padding: 0.2 }) });
+defineExpose({ fit, reset: fit });
 </script>
 <template>
   <div ref="canvas" class="design-diagram">
@@ -239,7 +262,23 @@ defineExpose({ fit: () => fitView({ padding: 0.2 }), reset: () => fitView({ padd
       @move-start="moved"
       @node-click="({ node }) => node.type === 'architecture' && emit('select', node.id)"
     >
-      <Background :gap="24" pattern-color="#d3ddea" /><Controls :show-interactive="false" />
+      <Background :gap="24" pattern-color="#d3ddea" /><Controls
+        :show-interactive="false"
+        @zoom-in="manual"
+        @zoom-out="manual"
+      >
+        <template #control-fit-view>
+          <button
+            type="button"
+            class="vue-flow__controls-button"
+            title="适应画布"
+            aria-label="适应画布"
+            @click="fit"
+          >
+            <Maximize :size="16" />
+          </button>
+        </template>
+      </Controls>
       <template #node-architecture-group="nodeProps"
         ><ArchitectureGroup v-bind="nodeProps"
       /></template>

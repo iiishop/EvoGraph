@@ -8,7 +8,6 @@ import MilestoneFinder from '../graph/MilestoneFinder.vue';
 import MilestoneInspector from '../graph/MilestoneInspector.vue';
 import SourceInspector from '../graph/SourceInspector.vue';
 import { workspaceViews } from '../../lib/workspaceViews';
-import { useEntrance } from '../../composables/useEntrance';
 import AgentDock from '../agent/AgentDock.vue';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project } from '../../types';
@@ -63,8 +62,6 @@ async function locate(id: string) {
   if (planningContent.value) planningContent.value.scrollTop = 0;
   graph.value?.locate(id);
 }
-const root = ref<HTMLElement>();
-useEntrance(root);
 const activeView = computed(() => workspaceViews.find((v) => v.id === tab.value)!);
 const tab = ref('graph'),
   graph = ref<InstanceType<typeof MilestoneGraph>>();
@@ -73,7 +70,7 @@ watch(tab, (value) => {
 });
 </script>
 <template>
-  <main ref="root" class="project-workspace">
+  <main class="project-workspace">
     <div class="workspace-chrome">
       <WorkspaceHeader :project="project" @edit="$emit('edit')" />
       <GraphToolbar

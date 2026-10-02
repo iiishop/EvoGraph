@@ -806,17 +806,12 @@ html[data-sidebar='collapsed'] .app-main {
   box-shadow:
     0 1px 2px #2437461f,
     inset 0 1px 0 #ffffff24;
-  transition:
-    background 0.16s,
-    box-shadow 0.16s,
-    transform 0.16s;
 }
 .send-button:hover:not(:disabled) {
   background: var(--green-dark);
   box-shadow:
     0 6px 14px #365e732e,
     inset 0 1px 0 #ffffff24;
-  transform: translateY(-1px);
 }
 .send-button:active:not(:disabled) {
   transform: none;
@@ -1245,10 +1240,6 @@ html[data-sidebar='collapsed'] .app-main {
   .notification-move {
     transition: none;
   }
-  .node-update-flash {
-    animation: none;
-    background: #365e7318;
-  }
   .milestone-node {
     transition: none;
   }
@@ -1540,9 +1531,6 @@ body {
 .inspector-scroll {
   scrollbar-gutter: stable;
 }
-.inspector-panel {
-  animation: inspector-reveal 160ms ease-out;
-}
 .planning-intro {
   margin: 14px 0 12px;
   color: var(--text-secondary);
@@ -1581,27 +1569,12 @@ body {
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.inspector-intent[open] > :not(summary) {
-  animation: inspector-reveal 160ms ease-out;
-}
 .detail-tabs button {
   transition:
     color 140ms ease,
     border-color 140ms ease;
 }
-@keyframes inspector-reveal {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .inspector-panel,
-  .inspector-intent[open] > :not(summary) {
-    animation: none;
-  }
   .detail-tabs button {
     transition: none;
   }

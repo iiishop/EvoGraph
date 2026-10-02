@@ -139,10 +139,17 @@ let pendingApplication = 0;
 const size = computed(() => ({ width: dimensions.value.width, height: dimensions.value.height }));
 const overview = computed(() => fitMilestoneBounds(graphBounds(boxes.value), size.value));
 const minZoom = computed(() => Math.min(0.25, (overview.value?.zoom ?? 0.02) / 2));
-const duration = (milliseconds: number) =>
-  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-    ? 0
-    : milliseconds;
+const motionPreference =
+  typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+const duration = (milliseconds: number) => (motionPreference?.matches ? 0 : milliseconds);
+function motionChanged(event: MediaQueryListEvent) {
+  if (!event.matches) return;
+  // Stop at the presentation value. Enabling reduced motion must not finish
+  // travelling to an old target, even when its promise resolves later.
+  stopCamera();
+  readableFocus = false;
+}
+motionPreference?.addEventListener?.('change', motionChanged);
 
 function applyCamera(milliseconds = 0, sequence = cameraSequence) {
   if (disposed || cameraMode === 'manual' || sequence !== cameraSequence) return;
@@ -186,8 +193,9 @@ function applyCamera(milliseconds = 0, sequence = cameraSequence) {
     });
 }
 function scheduleCamera(milliseconds = 0) {
-  const sequence = ++cameraSequence;
-  cancelAnimationFrame(frame);
+  // New intent owns the camera immediately, including the measurement frames.
+  stopCamera();
+  const sequence = cameraSequence;
   if (disposed || cameraMode === 'manual') return;
   // Inspector/composer updates and Vue Flow measurement settle before the
   // camera uses the actual remaining viewport, not the previous frame's size.
@@ -207,18 +215,19 @@ function manual() {
 function stopCamera() {
   cameraSequence++;
   cancelAnimationFrame(frame);
+  frame = 0;
   if (pendingApplication) {
     pendingApplication = 0;
     // A zero-duration transform interrupts Vue Flow's in-flight D3 transition
     // without replacing the user's current pan/zoom position.
-    void setViewport(getViewport(), { duration: 0 });
+    void setViewport(getViewport(), { duration: 0 }).catch(() => {});
   }
 }
 function fit() {
   agent.freeView(props.project.id);
   cameraMode = 'overview';
   readableFocus = false;
-  scheduleCamera(250);
+  scheduleCamera();
 }
 function initialized() {
   scheduleCamera();
@@ -239,7 +248,7 @@ function locate(id: string) {
   cameraMode = 'selected';
   focusedId = id;
   readableFocus = true;
-  scheduleCamera(220);
+  scheduleCamera();
   return true;
 }
 function follow() {
@@ -248,7 +257,7 @@ function follow() {
   cameraMode = 'agent';
   focusedId = agent.state.focusId;
   readableFocus = true;
-  scheduleCamera(450);
+  scheduleCamera(200);
 }
 function moved({ event }: { event: unknown }) {
   if (event) manual();
@@ -294,10 +303,9 @@ watch(
 );
 onBeforeUnmount(() => {
   disposed = true;
-  cameraSequence++;
-  pendingApplication = 0;
+  stopCamera();
   layoutGeneration++;
-  cancelAnimationFrame(frame);
+  motionPreference?.removeEventListener?.('change', motionChanged);
 });
 if (follows.value && agent.state.projectId === props.project.id) follow();
 else if (state.selectedId) locate(state.selectedId);

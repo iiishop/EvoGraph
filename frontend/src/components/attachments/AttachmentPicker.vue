@@ -34,22 +34,64 @@ const savedOpen = ref(false);
 const toolsAnchor = ref<HTMLElement>();
 const addButton = ref<HTMLButtonElement>();
 const toolsPanel = ref<HTMLElement>();
+let menuSequence = 0;
+let disposed = false;
+let menuAnimation: Animation | undefined;
+const motionPreference =
+  typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+function cancelMenuMotion() {
+  menuAnimation?.cancel();
+  menuAnimation = undefined;
+}
+function motionChanged(event: MediaQueryListEvent) {
+  if (event.matches) cancelMenuMotion();
+}
 async function closeMenu(restoreFocus = false) {
+  const sequence = ++menuSequence;
+  const previousFocus = typeof document !== 'undefined' ? document.activeElement : null;
+  cancelMenuMotion();
   menuOpen.value = false;
   savedOpen.value = false;
   if (restoreFocus) {
     await nextTick();
-    addButton.value?.focus();
+    if (disposed || sequence !== menuSequence || menuOpen.value) return;
+    // A newer pointer/focus action outside the menu owns focus, even before
+    // this close's nextTick completes.
+    if (
+      document.activeElement === previousFocus ||
+      document.activeElement === document.body ||
+      toolsAnchor.value?.contains(document.activeElement)
+    )
+      addButton.value?.focus();
   }
 }
-async function toggleMenu() {
+async function toggleMenu(event?: MouseEvent) {
   if (menuOpen.value) {
     await closeMenu(true);
     return;
   }
+  const sequence = ++menuSequence;
+  cancelMenuMotion();
   menuOpen.value = true;
   await nextTick();
+  if (disposed || sequence !== menuSequence || !menuOpen.value) return;
   toolsPanel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  // Occasional pointer disclosure shows where the tools came from. Keyboard,
+  // assistive activation and coarse pointers keep immediate final content.
+  if (
+    event?.detail &&
+    typeof matchMedia === 'function' &&
+    matchMedia('(hover: hover) and (pointer: fine)').matches &&
+    !motionPreference?.matches
+  ) {
+    menuAnimation = toolsPanel.value?.animate?.(
+      [
+        { opacity: 0, transform: 'scale(0.97)' },
+        { opacity: 1, transform: 'scale(1)' },
+      ],
+      { duration: 180, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+    );
+  }
 }
 function outside(event: Event) {
   if (menuOpen.value && event.target instanceof Node && !toolsAnchor.value?.contains(event.target))
@@ -72,9 +114,14 @@ watch(
   () => void closeMenu(),
 );
 onMounted(() => {
+  motionPreference?.addEventListener?.('change', motionChanged);
   if (typeof document !== 'undefined') document.addEventListener?.('pointerdown', outside);
 });
 onUnmounted(() => {
+  disposed = true;
+  menuSequence++;
+  cancelMenuMotion();
+  motionPreference?.removeEventListener?.('change', motionChanged);
   if (typeof document !== 'undefined') document.removeEventListener?.('pointerdown', outside);
 });
 const input = ref<HTMLInputElement>();

@@ -164,7 +164,21 @@ async function harness(count = 64, reduced = false, initial = {}) {
     return id;
   };
   globalThis.cancelAnimationFrame = (id) => frames.delete(id);
-  globalThis.matchMedia = () => ({ matches: reduced });
+  const listeners = new Set();
+  const motionPreference = {
+    matches: reduced,
+    addEventListener(type, listener) {
+      if (type === 'change') listeners.add(listener);
+    },
+    removeEventListener(type, listener) {
+      if (type === 'change') listeners.delete(listener);
+    },
+    change(matches) {
+      this.matches = matches;
+      for (const listener of listeners) listener({ matches });
+    },
+  };
+  globalThis.matchMedia = () => motionPreference;
   if (initial.selectedId) workspace.state.selectedId = initial.selectedId;
   if (initial.agent) Object.assign(agent.state, initial.agent);
   const app = renderer.createApp(Graph, { project });
@@ -188,6 +202,8 @@ async function harness(count = 64, reduced = false, initial = {}) {
     root,
     flush,
     frames,
+    motionPreference,
+    listeners,
     dispose: () => {
       app.unmount();
       for (const [key, value] of Object.entries(originals)) {
@@ -366,6 +382,12 @@ test('the narrow selected-node case uses the actual 220px inner flow, not the ta
   assert.match(workspace, /planningContent\.value\.scrollTop = 0/);
 });
 
+function agentFocus(h, id) {
+  Object.assign(h.agent.state, { projectId: 'P1', focusId: id });
+  h.agent.state.follow.P1 = true;
+  h.agent.state.pulse++;
+}
+
 function deferredAnimations(env) {
   const animations = [];
   env.apply = (value, options) => {
@@ -383,7 +405,7 @@ test('resize during focus animation reaches readable zoom and stale completions 
   try {
     await h.flush();
     const animations = deferredAnimations(h.env);
-    h.workspace.selectNode('M64');
+    agentFocus(h, 'M64');
     await h.flush();
     assert.equal(animations.length, 1);
     h.env.viewport = { ...h.env.viewport, zoom: 0.12 };
@@ -391,7 +413,7 @@ test('resize during focus animation reaches readable zoom and stale completions 
     await h.flush();
     assert.ok(h.env.viewport.zoom >= 0.9);
     inside(boxes(64)[63], h.env.viewport, h.env.dimensions.value);
-    h.workspace.selectNode('M2');
+    agentFocus(h, 'M2');
     await h.flush();
     assert.equal(animations.length, 2);
     h.env.viewport = { ...h.env.viewport, zoom: 0.18 };
@@ -414,7 +436,7 @@ test('a real manual gesture interrupts an in-flight animation and owns later res
   try {
     await h.flush();
     const animations = deferredAnimations(h.env);
-    h.workspace.selectNode('M64');
+    agentFocus(h, 'M64');
     await h.flush();
     h.env.viewport = { x: -340, y: -160, zoom: 0.2 };
     h.env.attrs.onMoveStart({ event: { type: 'pointerdown' } });
@@ -496,7 +518,7 @@ test('late focus-animation completion cannot suppress later shrink-to-grow recov
   try {
     await h.flush();
     const animations = deferredAnimations(h.env);
-    h.workspace.selectNode('M64');
+    agentFocus(h, 'M64');
     await h.flush();
     assert.equal(animations.length, 1);
     h.env.dimensions.value = { width: 320, height: 110 };
@@ -517,4 +539,104 @@ test('late focus-animation completion cannot suppress later shrink-to-grow recov
   } finally {
     h.dispose();
   }
+});
+
+test('twenty rapid explicit Locate/Fit requests are instant and the latest node wins', async () => {
+  const h = await harness();
+  try {
+    await h.flush();
+    h.env.calls.length = 0;
+    for (let i = 0; i < 20; i++) {
+      h.workspace.selectNode(`M${i + 1}`);
+      h.vm.fit();
+      h.vm.locate(`M${i + 2}`);
+      await h.flush();
+    }
+    assert.ok(h.env.calls.length >= 20);
+    assert.ok(h.env.calls.every(([, options]) => options.duration === 0));
+    inside(boxes(64)[20], h.env.viewport, h.env.dimensions.value);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a new explicit Locate stops Agent travel before measurement and ignores its late completion', async () => {
+  const h = await harness();
+  try {
+    await h.flush();
+    const animations = deferredAnimations(h.env);
+    agentFocus(h, 'M64');
+    await h.flush();
+    assert.equal(h.env.calls.at(-1)[1].duration, 200);
+    h.env.viewport = { x: -200, y: -50, zoom: 0.18 };
+    h.vm.locate('M2');
+    assert.deepEqual(h.env.calls.at(-1), [{ x: -200, y: -50, zoom: 0.18 }, { duration: 0 }]);
+    await h.flush();
+    inside(boxes(64)[1], h.env.viewport, h.env.dimensions.value);
+    const settled = { ...h.env.viewport };
+    animations[0].resolve(true);
+    await h.flush();
+    assert.deepEqual(h.env.viewport, settled);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('live reduced motion cancels active and queued travel at the current viewport and unregisters on unmount', async () => {
+  const h = await harness();
+  let disposed = false;
+  try {
+    await h.flush();
+    const animations = deferredAnimations(h.env);
+    agentFocus(h, 'M64');
+    await h.flush();
+    assert.equal(animations.length, 1);
+    h.env.viewport = { x: -340, y: -160, zoom: 0.2 };
+    const current = { ...h.env.viewport };
+    h.motionPreference.change(true);
+    const stopped = h.env.calls.length;
+    assert.equal(h.frames.size, 0);
+    assert.deepEqual(h.env.calls.at(-1), [current, { duration: 0 }]);
+    animations[0].resolve(true);
+    await h.flush();
+    assert.equal(h.env.calls.length, stopped);
+    assert.deepEqual(h.env.viewport, current);
+    agentFocus(h, 'M2');
+    await h.flush();
+    assert.equal(h.env.calls.at(-1)[1].duration, 0);
+    inside(boxes(64)[1], h.env.viewport, h.env.dimensions.value);
+    h.motionPreference.change(false);
+    agentFocus(h, 'M50');
+    await nextTick();
+    h.motionPreference.change(true);
+    const queued = h.env.calls.length;
+    await h.flush();
+    assert.equal(h.env.calls.length, queued);
+    assert.equal(h.listeners.size, 1);
+    h.dispose();
+    disposed = true;
+    assert.equal(h.listeners.size, 0);
+    h.motionPreference.change(false);
+    h.motionPreference.change(true);
+    assert.equal(h.env.calls.length, queued);
+  } finally {
+    if (!disposed) h.dispose();
+  }
+});
+
+test('unmount stops an in-flight Agent transition and late completion cannot schedule camera work', async () => {
+  const h = await harness();
+  await h.flush();
+  const animations = deferredAnimations(h.env);
+  agentFocus(h, 'M64');
+  await h.flush();
+  h.env.viewport = { x: -20, y: -10, zoom: 0.15 };
+  const current = { ...h.env.viewport };
+  h.dispose();
+  assert.deepEqual(h.env.calls.at(-1), [current, { duration: 0 }]);
+  const calls = h.env.calls.length;
+  animations[0].resolve(true);
+  await nextTick();
+  assert.equal(h.env.calls.length, calls);
+  assert.equal(h.frames.size, 0);
 });

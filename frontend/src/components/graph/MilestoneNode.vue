@@ -26,16 +26,22 @@ defineProps<{
       'agent-active': data.agentFocused && data.agentActive,
     }"
   >
-    <span v-if="data.updateTick" :key="data.updateTick" class="node-update-flash"></span>
     <span v-if="data.agentFocused" class="node-agent-label">{{
-      data.agentActive ? 'Agent 正在操作' : '刚刚更新'
+      data.agentActive ? 'Agent 正在操作' : 'Agent 最近定位'
     }}</span>
     <Handle id="in" type="target" :position="Position.Left" />
     <div class="node-top">
-      <span class="node-id"
+      <span class="node-id" :title="data.milestone.id"
         ><Layers3 :size="12" />
-        {{ data.milestone.origin === 'source' ? '已实现 · 基线' : data.milestone.id }}</span
-      ><ArrowUpRight :size="13" class="node-arrow" />
+        <span class="node-id-value">{{
+          data.milestone.origin === 'source' ? '已实现 · 基线' : data.milestone.id
+        }}</span></span
+      ><span
+        v-if="data.updateTick"
+        class="node-update-marker"
+        title="本轮 Agent 已修改此节点，不代表已通过验收"
+        >本轮已改</span
+      ><ArrowUpRight v-else :size="13" class="node-arrow" />
     </div>
     <h3 :title="data.milestone.title">{{ data.milestone.title }}</h3>
     <div class="node-scope" :title="data.milestone.scope[0]">

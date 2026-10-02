@@ -419,7 +419,7 @@ test('selecting a milestone gives detail space without unmounting the conversati
   assert.equal((source.match(/<AgentDock/g) || []).length, 1);
 });
 
-test('inspector transitions preserve the viewport and respect reduced motion', () => {
+test('inspector content stays immediate while preserving its viewport and reduced-motion colors', () => {
   const css = readFileSync(
     new URL('../../frontend/src/styles/studio.css', import.meta.url),
     'utf8',
@@ -427,11 +427,12 @@ test('inspector transitions preserve the viewport and respect reduced motion', (
   assert.match(css, /\.inspector-scroll\s*\{\s*scrollbar-gutter: stable;/);
   assert.match(
     css,
-    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.inspector-panel,[\s\S]*?animation: none;[\s\S]*?\.detail-tabs button\s*\{\s*transition: none;/,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.detail-tabs button\s*\{\s*transition: none;/,
   );
-  const animation = css.match(/@keyframes inspector-reveal\s*\{([\s\S]*?)\n\}/)?.[1] || '';
-  assert.match(animation, /opacity: 0/);
-  assert.doesNotMatch(animation, /height|width|transform|margin/);
+  // Repeated inspector navigation must not restart an entrance, even in normal motion mode.
+  assert.doesNotMatch(css, /inspector-reveal/);
+  for (const block of css.matchAll(/\.inspector-(?:panel|intent)(?:[^{}]*)\{([^{}]*)\}/g))
+    assert.doesNotMatch(block[1], /animation\s*:|transition\s*:\s*(?:opacity|transform)/);
 });
 
 test('unmapped roadmap steps stay visibly pending without claiming architecture coverage', async () => {

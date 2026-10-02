@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRenderer, nextTick } from 'vue';
+import { createRenderer, nextTick, reactive, h, ref } from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import ts from 'typescript';
 
@@ -11,20 +11,22 @@ const require = createRequire(import.meta.url);
 const url = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const vue = pathToFileURL(require.resolve('vue')).href;
 const flow = url(`import { h } from ${JSON.stringify(vue)};
-  export const calls = [], captured = {};
+  export const calls = [], centers = [], internals = [], captured = {};
   export const MarkerType = { ArrowClosed: 'arrow' };
-  export const useVueFlow = () => ({ fitView: (...args) => { calls.push(args); }, updateNodeInternals() {}, setCenter() {}, findNode() {} });
+  export const useVueFlow = () => ({ fitView: (...args) => { calls.push(args); }, updateNodeInternals(ids) { internals.push(ids); }, setCenter(...args) { centers.push(args); }, findNode(id) { return captured.attrs.nodes?.find(n => n.id === id); } });
   export const VueFlow = { inheritAttrs: false, setup(_, { attrs }) { captured.attrs = attrs; return () => h('div'); } };
 `);
 const stub = url('export default { render() { return null; } };');
+const layoutUrl =
+  url(`export const layoutState = { run: async diagram => new Map(diagram.nodes.map((n, i) => [n.id, { x: i * 346, y: 0 }])) };
+ export const layoutArchitecture = diagram => layoutState.run(diagram);`);
 const imports = {
   vue,
+  'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '@vue-flow/core': flow,
   '@vue-flow/background': url('export const Background = { render() { return null; } };'),
   '@vue-flow/controls': url('export const Controls = { render() { return null; } };'),
-  '../../lib/layoutArchitecture': url(
-    'export const layoutArchitecture = async (diagram) => new Map(diagram.nodes.map((n) => [n.id, { x: 0, y: 0 }]));',
-  ),
+  '../../lib/layoutArchitecture': layoutUrl,
   '../../lib/graphGeometry': url(
     'export const routeArchitectureEdge = () => []; export const architectureLabels = () => [];',
   ),
@@ -54,7 +56,8 @@ const compiled = ts
     return `from ${JSON.stringify(imports[name])}`;
   });
 const DiagramView = (await import(url(compiled))).default;
-const { calls, captured } = await import(flow);
+const { calls, centers, internals, captured } = await import(flow);
+const { layoutState } = await import(layoutUrl);
 const element = (tag = 'root') => ({
   tag,
   children: [],
@@ -86,7 +89,12 @@ const renderer = createRenderer({
   nextSibling: () => null,
 });
 
-test('architecture fits on entry with Agent-follow off, adapts to resizing, and preserves a user camera', async () => {
+async function harness() {
+  calls.length = 0;
+  centers.length = 0;
+  internals.length = 0;
+  layoutState.run = async (diagram) =>
+    new Map(diagram.nodes.map((n, i) => [n.id, { x: i * 346, y: 0 }]));
   const originals = Object.fromEntries(
     ['requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver'].map((key) => [
       key,
@@ -128,36 +136,122 @@ test('architecture fits on entry with Agent-follow off, adapts to resizing, and 
       callbacks.forEach((callback) => callback());
     }
   };
-  const app = renderer.createApp(DiagramView, {
-    diagram: { id: 'a', nodes: [{ id: 'one', label: 'One' }], edges: [], groups: [] },
+  const props = reactive({
+    focusedId: '',
+    diagram: {
+      id: 'a',
+      nodes: [
+        { id: 'one', label: 'One' },
+        { id: 'two', label: 'Two' },
+      ],
+      edges: [],
+      groups: [],
+    },
   });
+  const view = ref();
+  const app = renderer.createApp({ render: () => h(DiagramView, { ...props, ref: view }) });
+  app.mount(element());
+  return {
+    props,
+    view,
+    flush,
+    frames,
+    get observer() {
+      return observer;
+    },
+    dispose() {
+      app.unmount();
+      for (const [key, value] of Object.entries(originals)) {
+        if (value === undefined) delete globalThis[key];
+        else globalThis[key] = value;
+      }
+    },
+  };
+}
+
+test('architecture fits on entry with Agent-follow off, adapts to resizing, and preserves a user camera', async () => {
+  const h = await harness();
   try {
-    app.mount(element());
-    await flush();
+    await h.flush();
     assert.ok(calls.length > 0, 'entry must fit without the Agent-follow flag');
     const initialFits = calls.length;
-    observer.resize(800, 420);
-    await flush();
+    h.observer.resize(800, 420);
+    await h.flush();
     assert.ok(
       calls.length > initialFits,
       'composer/viewport resize should fit the untouched overview',
     );
     const fitted = calls.length;
-    observer.resize(0, 0);
-    observer.resize(800, 420);
-    await flush();
+    h.observer.resize(0, 0);
+    h.observer.resize(800, 420);
+    await h.flush();
     assert.equal(calls.length, fitted, 'Back to the same size should preserve the camera');
     captured.attrs.onMoveStart({ event: { type: 'wheel' } });
-    observer.resize(700, 280);
-    await flush();
+    h.observer.resize(700, 280);
+    await h.flush();
     assert.equal(calls.length, fitted, 'manual camera should survive later resizes');
-    app.unmount();
-    assert.equal(observer.disconnected, true);
-    assert.equal(frames.size, 0);
   } finally {
-    for (const [key, value] of Object.entries(originals)) {
-      if (value === undefined) delete globalThis[key];
-      else globalThis[key] = value;
+    h.dispose();
+  }
+  assert.equal(h.observer.disconnected, true);
+  assert.equal(h.frames.size, 0);
+});
+
+test('rapid architecture selection is instant; manual input and explicit Fit supersede awaiting focus', async () => {
+  const h = await harness();
+  try {
+    await h.flush();
+    for (let i = 0; i < 20; i++) {
+      h.props.focusedId = i % 2 ? 'one' : 'two';
+      await h.flush();
     }
+    assert.equal(centers.length, 20);
+    assert.ok(centers.every(([, , options]) => options.duration === 0));
+    assert.equal(centers.at(-1)[0], 118);
+    h.props.focusedId = 'two';
+    await nextTick();
+    captured.attrs.onMoveStart({ event: { type: 'wheel' } });
+    await h.flush();
+    assert.equal(centers.length, 20);
+    h.props.focusedId = 'one';
+    await nextTick();
+    h.view.value.fit();
+    await h.flush();
+    assert.equal(centers.length, 20);
+    assert.deepEqual(calls.at(-1), [{ padding: 0.2, duration: 0 }]);
+    h.props.focusedId = 'two';
+    h.props.focusedId = '';
+    await h.flush();
+    assert.equal(centers.length, 20);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('unmounted architecture ignores delayed focus, layout success and layout failure', async () => {
+  for (const rejectLayout of [false, true]) {
+    const h = await harness();
+    await h.flush();
+    let resolve, reject;
+    layoutState.run = () =>
+      new Promise((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+    h.props.diagram = { id: 'new', nodes: [{ id: 'new', label: 'New' }], edges: [], groups: [] };
+    h.props.focusedId = 'two';
+    await nextTick();
+    h.dispose();
+    const count = calls.length,
+      focused = centers.length,
+      updated = internals.length;
+    if (rejectLayout) reject(new Error('obsolete failure'));
+    else resolve(new Map([['new', { x: 1000, y: 0 }]]));
+    await nextTick();
+    await nextTick();
+    assert.equal(calls.length, count);
+    assert.equal(centers.length, focused);
+    assert.equal(internals.length, updated);
+    assert.equal(h.frames.size, 0);
   }
 });
