@@ -72,17 +72,26 @@ class ProjectService:
         ]
 
     def create(self, name: str, description: str = "", repository: str = "", request_id: str = ""):
+        return self.create_with_outcome(name, description, repository, request_id).project
+
+    def create_with_outcome(
+        self, name: str, description: str = "", repository: str = "", request_id: str = ""
+    ):
         if not name.strip() or len(name) > 100:
             raise ValueError("项目名称必须为 1–100 字符")
-        if repository:
-            repository = str(root_path(repository))
-        return self.db.create(
+
+        def prepare(project):
+            if project.repository:
+                project.repository = str(root_path(project.repository))
+
+        return self.db.create_with_outcome(
             Project(
                 name=name.strip(),
                 description=description[:4000],
                 repository=repository,
                 creation_key=request_id,
-            )
+            ),
+            prepare=prepare,
         )
 
     def update(self, project_id: str, name: str, description: str, repository: str):

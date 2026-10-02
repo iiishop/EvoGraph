@@ -28,6 +28,8 @@ const barTitle = computed(() => percent.value + '% 的行为已通过验证');
   <div class="project-item" :class="{ active, pinned }">
     <button
       class="project-select"
+      type="button"
+      :aria-label="`${project.name}，${meta}`"
       :aria-current="active ? 'page' : undefined"
       @click="$emit('select')"
     >
@@ -35,8 +37,8 @@ const barTitle = computed(() => percent.value + '% 的行为已通过验证');
         <GitBranch :size="15" aria-hidden="true" />
       </span>
       <span class="project-name" :title="project.name">
-        {{ project.name }}
-        <small>{{ meta }}</small>
+        <span class="project-title">{{ project.name }}</span>
+        <small :title="meta">{{ meta }}</small>
       </span>
     </button>
     <span class="project-bar" :class="{ achieved: progress.achieved }" :title="barTitle">
@@ -44,6 +46,7 @@ const barTitle = computed(() => percent.value + '% 的行为已通过验证');
     </span>
     <button
       class="icon-button project-delete"
+      type="button"
       :aria-label="`删除项目 ${project.name}`"
       :title="`删除项目「${project.name}」`"
       :disabled="state.busy"

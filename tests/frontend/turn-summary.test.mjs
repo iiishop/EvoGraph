@@ -87,6 +87,7 @@ function compileComponent(name) {
 }
 imports['./AgentTurnSummary.vue'] = compileComponent('AgentTurnSummary');
 const AgentTurnSummary = (await import(imports['./AgentTurnSummary.vue'])).default;
+imports['./AgentReviewTray.vue'] = compileComponent('AgentReviewTray');
 const AgentDock = (await import(compileComponent('AgentDock'))).default;
 const { agent } = await import(imports['../../composables/useAgent']);
 const render = (view, props) => renderToString(createSSRApp(view, props));
@@ -316,24 +317,25 @@ test('waiting remains pending and legacy history detail is still readable', asyn
   }
 });
 
-test('persisted receipt sits above composer and stays hidden during a new turn or compact collapse', async () => {
+test('saved-change trigger sits above composer and remains unavailable during a new turn', async () => {
   let html = await render(AgentDock, { project: project() });
-  assert.ok(html.indexOf('class="agent-turn-summary"') < html.indexOf('class="agent-input"'));
-  assert.match(html, /本轮变更/);
+  assert.ok(html.indexOf('最近变更') < html.indexOf('class="agent-input"'));
+  assert.match(html, /最近变更/);
+  assert.doesNotMatch(html, /class="agent-turn-summary"/);
   html = await render(AgentDock, { project: project(), compact: true });
-  assert.match(html, /<div\b[^>]*class="agent-review"[^>]*style="display:none;"/);
+  assert.match(html, /style="display:none;"/);
   assert.match(html, /id="agent-message"/);
   Object.assign(agent.state, { running: true, projectId: 'P1' });
   try {
     html = await render(AgentDock, { project: project() });
-    assert.doesNotMatch(html, /本轮变更/);
+    assert.doesNotMatch(html, /最近变更/);
   } finally {
     Object.assign(agent.state, { running: false, projectId: '' });
   }
   html = await render(AgentDock, {
     project: project({ events: [event(undefined, { detail: 'old format' })] }),
   });
-  assert.doesNotMatch(html, /本轮变更/);
+  assert.doesNotMatch(html, /最近变更/);
 });
 
 test('receipt content is escaped, bounded, focus-neutral and reduced-motion safe', async () => {
@@ -353,7 +355,7 @@ test('receipt content is escaped, bounded, focus-neutral and reduced-motion safe
   );
 });
 
-test('expanded receipts yield space to the composer and share one bounded review scroller', async () => {
+test('saved reply and change controls share a fixed strip without enabling a reading layout', async () => {
   const source = read('components/agent/AgentDock.vue');
   const workspace = read('components/workspace/ProjectWorkspace.vue');
   const html = await render(AgentDock, {
@@ -368,9 +370,13 @@ test('expanded receipts yield space to the composer and share one bounded review
       ],
     }),
   });
-  assert.match(html, /class="agent-review" aria-label="对话与本轮变更" tabindex="0"/);
-  assert.ok(html.indexOf('class="agent-review"') < html.indexOf('class="agent-conversation"'));
-  assert.ok(html.indexOf('class="agent-review"') < html.indexOf('class="agent-turn-summary"'));
+  assert.match(html, /本轮回复/);
+  assert.match(html, /最近变更/);
+  assert.ok(html.indexOf('本轮回复') < html.indexOf('class="agent-input"'));
+  assert.ok(html.indexOf('最近变更') < html.indexOf('class="agent-input"'));
+  assert.doesNotMatch(source, /is-reading|conversationOpen/);
+  assert.match(source, /:disabled="dockCollapsed"/);
+  assert.match(source, /v-if="attachmentTransfer \|\| failedAttempt"/);
   assert.match(
     source,
     /\.agent-dock\s*\{[^}]*display: flex;[^}]*flex: 0 1 auto;[^}]*min-height: 0;/,
@@ -378,14 +384,6 @@ test('expanded receipts yield space to the composer and share one bounded review
   assert.match(
     source,
     /\.agent-dock-heading,[^}]*\.agent-input,[^}]*\.agent-dock-note\s*\{\s*flex-shrink: 0;/,
-  );
-  assert.match(
-    source,
-    /\.agent-review\s*\{[^}]*flex: 0 1 auto;[^}]*min-height: 0;[^}]*max-height: clamp\(80px, calc\(100dvh - 740px\), 200px\);[^}]*overflow-y: auto;/,
-  );
-  assert.match(
-    source,
-    /\.agent-review :deep\(\.turn-summary-scroll\)\s*\{\s*max-height: none;\s*overflow: visible;/,
   );
   assert.match(workspace, /\.workspace-body\s*\{\s*overflow: visible;/);
   assert.match(

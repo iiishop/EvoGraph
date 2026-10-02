@@ -1,14 +1,21 @@
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal
 
-from ..domain.models import Project, now, uid
+from ..domain.models import Model, Project, now, uid
 
 
 class ConflictError(ValueError):
     pass
+
+
+class ProjectCreationResult(Model):
+    outcome: Literal["created", "reused_request", "existing_repository"]
+    project: Project
 
 
 class Database:
@@ -65,13 +72,34 @@ class Database:
         return Project.model_validate_json(row[0])
 
     def create(self, project: Project) -> Project:
+        return self.create_with_outcome(project).project
+
+    def create_with_outcome(
+        self, project: Project, *, prepare: Callable[[Project], None] | None = None
+    ) -> ProjectCreationResult:
+        """Resolve identity and repository ownership in the committing transaction."""
         with self.connect() as db:
             # Serialize the uniqueness check across windows/processes, not just UI clicks.
             db.execute("BEGIN IMMEDIATE")
             existing = [
                 Project.model_validate_json(row[0])
-                for row in db.execute("SELECT payload FROM projects")
+                for row in db.execute("SELECT payload FROM projects ORDER BY rowid")
             ]
+            # A retry belongs to its original request, even when its draft now
+            # names another occupied repository. Archived identities stay
+            # archived: recovery must neither resurrect nor duplicate them.
+            for other in existing:
+                if project.creation_key and project.creation_key == other.creation_key:
+                    return ProjectCreationResult(outcome="reused_request", project=other)
+            for other in existing:
+                if project.id == other.id or (
+                    project.is_demo and other.is_demo and not other.archived
+                ):
+                    return ProjectCreationResult(outcome="reused_request", project=other)
+            # Service validation may depend on a directory that disappeared
+            # after the original commit. Only a new identity needs preparing.
+            if prepare:
+                prepare(project)
             for other in existing:
                 same_repository = (
                     project.repository
@@ -79,19 +107,15 @@ class Database:
                     and os.path.normcase(os.path.realpath(project.repository))
                     == os.path.normcase(os.path.realpath(other.repository))
                 )
-                same_request = project.creation_key and project.creation_key == other.creation_key
-                if not other.archived and (
-                    same_repository
-                    or same_request
-                    or project.id == other.id
-                    or (project.is_demo and other.is_demo)
-                ):
-                    return other
+                if not other.archived and same_repository:
+                    return ProjectCreationResult(outcome="existing_repository", project=other)
             db.execute(
                 "INSERT INTO projects VALUES(?,?,?)",
                 (project.id, project.revision, project.model_dump_json()),
             )
-        return project
+        # The context manager has committed before a caller can observe this
+        # result. No post-commit read is required to confirm the saved record.
+        return ProjectCreationResult(outcome="created", project=project)
 
     def save(self, project: Project, kind: str, detail: str = "") -> Project:
         old_revision = project.revision

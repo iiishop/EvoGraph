@@ -12,6 +12,7 @@ import {
   History,
 } from 'lucide-vue-next';
 import type { Project } from '../../types';
+import type { WorkspaceFollowBoundary } from '../../composables/useWorkspace';
 import DiagramView from './DiagramView.vue';
 import ArchitectureBrowser from './ArchitectureBrowser.vue';
 import { useArchitectureBrowse } from '../../composables/useArchitectureBrowse';
@@ -30,7 +31,7 @@ import {
   matchingScopedDesigns,
 } from '../../composables/useScopedClassDetail';
 const agent = useAgent();
-const props = defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project; followBoundary?: WorkspaceFollowBoundary }>();
 const {
   view,
   query,
@@ -271,9 +272,16 @@ watch(
   },
 );
 watch(
-  () => [agent.state.navigationTick, agent.state.follow[props.project.id]],
+  () => [
+    agent.state.navigationTick,
+    agent.state.follow[props.project.id],
+    props.followBoundary?.resume,
+  ],
   () => {
     if (
+      (props.followBoundary &&
+        agent.state.navigationTick <= props.followBoundary.navigationTick &&
+        props.followBoundary.resume === 0) ||
       agent.state.projectId !== props.project.id ||
       agent.state.view !== 'architecture' ||
       agent.state.follow[props.project.id] === false

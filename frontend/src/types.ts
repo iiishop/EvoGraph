@@ -15,6 +15,23 @@ export interface ArchivedProjectSummary extends ProjectSummary {
   repository: string;
   updated_at: string;
 }
+// Write responses are persisted aggregates, not hydrated workspace snapshots.
+// Only metadata used to confirm a save is projected here; messages, acceptance,
+// evidence validity and other computed view fields must come from projects.get.
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description: string;
+  repository: string;
+  revision: number;
+  created_at: string;
+  archived: boolean;
+}
+export interface ProjectCreationOutcome {
+  outcome: 'created' | 'reused_request' | 'existing_repository';
+  project: ProjectRecord;
+}
+export type ProjectOpenResult = 'accepted' | 'failed' | 'superseded';
 export interface Behavior {
   id: string;
   behavior_key: string;

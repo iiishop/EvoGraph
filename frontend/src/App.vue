@@ -3,6 +3,7 @@ import { computed, onMounted, ref, type Component } from 'vue';
 import { AlertCircle, CheckCircle2, X, Orbit } from 'lucide-vue-next';
 import AppSidebar from './components/sidebar/AppSidebar.vue';
 import ProjectDialog from './components/projects/ProjectDialog.vue';
+import ProjectWelcome from './components/projects/ProjectWelcome.vue';
 import ProjectRecoveryDialog from './components/projects/ProjectRecoveryDialog.vue';
 import { navigation } from './lib/navigation';
 import { useWorkspace } from './composables/useWorkspace';
@@ -40,14 +41,7 @@ onMounted(init);
         v-bind="activePage.countProjects ? { project: state.project } : {}"
         @edit="edit"
       />
-      <div v-else class="empty-state">
-        <Orbit :size="40" />
-        <h2>欢迎来到 EvoGraph</h2>
-        <p>从一个项目和一个清晰的目标开始。</p>
-        <button class="button primary" @click="state.error ? init() : create()">
-          {{ state.error ? '重新连接后端' : '创建项目' }}
-        </button>
-      </div>
+      <ProjectWelcome v-else :reconnect="Boolean(state.error)" @create="create" @retry="init" />
     </div>
     <div
       v-if="state.error || state.notice"

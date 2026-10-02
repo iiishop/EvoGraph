@@ -9,12 +9,13 @@ import MilestoneInspector from '../graph/MilestoneInspector.vue';
 import SourceInspector from '../graph/SourceInspector.vue';
 import { workspaceViews } from '../../lib/workspaceViews';
 import AgentDock from '../agent/AgentDock.vue';
-import { useWorkspace } from '../../composables/useWorkspace';
+import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/useWorkspace';
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
 const agent = useAgent();
 function followPage() {
   if (
+    mounted &&
     agent.state.projectId === props.project.id &&
     agent.state.follow[props.project.id] !== false &&
     workspaceViews.some((v) => v.id === agent.state.view)
@@ -22,13 +23,63 @@ function followPage() {
     tab.value = agent.state.view;
 }
 function resume() {
+  if (!mounted) return;
+  followBoundary.value.resume++;
   agent.resumeFollow(props.project.id);
   followPage();
 }
 watch(() => agent.state.navigationTick, followPage);
 defineEmits<{ edit: [] }>();
-const { state, selected, selectNode } = useWorkspace();
+const { state, selected, selectNode, bindWorkspaceTab } = useWorkspace();
+const tabSession = computed(() => bindWorkspaceTab(props.project));
+const followBoundary = ref<WorkspaceFollowBoundary>({ navigationTick: 0, pulse: 0, resume: 0 });
+watch(
+  () => tabSession.value.key,
+  () => {
+    // An accepted incarnation/remount owns only live events after this point.
+    followBoundary.value = {
+      navigationTick: agent.state.navigationTick,
+      pulse: agent.state.pulse,
+      resume: 0,
+    };
+  },
+  { immediate: true, flush: 'sync' },
+);
+const tab = computed({
+  get: () => tabSession.value.tab.value,
+  set: (value) => {
+    if (mounted && workspaceViews.some((view) => view.id === value))
+      tabSession.value.tab.value = value;
+  },
+});
+let mounted = true;
+// Child events captured before replacement must not act on a restored/recreated project.
+const viewActions = computed(() => {
+  const key = tabSession.value.key;
+  const projectId = props.project.id;
+  const incarnation = props.project.created_at;
+  const current = () =>
+    mounted &&
+    state.page === 'projects' &&
+    state.project?.id === projectId &&
+    state.project.created_at === incarnation &&
+    tabSession.value.key === key;
+  return {
+    select: (value: string) => {
+      if (!current()) return;
+      tab.value = value;
+      agent.freeView(props.project.id);
+    },
+    resume: () => {
+      if (current()) resume();
+    },
+    locate: (id: string) => {
+      if (current()) void locate(id);
+    },
+  };
+});
 const planningContent = ref<HTMLElement>();
+const composer = ref<InstanceType<typeof AgentDock>>();
 const finderOpen = ref(false);
 function openFinder() {
   agent.freeView(props.project.id);
@@ -40,12 +91,14 @@ const milestones = computed(() => [
 ]);
 let locateSequence = 0;
 onBeforeUnmount(() => {
+  mounted = false;
   locateSequence++;
 });
 async function locate(id: string) {
-  if (!milestones.value.some((item) => item.id === id)) return;
+  if (!mounted || !milestones.value.some((item) => item.id === id)) return;
   const sequence = ++locateSequence;
   const projectId = props.project.id;
+  const tabKey = tabSession.value.key;
   finderOpen.value = false;
   tab.value = 'graph';
   selectNode(id);
@@ -53,6 +106,7 @@ async function locate(id: string) {
   await nextTick();
   if (
     sequence !== locateSequence ||
+    tabSession.value.key !== tabKey ||
     props.project.id !== projectId ||
     state.project?.id !== projectId ||
     state.selectedId !== id ||
@@ -63,8 +117,7 @@ async function locate(id: string) {
   graph.value?.locate(id);
 }
 const activeView = computed(() => workspaceViews.find((v) => v.id === tab.value)!);
-const tab = ref('graph'),
-  graph = ref<InstanceType<typeof MilestoneGraph>>();
+const graph = ref<InstanceType<typeof MilestoneGraph>>();
 watch(tab, (value) => {
   if (value !== 'graph') finderOpen.value = false;
 });
@@ -76,10 +129,7 @@ watch(tab, (value) => {
       <GraphToolbar
         :tab="tab"
         :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
-        @tab="
-          tab = $event;
-          agent.freeView(project.id);
-        "
+        @tab="viewActions.select"
         @find="openFinder"
         @fit="graph?.fit()"
         @reset="graph?.reset()"
@@ -101,9 +151,11 @@ watch(tab, (value) => {
         >
           <component
             :is="activeView.component"
-            :key="project.id + tab"
+            :key="`${project.id}:${tabSession.key}:${tab}`"
             ref="graph"
             :project="project"
+            v-bind="tab === 'graph' || tab === 'architecture' ? { followBoundary } : {}"
+            @compose="composer?.focus()"
           />
         </div>
       </div>
@@ -113,20 +165,22 @@ watch(tab, (value) => {
         :key="selected.id"
         :milestone="selected"
         :project="project"
-        @locate="locate"
+        @locate="viewActions.locate"
       />
       <AgentDock
+        ref="composer"
         :project="project"
+        :review-owner="tabSession.key"
         :view="tab"
         :compact="tab === 'architecture' || (tab === 'graph' && Boolean(selected))"
-        @resume="resume"
-        @locate="locate"
+        @resume="viewActions.resume"
+        @locate="viewActions.locate"
       />
     </section>
     <MilestoneFinder
       v-if="finderOpen && tab === 'graph'"
       :milestones="milestones"
-      @select="locate"
+      @select="viewActions.locate"
       @close="finderOpen = false"
     />
   </main>

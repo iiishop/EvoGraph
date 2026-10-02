@@ -154,6 +154,7 @@ const Graph = await component('components/graph/MilestoneGraph.vue', {
   '../../lib/edgeKinds': url(
     'export const edgeKinds = []; export const edgeKind = () => ({ color: "blue" });',
   ),
+  '../projects/EmptyPlanningHandoff.vue': empty,
   './MilestoneNode.vue': nodeUrl,
   './GraphEdge.vue': empty,
   './BaselineMilestoneStatus.vue': empty,

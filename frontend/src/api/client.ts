@@ -11,6 +11,18 @@ declare global {
   }
 }
 
+// A rejected command envelope is distinct from a lost transport response.
+// Callers handling writes must keep INTERNAL/transport errors ambiguous.
+export class CommandError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CommandError';
+  }
+}
+
 // The transport is the only place that knows whether it is running in a browser or desktop.
 export async function command<T>(action: string, params: object = {}): Promise<T> {
   let response: Envelope<T>;
@@ -25,7 +37,7 @@ export async function command<T>(action: string, params: object = {}): Promise<T
     if (!result.ok) throw new Error(`连接失败（${result.status}），请确认 Python 后端已启动`);
     response = await result.json();
   }
-  if (!response.ok) throw new Error(response.error.message);
+  if (!response.ok) throw new CommandError(response.error.code, response.error.message);
   return response.data;
 }
 

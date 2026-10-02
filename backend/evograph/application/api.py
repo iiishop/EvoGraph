@@ -51,6 +51,7 @@ class Application:
             "projects.list": self.projects.list,
             "projects.list_archived": self.projects.list_archived,
             "projects.create": self.projects.create,
+            "projects.create_with_outcome": self.projects.create_with_outcome,
             "projects.get": self.projects.get,
             "projects.update": self.projects.update,
             "projects.delete": self.projects.delete,

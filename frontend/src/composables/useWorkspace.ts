@@ -4,6 +4,7 @@ import type {
   ArchivedProjectSummary,
   Message,
   Project,
+  ProjectOpenResult,
   ProjectSnapshot,
   ProjectSummary,
   Settings,
@@ -13,6 +14,12 @@ import { useNotifications } from './useNotifications';
 import { agentDrafts } from './useAgentDrafts';
 import { workflowDrafts } from './useWorkflowDrafts';
 import { architectureBrowse } from './useArchitectureBrowse';
+
+export interface WorkspaceFollowBoundary {
+  navigationTick: number;
+  pulse: number;
+  resume: number;
+}
 
 const state = reactive({
   projects: [] as ProjectSummary[],
@@ -45,9 +52,11 @@ let refreshSequence = 0;
 // Confirmed settings writes supersede a settings read already in flight.
 let settingsSequence = 0;
 let settingsOperationOwner: symbol | null = null;
+let projectOperationOwner: symbol | null = null;
 // Live agent snapshots can advance messages/history without changing the
 // project revision. A background read started before one is no longer current.
 let snapshotSequence = 0;
+// Includes settings navigation, which does not select a different project.
 let navigationSequence = 0;
 let archivedSequence = 0;
 // Owned by the workspace, so dismissing the dialog cannot release a restore.
@@ -61,7 +70,49 @@ function noteSelectionActivity(id: string) {
   if (pendingSelection?.id === id) pendingSelection.activity++;
 }
 
+// The selected workspace tab belongs to this session's accepted project incarnation.
+// It stores no Agent navigation, node selection, focus, or graph camera state.
+const workspaceTabs = reactive(
+  new Map<string, { incarnation: string; key: number; tab: string }>(),
+);
+let workspaceTabSequence = 0;
+function reconcileWorkspaceTab(project: Project) {
+  const incarnation = project.created_at ?? '';
+  if (workspaceTabs.get(project.id)?.incarnation !== incarnation)
+    workspaceTabs.set(project.id, { incarnation, key: ++workspaceTabSequence, tab: 'graph' });
+}
+function bindWorkspaceTab(project: Project) {
+  const id = project.id;
+  const incarnation = project.created_at ?? '';
+  const saved = workspaceTabs.get(id);
+  const key = saved?.incarnation === incarnation ? saved.key : undefined;
+  // A lease from before deletion/restore is stale even if id and created_at are reused.
+  const current = () => {
+    const entry = workspaceTabs.get(id);
+    return key !== undefined && entry?.key === key && entry.incarnation === incarnation
+      ? entry
+      : undefined;
+  };
+  return {
+    key,
+    tab: computed({
+      get: () => current()?.tab ?? 'graph',
+      set: (tab: string) => {
+        const entry = current();
+        if (
+          entry &&
+          state.page === 'projects' &&
+          state.project?.id === id &&
+          (state.project.created_at ?? '') === incarnation
+        )
+          entry.tab = tab;
+      },
+    }),
+  };
+}
+
 function reconcileWorkflowDrafts(project: Project) {
+  reconcileWorkspaceTab(project);
   architectureBrowse.reconcile(project);
   workflowDrafts.reconcile(
     project.id,
@@ -69,7 +120,7 @@ function reconcileWorkflowDrafts(project: Project) {
   );
 }
 
-async function loadProject(id: string, navigate = false) {
+async function loadProject(id: string, navigate = false): Promise<ProjectOpenResult> {
   const sequence = ++selectSequence;
   const navigation = navigationSequence;
   const snapshot = snapshotSequence;
@@ -90,37 +141,48 @@ async function loadProject(id: string, navigate = false) {
     for (let attempt = 0; attempt < maxSelectionReads; attempt++) {
       const activity = selection.activity;
       try {
-        const project = await command<Project>('projects.get', { project_id: id });
-        if (!current() || liveSnapshotWon()) return;
+        const project = await command<Project & { archived?: boolean }>('projects.get', {
+          project_id: id,
+        });
+        if (!current()) return 'superseded';
+        // The intended project is already open with newer canonical live data.
+        // Keep that state and its tab/draft owners rather than reopening it.
+        if (liveSnapshotWon()) return 'accepted';
         if (activity !== selection.activity) continue;
+        if (!project || project.id !== id) throw new Error('未收到所选项目的完整内容，请重试打开');
+        if (project.archived) throw new Error('该项目已删除，请从「已删除项目」查看并按需恢复');
         if (
           state.project?.id === id &&
           project.created_at === state.project.created_at &&
           project.revision < state.project.revision
         )
-          return;
+          return 'accepted';
         architectureBrowse.activate(project);
         agentDrafts.activate(id);
         workflowDrafts.activate(id);
         reconcileWorkflowDrafts(project);
         state.project = project;
         localStorage.setItem('evograph.project', id);
-        return;
+        return 'accepted';
       } catch (error) {
-        if (!current() || liveSnapshotWon()) return;
+        if (!current()) return 'superseded';
+        if (liveSnapshotWon()) return 'accepted';
         if (activity !== selection.activity) continue;
         state.error = String(error);
-        return;
+        return 'failed';
       }
     }
-    if (current() && !liveSnapshotWon())
-      state.error = '项目仍在更新，最新内容暂未读取完成。请重新打开项目重试。';
+    if (!current()) return 'superseded';
+    if (liveSnapshotWon()) return 'accepted';
+    state.error = '项目仍在更新，最新内容暂未读取完成。请重新打开项目重试。';
+    return 'failed';
   } finally {
     if (pendingSelection === selection) pendingSelection = null;
   }
 }
 
 function discardProject(id: string) {
+  workspaceTabs.delete(id);
   architectureBrowse.discard(id);
   agentDrafts.discard(id);
   workflowDrafts.discard(id);
@@ -156,6 +218,8 @@ async function refresh() {
     // A list fetched across a selection may predate that project (for example,
     // creation or restore). It is not authority to discard the newer draft.
     if (!current() || selecting || pendingSelection) return;
+    for (const id of workspaceTabs.keys())
+      if (!state.projects.some((project) => project.id === id)) workspaceTabs.delete(id);
     architectureBrowse.retain(state.projects.map((project) => project.id));
     agentDrafts.retain(state.projects.map((project) => project.id));
     workflowDrafts.retain(state.projects.map((project) => project.id));
@@ -293,6 +357,7 @@ async function restoreProject(project: ProjectSummary, navigate = false) {
     // unsent work. Only an authoritative archived→active transition starts a
     // new incarnation. A successful no-op must retain that live ownership.
     if (outcome.restored) {
+      workspaceTabs.delete(restored.id);
       architectureBrowse.discard(restored.id);
       agentDrafts.discard(restored.id);
       workflowDrafts.discard(restored.id);
@@ -364,7 +429,7 @@ async function init() {
 
 async function selectProject(id: string) {
   navigationSequence++;
-  await loadProject(id, true);
+  return loadProject(id, true);
 }
 
 export function useWorkspace() {
@@ -374,6 +439,23 @@ export function useWorkspace() {
     refresh,
     perform,
     selectProject,
+    bindWorkspaceTab,
+    navigationToken: () => navigationSequence,
+    navigationIsCurrent: (token: number) => token === navigationSequence,
+    invalidateProjectReads: () => {
+      refreshSequence++;
+    },
+    reserveProjectOperation: () => {
+      if (state.busy) return null;
+      const owner = Symbol('project save');
+      projectOperationOwner = owner;
+      state.busy = true;
+      return () => {
+        if (projectOperationOwner !== owner) return;
+        projectOperationOwner = null;
+        state.busy = false;
+      };
+    },
     loadArchivedProjects,
     restoreProject,
     refreshAfterRestore,
@@ -426,7 +508,8 @@ export function useWorkspace() {
     },
     setBusy: (value: boolean) => {
       // Workspace-owned requests retain their busy lease after view disposal.
-      if (!settingsOperationOwner && !recoveryOperationOwner) state.busy = value;
+      if (!settingsOperationOwner && !recoveryOperationOwner && !projectOperationOwner)
+        state.busy = value;
     },
     reserveSettingsOperation: () => {
       if (state.busy) return null;

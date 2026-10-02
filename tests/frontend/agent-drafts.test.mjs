@@ -243,8 +243,10 @@ async function harness() {
       send: (...args) => { env.calls.push(args.slice(0, 6)); env.submissions.push(args[6]); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
     export const useAgent = () => agent; // ${id}`);
   const workspaceUrl = moduleUrl(`import { reactive, computed } from ${JSON.stringify(vueUrl)};
+    const tabs = reactive({});
     const project = (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null });
     export const workspace = { state: reactive({ selectedId: null, project: project('A'), projects: [], page: 'projects', loading: false, busy: false, settings: { provider: { config: { model: 'Test model' } } } }),
+      bindWorkspaceTab: project => ({ key: project.id === 'A' ? 1 : 2, tab: computed({ get: () => tabs[project.id] ?? 'graph', set: value => { tabs[project.id] = value; } }) }),
       selected: computed(() => workspace.state.project.milestones.find(item => item.id === workspace.state.selectedId) ?? null), selectNode: id => { workspace.state.selectedId = id; }, calls: [], init() {}, dismiss() {}, undoDelete() {},
       applyProject: project => { if (workspace.state.project.id === project.id) workspace.state.project = project; },
       setPage(page) { this.state.page = page; }, setError(error) { this.state.error = error; },
@@ -275,6 +277,8 @@ async function harness() {
     ),
     '../graph/GraphToolbar.vue': moduleUrl(`import { h } from ${JSON.stringify(vueUrl)};
       export default { props: ['tab'], emits: ['tab'], setup(props, { emit }) { return () => h('toolbar', { tab: props.tab, change: tab => emit('tab', tab) }); } };`),
+    './AgentReviewTray.vue': moduleUrl(`import { h } from ${JSON.stringify(vueUrl)};
+      export default { props: ['project', 'summary', 'running', 'disabled', 'owner'], emits: ['locate'], setup(props) { return () => h('review-tray', { ...props }); } };`),
     './AgentQuestion.vue': moduleUrl(
       `import { h } from ${JSON.stringify(vueUrl)}; export default { emits: ['choose'], setup(_, { emit }) { return () => h('question', { choose: text => emit('choose', text) }); } };`,
     ),
@@ -293,6 +297,7 @@ async function harness() {
     '../graph/MilestoneFinder.vue',
     './components/sidebar/AppSidebar.vue',
     './components/projects/ProjectDialog.vue',
+    './components/projects/ProjectWelcome.vue',
     './components/projects/ProjectRecoveryDialog.vue',
     './components/ui/NotificationStack.vue',
   ])
@@ -308,6 +313,12 @@ async function harness() {
     const url = moduleUrl(code);
     return { url, component: (await import(url)).default };
   }
+  const question = await component('components/agent/AgentQuestion.vue');
+  imports['./AgentQuestion.vue'] = moduleUrl(`import { h } from ${JSON.stringify(vueUrl)};
+    import Question from ${JSON.stringify(question.url)};
+    export default { props: ['question', 'answer', 'disabled'], emits: ['choose'], setup(props, { emit }) {
+      return () => h('question', { choose: text => emit('choose', text) }, [h(Question, { ...props, onChoose: text => emit('choose', text) })]);
+    } };`);
   imports['../agent/AgentDock.vue'] = (await component('components/agent/AgentDock.vue')).url;
   const project = await component('components/workspace/ProjectWorkspace.vue');
   imports['./lib/navigation'] = moduleUrl(`import Project from ${JSON.stringify(project.url)};
@@ -1223,8 +1234,8 @@ test('collapsing history keeps a pending question outside its scroller and prese
     h.button('收起项目对话').onClick();
     await tick();
     assert.equal(h.find('question'), question);
-    const review = all(h.root).find((node) => node.class === 'agent-review');
-    assert.equal(review.style.display, 'none');
+    const review = h.find('review-tray');
+    assert.equal(review.disabled, true);
     assert.notEqual(question.parent.style?.display, 'none');
     question.choose('Title and author');
     await tick();
@@ -1270,7 +1281,7 @@ test('saved retry ignores stale token in a newer unsent draft', async () => {
   }
 });
 
-test('intentional conversation reading keeps the composer, question, Stop, and draft mounted', async () => {
+test('floating review integration keeps the composer, question, Stop, and draft mounted', async () => {
   const h = await harness();
   try {
     await h.input('An untouched #typed @draft');
@@ -1281,10 +1292,11 @@ test('intentional conversation reading keeps the composer, question, Stop, and d
     const input = h.find('textarea');
     const form = h.find('form');
     const dock = form.parent;
-    const conversation = () => all(h.root).find((node) => node.class === 'agent-conversation');
-    conversation().onToggle({ target: { open: true } });
-    await tick();
-    assert.match(dock.class, /is-reading/);
+    const tray = h.find('review-tray');
+    assert.equal(tray.parent, dock);
+    assert.equal(tray.owner, 1);
+    assert.equal(tray.project.messages[0].id, 'history');
+    assert.doesNotMatch(dock.class, /is-reading/);
     assert.equal(h.find('textarea'), input);
     assert.equal(h.find('textarea').value, 'An untouched #typed @draft');
     h.workspace.state.project.question = {
@@ -1303,19 +1315,16 @@ test('intentional conversation reading keeps the composer, question, Stop, and d
     assert.ok(stop);
     assert.equal(h.find('form'), form);
     assert.equal(h.find('textarea'), input);
-    conversation().onToggle({ target: { open: false } });
+    assert.equal(tray.running, true);
+    h.button('收起项目对话').onClick();
     await tick();
+    assert.equal(h.find('review-tray'), tray);
+    assert.equal(tray.disabled, true);
     assert.doesNotMatch(dock.class, /is-reading/);
     assert.ok(all(h.root).includes(stop));
     const sourceText = source('components/agent/AgentDock.vue');
-    assert.match(
-      sourceText,
-      /\.agent-review \.agent-conversation-scroll,[\s\S]*?max-height: none;\s*overflow: visible/,
-    );
-    assert.match(
-      sourceText,
-      /\.agent-dock\.is-reading \.agent-review\s*\{\s*max-height: min\(38dvh, 340px\)/,
-    );
+    assert.doesNotMatch(sourceText, /is-reading|conversationOpen/);
+    assert.match(sourceText, /:disabled="dockCollapsed"/);
   } finally {
     h.dispose();
   }
@@ -1342,5 +1351,195 @@ test('late delivery confirmation preserves old-answer provenance before untouche
     assert.match(h.workspace.state.error, /不会复用旧回答/);
   } finally {
     h.dispose();
+  }
+});
+
+for (const reason of [
+  'provider',
+  'busy',
+  'running-here',
+  'running-elsewhere',
+  'pending',
+  'preparing',
+  'uploading',
+  'refreshing',
+]) {
+  test(`actual question buttons mirror ${reason} readiness and enable after it clears`, async () => {
+    const h = await harness();
+    try {
+      h.workspace.state.project.question = {
+        id: 'Q-ready',
+        prompt: 'Choose',
+        options: ['Ready option'],
+      };
+      let clear;
+      if (reason === 'provider') {
+        h.workspace.state.settings = null;
+        clear = () => {
+          h.workspace.state.settings = { provider: { config: { model: 'Test' } } };
+        };
+      } else if (reason === 'busy') {
+        h.workspace.state.busy = true;
+        clear = () => {
+          h.workspace.state.busy = false;
+        };
+      } else if (reason.startsWith('running-')) {
+        Object.assign(h.agent.state, {
+          running: true,
+          projectId: reason === 'running-here' ? 'A' : 'B',
+        });
+        clear = () => {
+          h.agent.state.running = false;
+        };
+      } else if (reason === 'pending') {
+        const attempt = h.agentDrafts.start('A', { text: 'Awaiting previous result', ids: [] });
+        clear = () => h.agentDrafts.settle(attempt, true);
+      } else {
+        const transfer = h.agentDrafts.beginAttachmentTransfer('A', 1, 'preparing');
+        if (reason !== 'preparing') h.agentDrafts.attachmentPhase(transfer, reason, 0);
+        clear = () => h.agentDrafts.finishAttachmentTransfer(transfer, null);
+      }
+      await tick();
+      assert.equal(h.button('Ready option').disabled, true);
+      h.button('Ready option').onClick();
+      await tick();
+      assert.equal(
+        h.env.calls.length,
+        0,
+        'Submission guard must also reject programmatic stale clicks',
+      );
+      clear();
+      await tick();
+      assert.equal(
+        h.button('Ready option').disabled,
+        false,
+        'Empty composer is not a question-choice blocker',
+      );
+      h.button('Ready option').onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.env.calls[0][1], 'Ready option');
+      assert.equal(h.env.calls[0][2], 'Q-ready');
+    } finally {
+      h.dispose();
+    }
+  });
+}
+
+for (const delivered of [false, true]) {
+  test(`question choice bypasses only stale ordinary composer context and preserves it on ${delivered ? 'success' : 'failure'}`, async () => {
+    const h = await harness();
+    try {
+      h.workspace.state.project.question = {
+        id: 'Q-current',
+        prompt: 'Choose',
+        options: ['Current answer'],
+      };
+      const binding = h.agentDrafts.bind(() => 'A');
+      const stale = {
+        version: 1,
+        parts: [
+          { type: 'text', text: 'Keep my unrelated idea ' },
+          {
+            type: 'reference',
+            kind: 'milestone',
+            id: 'removed',
+            project_id: 'A',
+            label: 'removed node',
+          },
+        ],
+      };
+      binding.composerDocument.value = stale;
+      await tick();
+      h.env.send = async () => delivered;
+      const ordinarySend = all(h.root).find(
+        (node) => node.tag === 'button' && node.type === 'submit',
+      );
+      assert.equal(ordinarySend.disabled, true);
+      assert.equal(h.button('Current answer').disabled, false);
+      h.button('Current answer').onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.env.calls[0][1], 'Current answer');
+      assert.equal(h.env.calls[0][2], 'Q-current');
+      assert.deepEqual(h.env.calls[0][5], {
+        version: 1,
+        parts: [{ type: 'text', text: 'Current answer' }],
+      });
+      assert.deepEqual(binding.composerDocument.value, stale);
+      if (!delivered) {
+        assert.equal(binding.failures.value[0].questionId, 'Q-current');
+        h.workspace.state.busy = true;
+        await tick();
+        assert.equal(h.button('Current answer').disabled, true);
+        h.button('丢弃这条请求').onClick();
+        await tick();
+        assert.equal(
+          binding.failures.value.length,
+          0,
+          'Deleting an old recovery is independent of send readiness',
+        );
+        assert.deepEqual(binding.composerDocument.value, stale);
+      }
+      h.workspace.state.busy = true;
+      await tick();
+      assert.equal(
+        h.find('textarea').disabled,
+        false,
+        'Busy state must still allow editing/removing stale draft context',
+      );
+      await h.input('Corrected ordinary draft');
+      assert.equal(
+        binding.composerDocument.value.parts.some((part) => part.type === 'reference'),
+        false,
+      );
+      assert.equal(h.button('Current answer').disabled, true);
+      h.workspace.state.busy = false;
+      await tick();
+      assert.equal(h.button('Current answer').disabled, false);
+      assert.equal(ordinarySend.disabled, false);
+      assert.equal(h.env.calls.length, 1, 'Editing context must not send automatically');
+    } finally {
+      h.dispose();
+    }
+  });
+}
+
+test('recovery actions remain distinct, named, and independently usable in a wrapping group', async () => {
+  const { descriptor } = parse(source('components/agent/AgentDock.vue'));
+  const style = descriptor.styles.find((style) => style.scoped)?.content;
+  const actions = style?.match(/\.agent-recovery-actions\s*\{([^}]+)\}/)?.[1];
+  assert.match(actions, /display:\s*flex/);
+  assert.match(actions, /flex-wrap:\s*wrap/);
+  assert.match(actions, /gap:\s*8px 16px/);
+  for (const detached of [false, true]) {
+    const h = await harness();
+    try {
+      await failedAnswer(h);
+      if (detached) await h.input('A newer unsent draft');
+      const group = all(h.root).find((node) => node.class === 'agent-recovery-actions');
+      assert.equal(group.role, 'group');
+      assert.equal(group['aria-label'], '未完成请求操作');
+      const buttons = all(group).filter((node) => node.tag === 'button');
+      assert.deepEqual(
+        buttons.map((button) => textOf(button).trim()),
+        ['重试这条请求', detached ? '丢弃这条请求' : '关闭提示'],
+      );
+      const draft = h.find('textarea').value;
+      h.workspace.state.busy = true;
+      await tick();
+      assert.equal(buttons[0].disabled, true);
+      assert.notEqual(buttons[1].disabled, true);
+      buttons[1].onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.find('textarea').value, draft);
+      assert.equal(
+        all(h.root).some((node) => node.class === 'agent-recovery-actions'),
+        false,
+      );
+    } finally {
+      h.dispose();
+    }
   }
 });

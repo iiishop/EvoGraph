@@ -24,10 +24,11 @@ const compile = (source) =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
 const envUrl = url(`import { reactive, computed, h } from ${JSON.stringify(vue)};
-export const env = { state: reactive({ project: { id: 'P', milestones: [{ id: 'A', origin: 'plan' }, { id: 'B', origin: 'plan' }], source_milestones: [] }, selectedId: null }), locates: [], free: [], target: 'A' };
+export const env = { state: reactive({ page: 'projects', project: { id: 'P', milestones: [{ id: 'A', origin: 'plan' }, { id: 'B', origin: 'plan' }], source_milestones: [] }, selectedId: null }), locates: [], free: [], target: 'A' };
 export const Graph = { setup(_, { expose }) { expose({ locate: id => env.locates.push(id), fit() {}, reset() {} }); return () => h('div', { class: 'test-graph' }); } };
 export const workspaceViews = [{ id: 'graph', component: Graph }, { id: 'architecture', component: { render() { return h('div', { class: 'test-architecture' }); } } }];
-export const useWorkspace = () => ({ state: env.state, selected: computed(() => env.state.project.milestones.find(m => m.id === env.state.selectedId)), selectNode: id => env.state.selectedId = id });
+const tab = reactive({ value: 'graph' });
+export const useWorkspace = () => ({ bindWorkspaceTab: () => ({ key: 'P', tab: computed({ get: () => tab.value, set: value => { tab.value = value; } }) }), state: env.state, selected: computed(() => env.state.project.milestones.find(m => m.id === env.state.selectedId)), selectNode: id => env.state.selectedId = id });
 export const useAgent = () => ({ state: reactive({ projectId: '', follow: {}, navigationTick: 0 }), freeView: id => env.free.push(id), resumeFollow() {} });
 export const useEntrance = () => {};
 export const Toolbar = { emits: ['tab'], setup(_, { emit }) { return () => h('button', { class: 'tab-other', onClick: () => emit('tab', 'architecture') }, 'architecture'); } };

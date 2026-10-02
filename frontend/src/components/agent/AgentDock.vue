@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
-import AgentTurnSummary from './AgentTurnSummary.vue';
+import AgentReviewTray from './AgentReviewTray.vue';
 import { latestTurnSummary } from '../../lib/turnSummary';
 import { planAgentRetry, waitForRetryRead } from '../../lib/agentRetry';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
 import AttachmentReceipt from '../attachments/AttachmentReceipt.vue';
 import ComposerEditor from './ComposerEditor.vue';
-import MessageContent from './MessageContent.vue';
 import {
   cloneComposerDocument,
   trimComposerDocument,
@@ -29,25 +28,21 @@ import {
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
-const props = defineProps<{ project: Project; compact?: boolean; view?: string }>();
+const props = defineProps<{
+  project: Project;
+  compact?: boolean;
+  view?: string;
+  reviewOwner?: number;
+}>();
 defineEmits<{ resume: []; locate: [id: string] }>();
-const conversationOpen = ref(false);
 const dockCollapsed = ref(false);
 const review = ref<HTMLElement>();
 watch(
   () => props.project.id,
   () => {
-    conversationOpen.value = false;
     if (review.value) review.value.scrollTop = 0;
   },
 );
-const latestReply = computed(() =>
-  props.project.messages.filter((item) => item.role === 'assistant').at(-1),
-);
-const replyPreview = computed(() => {
-  const text = latestReply.value?.content.replace(/\s+/g, ' ').trim() ?? '';
-  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
-});
 const turnSummary = computed(() => latestTurnSummary(props.project));
 const agent = useAgent();
 const { state, setPage, setError, selectProject, applyProject } = useWorkspace();
@@ -72,6 +67,14 @@ onUnmounted(() => {
   mounted = false;
 });
 const message = ref<InstanceType<typeof ComposerEditor>>();
+// Entry hints focus the existing editor; they never populate or send a draft.
+defineExpose({
+  focus: async () => {
+    dockCollapsed.value = false;
+    await nextTick();
+    if (mounted) message.value?.focus();
+  },
+});
 const attachmentPicker = ref<InstanceType<typeof AttachmentPicker>>();
 const dragDepth = ref(0);
 const references = ref<ReferenceItem[] | null>(null);
@@ -421,7 +424,6 @@ function choose(option: string) {
     :class="{
       'is-drop-target': draggingFiles,
       'is-collapsed': dockCollapsed,
-      'is-reading': conversationOpen && !dockCollapsed,
       'has-question': answering,
     }"
     @paste.capture="onPaste"
@@ -460,41 +462,26 @@ function choose(option: string) {
       v-if="project.question"
       :question="project.question"
       :answer="content"
-      :disabled="agent.state.running"
+      :disabled="Boolean(operationBlocker)"
       @choose="choose"
     />
-    <div
+    <AgentReviewTray
       v-if="hasReview"
+      :project="project"
+      :summary="turnSummary"
+      :owner="reviewOwner"
+      :running="runningHere"
+      :disabled="dockCollapsed"
+      @locate="$emit('locate', $event)"
+    />
+    <div
+      v-if="attachmentTransfer || failedAttempt"
       v-show="!dockCollapsed"
       ref="review"
       class="agent-review"
       aria-label="对话与本轮变更"
       tabindex="0"
     >
-      <details
-        v-if="project.messages.length"
-        class="agent-conversation"
-        :open="conversationOpen"
-        @toggle="conversationOpen = ($event.target as HTMLDetailsElement).open"
-      >
-        <summary>
-          <span>{{ latestReply ? '最近回复' : '对话记录' }}</span
-          ><span class="reply-preview">{{ replyPreview || '查看已发送的请求' }}</span>
-        </summary>
-        <div class="agent-conversation-scroll" aria-label="项目对话记录">
-          <article v-for="item in project.messages" :key="item.id" :class="item.role">
-            <strong>{{ item.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
-            <MessageContent :message="item" />
-          </article>
-        </div>
-      </details>
-      <AgentTurnSummary
-        v-if="turnSummary && !runningHere"
-        :key="`${project.id}-${turnSummary.turn_id}`"
-        :summary="turnSummary"
-        :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
-        @locate="$emit('locate', $event)"
-      />
       <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="referencedAttachmentIds" />
       <div v-if="failedAttempt" class="agent-recovery-card">
         <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
@@ -515,21 +502,23 @@ function choose(option: string) {
           <p>{{ failedAttempt.text }}</p>
           <small v-if="failedAttempt.ids.length">附带 {{ failedAttempt.ids.length }} 份资料</small>
         </details>
-        <button
-          type="button"
-          class="text-button"
-          :disabled="Boolean(operationBlocker)"
-          @click="retry()"
-        >
-          重试这条请求
-        </button>
-        <button
-          type="button"
-          class="text-button"
-          @click="agentDrafts.dismissFailure(project.id, failedAttempt.id)"
-        >
-          {{ failureRestored ? '关闭提示' : '丢弃这条请求' }}
-        </button>
+        <div class="agent-recovery-actions" role="group" aria-label="未完成请求操作">
+          <button
+            type="button"
+            class="text-button"
+            :disabled="Boolean(operationBlocker)"
+            @click="retry()"
+          >
+            重试这条请求
+          </button>
+          <button
+            type="button"
+            class="text-button"
+            @click="agentDrafts.dismissFailure(project.id, failedAttempt.id)"
+          >
+            {{ failureRestored ? '关闭提示' : '丢弃这条请求' }}
+          </button>
+        </div>
       </div>
     </div>
     <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
@@ -603,6 +592,14 @@ function choose(option: string) {
   display: block;
 }
 
+.agent-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+
 .agent-recovery p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -635,16 +632,6 @@ function choose(option: string) {
   outline-offset: 2px;
   border-radius: 8px;
 }
-.agent-dock.is-reading .agent-review {
-  max-height: min(38dvh, 340px);
-}
-/* One review scroller, rather than nested transcript/receipt scroll traps. */
-.agent-review .agent-conversation-scroll,
-.agent-review :deep(.turn-summary-scroll) {
-  max-height: none;
-  overflow: visible;
-}
-
 .agent-collapse-toggle {
   margin-left: auto;
   min-height: 30px;

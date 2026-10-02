@@ -57,7 +57,9 @@ const imports = {
   '../../composables/useAgent': moduleUrl(`export const agent = {
     state: { running: false, projectId: '', label: '', follow: {} }, send: async () => true, stop() {}
   }; export const useAgent = () => agent;`),
-  '../../api/client': moduleUrl('export const command = async () => ({ items: [] });'),
+  '../../api/client': moduleUrl(
+    'export class CommandError extends Error {} export const command = async () => ({ items: [] });',
+  ),
   '../../composables/useBaseline': moduleUrl(
     'export const useBaseline = () => ({ refresh() {} });',
   ),
@@ -75,10 +77,29 @@ const imports = {
     ).replace("'./turnSummary'", JSON.stringify(turnSummaryUrl)),
   ),
 };
+imports['../../composables/useProjectForm'] = moduleUrl(
+  transpile(
+    readFileSync(
+      new URL('../../frontend/src/composables/useProjectForm.ts', import.meta.url),
+      'utf8',
+    ),
+  ).replace(
+    /from (['"])([^'"]+)\1/g,
+    (_, quote, name) =>
+      `from ${JSON.stringify(
+        {
+          vue: imports.vue,
+          '../api/client': imports['../../api/client'],
+          './useWorkspace': imports['../../composables/useWorkspace'],
+        }[name],
+      )}`,
+  ),
+);
 for (const name of [
   './AgentQuestion.vue',
   '../attachments/AttachmentReceipt.vue',
   './AgentTurnSummary.vue',
+  './AgentReviewTray.vue',
   '../graph/FollowAgentButton.vue',
   '../attachments/AttachmentPicker.vue',
   './ReferenceMentionPicker.vue',
@@ -100,7 +121,9 @@ async function component(path) {
     assert.ok(imports[name], `Unexpected component dependency: ${name}`);
     return `from ${JSON.stringify(imports[name])}`;
   });
-  return (await import(moduleUrl(compiled))).default;
+  const compiledUrl = moduleUrl(compiled);
+  if (path === 'agent/AgentReviewTray') imports['./AgentReviewTray.vue'] = compiledUrl;
+  return (await import(compiledUrl)).default;
 }
 const MilestoneInspector = await component('graph/MilestoneInspector');
 const SourceInspector = await component('graph/SourceInspector');
@@ -110,6 +133,7 @@ imports['../graph/BaselineMilestoneStatus.vue'] = moduleUrl(
 );
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const EvidencePanel = await component('workspace/EvidencePanel');
+await component('agent/AgentReviewTray');
 const AgentDock = await component('agent/AgentDock');
 const AgentQuestion = await component('agent/AgentQuestion');
 const { workspace } = await import(imports['../../composables/useWorkspace']);
@@ -283,24 +307,44 @@ test('legacy and malformed evidence remain inspectable', async () => {
   assert.match(local, /all tests passed/);
 });
 
-test('agent conversation previews the latest assistant response and retains the transcript', async () => {
+test('pending reply preview stays truthful and keeps every saved message in its floating reader', async () => {
+  const context = {};
+  const html = await renderToString(
+    createSSRApp(AgentDock, {
+      project: project({
+        messages: [
+          { id: '1', role: 'assistant', content: '旧回复' },
+          { id: '2', role: 'user', content: '继续调整' },
+          { id: '3', role: 'assistant', content: '最新回复：规划已更新' },
+          { id: '4', role: 'user', content: '还有一个问题' },
+        ],
+      }),
+    }),
+    context,
+  );
+  const preview = html.match(/class="review-tile-preview"[^>]*>([\s\S]*?)<\/span>/)?.[1] || '';
+  assert.match(preview, /尚无新回复.*查看已保存的对话/);
+  assert.doesNotMatch(preview, /旧回复|最新回复：规划已更新|还有一个问题/);
+  const reader = context.teleports?.body || '';
+  assert.match(reader, /aria-label="项目对话记录"/);
+  for (const content of ['旧回复', '继续调整', '最新回复：规划已更新', '还有一个问题']) {
+    assert.ok(reader.includes(content));
+  }
+});
+
+test('reply tile previews the latest saved assistant text when no newer user request is waiting', async () => {
   const html = await render(AgentDock, {
     project: project({
       messages: [
-        { id: '1', role: 'assistant', content: '旧回复' },
-        { id: '2', role: 'user', content: '继续调整' },
-        { id: '3', role: 'assistant', content: '最新回复：规划已更新' },
-        { id: '4', role: 'user', content: '还有一个问题' },
+        { id: 'old', role: 'assistant', content: '旧回复' },
+        { id: 'request', role: 'user', content: '更新规划' },
+        { id: 'latest', role: 'assistant', content: '最新回复：规划已更新' },
       ],
     }),
   });
-  const summary = html.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(summary, /最新回复：规划已更新/);
-  assert.doesNotMatch(summary, /旧回复|还有一个问题/);
-  assert.match(html, /aria-label="项目对话记录"/);
-  for (const content of ['旧回复', '继续调整', '最新回复：规划已更新', '还有一个问题']) {
-    assert.ok(html.includes(content));
-  }
+  const preview = html.match(/class="review-tile-preview"[^>]*>([\s\S]*?)<\/span>/)?.[1] || '';
+  assert.match(preview, /已保存.*最新回复：规划已更新/);
+  assert.doesNotMatch(preview, /旧回复|更新规划/);
 });
 
 test('agent completion remains visible only in the project that produced it', async () => {

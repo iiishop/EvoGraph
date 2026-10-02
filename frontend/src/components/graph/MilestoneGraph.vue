@@ -3,19 +3,21 @@ import { computed, nextTick, watch, shallowRef, onBeforeUnmount } from 'vue';
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
-import { GitBranch, Maximize } from 'lucide-vue-next';
+import { Maximize } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
+import EmptyPlanningHandoff from '../projects/EmptyPlanningHandoff.vue';
 import { activateMilestoneKey } from '../../lib/milestoneInteraction';
 import GraphEdge from './GraphEdge.vue';
 import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
-import { useWorkspace } from '../../composables/useWorkspace';
+import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
 import { fitMilestoneBounds, graphBounds, keepMilestoneVisible } from '../../lib/milestoneViewport';
 
 import type { Project } from '../../types';
-const props = defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project; followBoundary?: WorkspaceFollowBoundary }>();
+defineEmits<{ compose: [] }>();
 const allMilestones = computed(() => [
   ...(props.project.source_milestones ?? []),
   ...props.project.milestones,
@@ -25,6 +27,13 @@ const { dimensions, setViewport, getViewport } = useVueFlow(flowId);
 const { state, selectNode, perform } = useWorkspace();
 const agent = useAgent();
 const follows = computed(() => agent.state.follow[props.project.id] !== false);
+const currentFollow = computed(
+  () =>
+    !props.followBoundary ||
+    agent.state.navigationTick > props.followBoundary.navigationTick ||
+    agent.state.pulse > props.followBoundary.pulse ||
+    props.followBoundary.resume > 0,
+);
 const computedLayout = shallowRef<LayoutResult>({
   direction: 'RIGHT',
   positions: new Map(),
@@ -97,7 +106,10 @@ const nodes = computed(() =>
         milestone: m,
         vertical: computedLayout.value.direction === 'DOWN',
         ready: props.project.readiness[m.id]?.safe_to_execute,
-        agentFocused: agent.state.projectId === props.project.id && agent.state.focusId === m.id,
+        agentFocused:
+          currentFollow.value &&
+          agent.state.projectId === props.project.id &&
+          agent.state.focusId === m.id,
         agentActive: agent.state.running,
         updateTick:
           agent.state.projectId === props.project.id ? (agent.state.updates[m.id] ?? 0) : 0,
@@ -252,7 +264,7 @@ function locate(id: string) {
   return true;
 }
 function follow() {
-  if (!follows.value || agent.state.projectId !== props.project.id) return;
+  if (!currentFollow.value || !follows.value || agent.state.projectId !== props.project.id) return;
   if (!allMilestones.value.some((milestone) => milestone.id === agent.state.focusId)) return;
   cameraMode = 'agent';
   focusedId = agent.state.focusId;
@@ -358,11 +370,12 @@ defineExpose({ fit, reset, locate });
         ><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
         <template #edge-prerequisite="edgeProps"><GraphEdge v-bind="edgeProps" /></template>
       </VueFlow>
-      <div v-else class="empty-state">
-        <span class="empty-icon"><GitBranch :size="32" /></span>
-        <h3>下一步演化，从一个目标开始</h3>
-        <p>在下方描述你的目标，让 Agent 帮你形成可执行的里程碑。</p>
-      </div>
+      <EmptyPlanningHandoff
+        v-else
+        :description="project.description"
+        :provider-available="Boolean(state.settings?.provider)"
+        @compose="$emit('compose')"
+      />
       <div v-if="nodes.length" class="edge-legend">
         <span v-for="kind in edgeKinds" :key="kind.label"
           ><i :style="{ background: kind.color }"></i>{{ kind.label }}</span

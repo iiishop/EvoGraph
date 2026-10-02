@@ -120,6 +120,7 @@ async function harness(count = 64, reduced = false, initial = {}) {
     '../../lib/edgeKinds': url(
       'export const edgeKinds = []; export const edgeKind = () => ({ color: "blue" });',
     ),
+    '../projects/EmptyPlanningHandoff.vue': stub,
     './MilestoneNode.vue': stub,
     './GraphEdge.vue': stub,
     './BaselineMilestoneStatus.vue': stub,
