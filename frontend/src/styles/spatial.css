@@ -746,14 +746,6 @@ html[data-sidebar='collapsed'] .spatial-app .app-main {
 .spatial-app .settings-view {
   background: transparent;
 }
-.spatial-app .provider-form,
-.spatial-app .research-form,
-.spatial-app .settings-card {
-  border-color: var(--line);
-  border-radius: 16px;
-  background: #ffffffd9;
-  box-shadow: none;
-}
 .modal {
   background: #fff;
   color: var(--ink);

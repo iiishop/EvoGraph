@@ -30,6 +30,17 @@ class ResearchService:
         clear_key: bool = False,
         vision_enabled: bool = False,
     ):
+        # Legacy combined operation remains available to existing clients.
+        self.configure_search(provider, config, api_key, clear_key)
+        return self.configure_vision(vision_enabled)
+
+    def configure_search(
+        self,
+        provider: str = "",
+        config: dict | None = None,
+        api_key: str = "",
+        clear_key: bool = False,
+    ):
         if provider:
             adapter = providers().get(provider)
             if adapter is None:
@@ -54,6 +65,9 @@ class ResearchService:
         else:
             saved = None
         self.db.set_setting("web_search", saved)
+        return self.settings()
+
+    def configure_vision(self, vision_enabled: bool):
         self.db.set_setting("vision_enabled", vision_enabled)
         return self.settings()
 

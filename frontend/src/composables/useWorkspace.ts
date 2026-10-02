@@ -22,6 +22,9 @@ const state = reactive({
 // A refresh must never become a newer selection intent merely by starting later.
 let selectSequence = 0;
 let refreshSequence = 0;
+// Confirmed settings writes supersede a settings read already in flight.
+let settingsSequence = 0;
+let settingsOperationOwner: symbol | null = null;
 // Live agent snapshots can advance messages/history without changing the
 // project revision. A background read started before one is no longer current.
 let snapshotSequence = 0;
@@ -74,6 +77,7 @@ function discardProject(id: string) {
 
 async function refresh() {
   const sequence = ++refreshSequence;
+  const settingsVersion = settingsSequence;
   const selection = selectSequence;
   const snapshot = snapshotSequence;
   const projectId = state.project?.id;
@@ -87,7 +91,7 @@ async function refresh() {
     ]);
     if (sequence !== refreshSequence || snapshot !== snapshotSequence) return;
     state.projects = [...new Map(projects.map((p) => [p.id, p])).values()];
-    state.settings = settings;
+    if (settingsVersion === settingsSequence) state.settings = settings;
     // A list fetched across a selection may predate that project (for example,
     // creation or restore). It is not authority to discard the newer draft.
     if (!current() || selecting || pendingSelection) return;
@@ -168,6 +172,11 @@ export function useWorkspace() {
     refresh,
     perform,
     selectProject,
+    // A confirmed settings write does not depend on a later project refresh.
+    applySettings: (settings: Settings) => {
+      settingsSequence++;
+      state.settings = settings;
+    },
     applyProject: (project: Project) => {
       if (state.project?.id === project.id && project.revision >= state.project.revision) {
         snapshotSequence++;
@@ -179,7 +188,19 @@ export function useWorkspace() {
       state.error = error;
     },
     setBusy: (value: boolean) => {
-      state.busy = value;
+      // A settings request owns its busy lease even if its view has unmounted.
+      if (!settingsOperationOwner) state.busy = value;
+    },
+    reserveSettingsOperation: () => {
+      if (state.busy) return null;
+      const owner = Symbol('settings operation');
+      settingsOperationOwner = owner;
+      state.busy = true;
+      return () => {
+        if (settingsOperationOwner !== owner) return;
+        settingsOperationOwner = null;
+        state.busy = false;
+      };
     },
     deleteProject: async (project: ProjectSummary) => {
       await perform<{ deleted: boolean }>(

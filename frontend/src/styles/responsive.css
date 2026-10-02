@@ -79,12 +79,6 @@
   .canvas-caption {
     display: none;
   }
-  .settings-layout {
-    gap: 20px;
-  }
-  .settings-section-nav {
-    width: 120px;
-  }
   .view-tabs {
     gap: 18px;
   }
