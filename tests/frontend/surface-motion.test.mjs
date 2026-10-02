@@ -19,6 +19,16 @@ for (const name of [
   'localStorage',
 ])
   Object.defineProperty(globalThis, name, { configurable: true, value: dom.window[name] });
+// jsdom has no native inert IDL property; mirror the browser's boolean attribute.
+Object.defineProperty(HTMLElement.prototype, 'inert', {
+  configurable: true,
+  get() {
+    return this.hasAttribute('inert');
+  },
+  set(value) {
+    this.toggleAttribute('inert', Boolean(value));
+  },
+});
 const vue = import.meta.resolve('vue');
 const { createApp, nextTick, h, ref } = await import('vue');
 const source = (path) =>
@@ -266,11 +276,15 @@ test('inspector opens once, node reading remains immediate, and retained exits a
   }
 });
 
-test('sidebar uses retained opposing surfaces and survives ten open/close reversals', async () => {
+test('sidebar retains one logo and toggle over ten open/close reversals', async () => {
   reset();
   localStorage.setItem('evograph.sidebar', 'collapsed');
   const view = mount(Sidebar);
   try {
+    const logo = view.host.querySelector('.sidebar-brand-mark');
+    const toggle = view.host.querySelector('.sidebar-toggle');
+    const glyph = logo.firstElementChild;
+    const markup = logo.innerHTML;
     pointer();
     for (let i = 0; i < 10; i++) {
       view.host.querySelector('[aria-label="展开侧边栏"]').click();
@@ -280,48 +294,49 @@ test('sidebar uses retained opposing surfaces and survives ten open/close revers
       await flush();
       assert.equal(view.host.querySelector('.sidebar').inert, true);
       assert.equal(view.host.querySelector('.sidebar-rail').inert, false);
+      assert.equal(view.host.querySelector('.sidebar-brand-mark'), logo);
+      assert.equal(logo.firstElementChild, glyph);
+      assert.equal(logo.innerHTML, markup);
+      assert.equal(view.host.querySelector('.sidebar-toggle'), toggle);
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+      assert.equal(view.host.querySelectorAll('[aria-label="展开侧边栏"]').length, 1);
     }
     for (const animation of animations) animation.finish();
     await flush();
     assert.equal(view.host.querySelectorAll('.sidebar').length, 1);
-    assert.equal(view.host.querySelector('.sidebar').style.display, 'none');
-    assert.notEqual(view.host.querySelector('.sidebar-rail').style.display, 'none');
+    assert.equal(view.host.querySelector('.sidebar-slot').classList.contains('is-collapsed'), true);
+    assert.equal(view.host.querySelectorAll('.sidebar-brand-mark').length, 1);
   } finally {
     view.dispose();
   }
 });
 
-test('rail navigation and expansion animate separate page/layout surfaces without width animation', async () => {
+test('rail navigation uses real sidebar width instead of translating the main layout', async () => {
   reset();
   env.state.page = 'settings';
   localStorage.setItem('evograph.sidebar', 'collapsed');
   const view = mount(App);
   try {
     const main = view.host.querySelector('.app-main');
-    main.getBoundingClientRect = () => ({
-      left: view.host.querySelector('.sidebar-slot').classList.contains('is-collapsed') ? 64 : 220,
-    });
     pointer();
     view.host.querySelector('[aria-label="选择项目"]').click();
     await flush();
-    const page = animations.find((animation) =>
-      animation.element.classList.contains('app-page-surface'),
-    );
-    const layout = animations.find((animation) => animation.element === main);
-    assert.ok(page);
-    assert.ok(layout);
-    assert.notEqual(page.element, layout.element);
-    assert.deepEqual(layout.frames, [{ transform: 'translateX(-156px)' }, { transform: 'none' }]);
     assert.ok(
-      animations.every((animation) =>
-        animation.frames.every((frame) =>
-          Object.keys(frame).every((key) => ['opacity', 'transform'].includes(key)),
-        ),
-      ),
+      animations.find((animation) => animation.element.classList.contains('app-page-surface')),
+    );
+    assert.equal(
+      animations.some((animation) => animation.element === main),
+      false,
     );
     const sidebarSource = source('components/sidebar/AppSidebar.vue');
-    assert.match(sidebarSource, /@media \(max-width: 1200px\)\s*\{[\s\S]*?flex-basis: 190px/);
-    assert.match(sidebarSource, /@media \(max-width: 760px\)\s*\{[\s\S]*?flex-basis: 52px/);
+    assert.match(sidebarSource, /transition: width 260ms/);
+    assert.match(sidebarSource, /flex: 0 0 auto/);
+    assert.match(sidebarSource, /overflow: hidden/);
+    assert.match(sidebarSource, /--sidebar-open-width: 190px/);
+    assert.match(sidebarSource, /--sidebar-rail-width: 52px/);
+    assert.doesNotMatch(sidebarSource, /layoutMotion|railMotion|sidebarMotion|v-show|<Transition/);
+    assert.match(sidebarSource, /prefers-reduced-motion: reduce/);
+    assert.match(sidebarSource, /sidebar-slot\.is-keyboard[\s\S]*?transition: none/);
   } finally {
     view.dispose();
   }
@@ -418,10 +433,8 @@ test('compiled sidebar visibility override stays scoped and cannot turn html int
     assert.equal(
       window.getComputedStyle(slot.firstElementChild).display,
       'flex',
-      'retained close frame remains visible until v-show hides it',
+      'scoped body display remains flex; state owns opacity and visibility',
     );
-    slot.firstElementChild.style.display = 'none';
-    assert.equal(window.getComputedStyle(slot.firstElementChild).display, 'none');
   } finally {
     slot.remove();
     style.remove();
@@ -430,23 +443,28 @@ test('compiled sidebar visibility override stays scoped and cannot turn html int
   }
 });
 
-test('sidebar focus moves to the matching visible control and rail project navigation hands off to search', async () => {
+test('persistent sidebar toggle retains keyboard focus and rail project navigation hands off to search', async () => {
   reset();
   localStorage.setItem('evograph.sidebar', 'collapsed');
   const view = mount(Sidebar);
   try {
     const rail = view.host.querySelector('.sidebar-rail');
     const sidebar = view.host.querySelector('.sidebar');
-    const expand = view.host.querySelector('.rail-brand');
+    const expand = view.host.querySelector('.sidebar-toggle');
     const collapse = view.host.querySelector('.sidebar-toggle');
     assert.equal(rail.hasAttribute('aria-hidden'), false);
     assert.equal(sidebar.hasAttribute('aria-hidden'), false);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       keyboard();
       expand.focus();
       expand.click();
       await flush();
       assert.equal(document.activeElement, collapse);
+      assert.equal(expand, collapse, 'toggle identity stays stable');
+      assert.equal(
+        view.host.querySelector('.sidebar-slot').classList.contains('is-keyboard'),
+        true,
+      );
       assert.equal(sidebar.inert, false);
       collapse.click();
       await flush();
@@ -474,7 +492,7 @@ test('sidebar focus handoff never reclaims a newer outside focus or an unrelated
   document.body.append(outside);
   const view = mount(Sidebar);
   try {
-    const expand = view.host.querySelector('.rail-brand');
+    const expand = view.host.querySelector('.sidebar-toggle');
     const collapse = view.host.querySelector('.sidebar-toggle');
     pointer();
     expand.focus();
@@ -506,7 +524,7 @@ test('deferred sidebar handoff retires on a newer toggle, unmount, or a newer ou
   let disposed = false;
   try {
     pointer();
-    const expand = view.host.querySelector('.rail-brand');
+    const expand = view.host.querySelector('.sidebar-toggle');
     const collapse = view.host.querySelector('.sidebar-toggle');
     expand.focus();
     expand.click();
@@ -540,5 +558,46 @@ test('deferred sidebar handoff retires on a newer toggle, unmount, or a newer ou
   } finally {
     if (!disposed) view.dispose();
     outside.remove();
+  }
+});
+
+test('compiled keyboard and reduced-motion overrides win for both sidebar panes', () => {
+  const { descriptor } = parse(source('components/sidebar/AppSidebar.vue'));
+  const compiled = compileStyle({
+    source: descriptor.styles[0].content,
+    filename: 'AppSidebar.vue',
+    id: 'data-v-sidebar-motion',
+    scoped: true,
+  });
+  const css = compiled.code;
+  // Model the media match independently from the global spatial-app safety net.
+  const reducedRule = css.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*)\}\s*$/)[1];
+  const ordinaryRules = css.slice(0, css.indexOf('@media (max-width: 1200px)'));
+  for (const reduced of [false, true]) {
+    for (const collapsed of [false, true]) {
+      const style = document.createElement('style');
+      style.textContent = ordinaryRules + (reduced ? reducedRule : '');
+      document.head.append(style);
+      const slot = document.createElement('div');
+      slot.className = `sidebar-slot ${collapsed ? 'is-collapsed' : ''} ${reduced ? '' : 'is-keyboard'}`;
+      slot.setAttribute('data-v-sidebar-motion', '');
+      slot.innerHTML =
+        '<aside class="sidebar" data-v-sidebar-motion></aside><nav class="sidebar-rail" data-v-sidebar-motion></nav>';
+      document.body.append(slot);
+      try {
+        for (const el of [slot, ...slot.children]) {
+          const computed = window.getComputedStyle(el);
+          assert.equal(
+            computed.transition,
+            'none',
+            `${reduced ? 'reduced' : 'keyboard'} ${collapsed ? 'closed' : 'open'} ${el.className}`,
+          );
+          assert.equal(computed.transitionDelay, '0s');
+        }
+      } finally {
+        slot.remove();
+        style.remove();
+      }
+    }
   }
 });
