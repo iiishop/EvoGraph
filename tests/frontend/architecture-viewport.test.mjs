@@ -12,9 +12,9 @@ const require = createRequire(import.meta.url);
 const url = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const vue = pathToFileURL(require.resolve('vue')).href;
 const flow = url(`import { h } from ${JSON.stringify(vue)};
-  export const calls = [], centers = [], internals = [], captured = {}, ready = { value: true };
+  export const calls = [], fittedBounds = [], centers = [], internals = [], captured = {}, ready = { value: true };
   export const MarkerType = { ArrowClosed: 'arrow' };
-  export const useVueFlow = () => ({ fitView: (...args) => { calls.push(args); return Promise.resolve(ready.value); }, updateNodeInternals(ids) { internals.push(ids); }, setCenter(...args) { centers.push(args); return Promise.resolve(ready.value); }, findNode(id) { return captured.attrs.nodes?.find(n => n.id === id); } });
+  export const useVueFlow = () => ({ fitBounds: (bounds, options) => { fittedBounds.push(bounds); calls.push([options]); return Promise.resolve(ready.value); }, fitView: (...args) => { calls.push(args); return Promise.resolve(ready.value); }, updateNodeInternals(ids) { internals.push(ids); }, setCenter(...args) { centers.push(args); return Promise.resolve(ready.value); }, findNode(id) { return captured.attrs.nodes?.find(n => n.id === id); } });
   export const VueFlow = { inheritAttrs: false, setup(_, { attrs }) { captured.attrs = attrs; return () => h('div'); } };
 `);
 const stub = url('export default { render() { return null; } };');
@@ -29,8 +29,14 @@ const imports = {
   '@vue-flow/background': url('export const Background = { render() { return null; } };'),
   '@vue-flow/controls': url('export const Controls = { render() { return null; } };'),
   '../../lib/layoutArchitecture': layoutUrl,
-  '../../lib/graphGeometry': url(
-    'export const routeArchitectureEdge = () => []; export const architectureLabels = () => [];',
+  '../../lib/architectureRouting': url(
+    ts.transpileModule(
+      readFileSync(
+        new URL('../../frontend/src/lib/architectureRouting.ts', import.meta.url),
+        'utf8',
+      ),
+      { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
+    ).outputText,
   ),
   '../../lib/architectureLayout': url('export const architectureGroupBounds = () => null;'),
   '../../lib/architectureRoles': url('export const architectureRole = () => ({ color: "blue" });'),
@@ -42,7 +48,7 @@ const imports = {
   ),
   './ArchitectureNode.vue': stub,
   './ArchitectureGroup.vue': stub,
-  '../graph/GraphEdge.vue': stub,
+  './ArchitectureEdge.vue': stub,
 };
 const code = readFileSync(
   new URL('../../frontend/src/components/design/DiagramView.vue', import.meta.url),
@@ -58,7 +64,7 @@ const compiled = ts
     return `from ${JSON.stringify(imports[name])}`;
   });
 const DiagramView = (await import(url(compiled))).default;
-const { calls, centers, internals, captured, ready } = await import(flow);
+const { calls, fittedBounds, centers, internals, captured, ready } = await import(flow);
 const { layoutState } = await import(layoutUrl);
 const element = (tag = 'root') => ({
   tag,
@@ -91,13 +97,15 @@ const renderer = createRenderer({
   nextSibling: () => null,
 });
 
-async function harness(initial = {}) {
+async function harness(initial = {}, initialLayout) {
   calls.length = 0;
+  fittedBounds.length = 0;
   ready.value = true;
   centers.length = 0;
   internals.length = 0;
-  layoutState.run = async (diagram) =>
-    new Map(diagram.nodes.map((n, i) => [n.id, { x: i * 346, y: 0 }]));
+  layoutState.run =
+    initialLayout ??
+    (async (diagram) => new Map(diagram.nodes.map((n, i) => [n.id, { x: i * 346, y: 0 }])));
   const originals = Object.fromEntries(
     ['requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver'].map((key) => [
       key,
@@ -380,9 +388,12 @@ test('large fresh architecture anchors an actual component readably once; explic
   }
 });
 
-test('manual input before a fresh layout resolves suppresses the initial reading anchor', async () => {
+test('manual input before the fresh entry camera applies suppresses the reading anchor', async () => {
   const h = await harness();
   try {
+    // The asynchronous route plan mounts the flow before its entry-camera frames.
+    await nextTick();
+    await nextTick();
     captured.attrs.onMoveStart({ event: { type: 'pointerdown' } });
     await h.flush();
     assert.equal(centers.length, 0);
@@ -421,5 +432,79 @@ test('an unready viewport does not settle the automatic camera before nodes beco
     } finally {
       h.dispose();
     }
+  }
+});
+
+test('Fit during the first route plan waits for complete geometry; a newer selection owns the camera', async () => {
+  for (const selectAfterFit of [false, true]) {
+    let resolve;
+    const h = await harness(
+      {
+        diagram: {
+          id: 'first',
+          nodes: [
+            { id: 'one', label: 'One' },
+            { id: 'two', label: 'Two' },
+          ],
+          edges: [{ source: 'one', target: 'two', label: 'A long first relation' }],
+          groups: [],
+        },
+      },
+      () =>
+        new Promise((yes) => {
+          resolve = yes;
+        }),
+    );
+    try {
+      assert.doesNotThrow(() => h.view.value.fit());
+      assert.equal(calls.length, 0);
+      if (selectAfterFit) h.props.focusedId = 'two';
+      resolve(
+        new Map([
+          ['one', { x: 0, y: 0 }],
+          ['two', { x: 386, y: 0 }],
+        ]),
+      );
+      await h.flush();
+      assert.equal(calls.length, selectAfterFit ? 0 : 1);
+      assert.equal(centers.length, selectAfterFit ? 1 : 0);
+      if (!selectAfterFit) assert.ok(fittedBounds[0].width >= 622);
+    } finally {
+      h.dispose();
+    }
+  }
+});
+
+test('selected incident relations highlight without removing edges or recomputing their routes', async () => {
+  const h = await harness({
+    diagram: {
+      id: 'focus',
+      nodes: [
+        { id: 'one', label: 'One' },
+        { id: 'two', label: 'Two' },
+        { id: 'three', label: 'Three' },
+      ],
+      edges: [
+        { source: 'one', target: 'two', label: 'First relation' },
+        { source: 'two', target: 'three', label: 'Second relation' },
+      ],
+      groups: [],
+    },
+  });
+  try {
+    await h.flush();
+    const before = captured.attrs.edges.map((e) => e.data.route);
+    h.props.focusedId = 'one';
+    await h.flush();
+    assert.equal(captured.attrs.edges.length, 2);
+    assert.equal(captured.attrs.edges[0].style.opacity, 1);
+    assert.equal(captured.attrs.edges[1].style.opacity, 0.16);
+    assert.deepEqual(
+      captured.attrs.edges.map((e) => e.data.route),
+      before,
+    );
+    assert.equal(captured.attrs.edges[0].ariaLabel, 'One → Two：First relation');
+  } finally {
+    h.dispose();
   }
 });

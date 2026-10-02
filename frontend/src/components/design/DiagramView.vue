@@ -5,13 +5,17 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { Maximize } from 'lucide-vue-next';
 import { layoutArchitecture } from '../../lib/layoutArchitecture';
-import { routeArchitectureEdge, architectureLabels } from '../../lib/graphGeometry';
+import {
+  routeArchitectureAsync,
+  placeArchitectureLabels,
+  architectureDrawingBounds,
+} from '../../lib/architectureRouting';
 import { useAgent } from '../../composables/useAgent';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { architectureGroupBounds } from '../../lib/architectureLayout';
 import ArchitectureNode from './ArchitectureNode.vue';
 import ArchitectureGroup from './ArchitectureGroup.vue';
-import GraphEdge from '../graph/GraphEdge.vue';
+import ArchitectureEdge from './ArchitectureEdge.vue';
 import { architectureRole } from '../../lib/architectureRoles';
 import type { Diagram } from '../../types';
 import {
@@ -46,16 +50,23 @@ const emit = defineEmits<{
   viewport: [value: { key: string; viewport: ArchitectureViewport }];
 }>();
 // The owner remounts for another browse context. Never chase our own saved camera updates.
+const displayDiagram = shallowRef(props.diagram);
+const arranging = ref(true);
+const routing = shallowRef<NonNullable<Awaited<ReturnType<typeof routeArchitectureAsync>>>>({
+  routes: [],
+  ports: new Map(),
+});
 const cameraKey = props.browseKey;
 const initialCamera = validArchitectureViewport(props.initialViewport)
   ? { ...props.initialViewport }
   : undefined;
 const flowId = `design-${useId()}`;
-const { fitView, updateNodeInternals, setCenter, findNode } = useVueFlow(flowId);
+const { fitView, fitBounds, updateNodeInternals, setCenter, findNode } = useVueFlow(flowId);
 const canvas = ref<HTMLElement>();
 let viewportMoved = Boolean(initialCamera);
 let initialFocus = !initialCamera && Boolean(props.focusedId);
 let layoutPending = true;
+let pendingFit = false;
 let pendingFocus: { id: string; sequence: number; generation: number } | null = null;
 let disposed = false;
 let focusSequence = 0;
@@ -64,6 +75,12 @@ let resizeObserver: ResizeObserver | undefined;
 let previousSize = '';
 let initialCameraPending = false;
 let initialCameraRetry = false;
+const labelMeasure = shallowRef<((text: string) => number) | undefined>();
+function fitDrawing(padding: number) {
+  return drawingBounds.value
+    ? fitBounds(drawingBounds.value, { padding, duration: 0 })
+    : fitView({ padding, duration: 0 });
+}
 // Establish a readable camera once per fresh view, independently of Agent-follow.
 // Restored/manual cameras and later resizes or snapshots never restart this choice.
 function fitWhenReady() {
@@ -86,17 +103,7 @@ function fitWhenReady() {
         return;
       const first = nodes.value[0];
       if (!first) return;
-      const bounds = [
-        ...nodes.value.map((node) => ({ ...node.position, width: 236, height: 150 })),
-        ...(props.diagram.groups ?? []).flatMap((group) => {
-          const rectangle = architectureGroupBounds(positions.value, group);
-          return rectangle ? [rectangle] : [];
-        }),
-      ];
-      const width =
-        Math.max(...bounds.map((b) => b.x + b.width)) - Math.min(...bounds.map((b) => b.x));
-      const height =
-        Math.max(...bounds.map((b) => b.y + b.height)) - Math.min(...bounds.map((b) => b.y));
+      const { width, height } = drawingBounds.value ?? { width: 236, height: 150 };
       const readableFit =
         Math.min(
           canvas.value.clientWidth / (width * 1.32),
@@ -107,7 +114,7 @@ function fitWhenReady() {
       initialCameraPending = true;
       try {
         const applied = readableFit
-          ? await fitView({ padding: 0.16, duration: 0 })
+          ? await fitDrawing(0.16)
           : await setCenter(first.position.x + 118, first.position.y + 75, {
               zoom: 0.85,
               duration: 0,
@@ -127,6 +134,13 @@ function fitWhenReady() {
   });
 }
 onMounted(() => {
+  if (typeof document !== 'undefined' && typeof CanvasRenderingContext2D !== 'undefined') {
+    const context = document.createElement('canvas').getContext('2d');
+    if (context) {
+      context.font = `11px ${canvas.value ? getComputedStyle(canvas.value).fontFamily : 'sans-serif'}`;
+      labelMeasure.value = (text) => context.measureText(text).width;
+    }
+  }
   resizeObserver = new ResizeObserver(([entry]) => {
     if (!entry || entry.contentRect.width <= 0 || entry.contentRect.height <= 0) return;
     const size = `${Math.round(entry.contentRect.width)}:${Math.round(entry.contentRect.height)}`;
@@ -150,6 +164,7 @@ const agent = useAgent();
 const workspace = useWorkspace();
 const follows = computed(() => agent.state.follow[workspace.state.project?.id ?? ''] !== false);
 function manual() {
+  pendingFit = false;
   initialFocus = false;
   pendingFocus = null;
   focusSequence++;
@@ -162,17 +177,24 @@ function moved({ event }: { event: unknown }) {
 }
 function fit() {
   manual();
-  void fitView({ padding: 0.2, duration: 0 });
+  if (layoutPending) pendingFit = true;
+  else void fitDrawing(0.2);
 }
 function rememberViewport(viewport: ArchitectureViewport) {
   if (!disposed && cameraKey && validArchitectureViewport(viewport))
     emit('viewport', { key: cameraKey, viewport: { ...viewport } });
 }
 const visible = computed(() =>
-  architectureVisibleIds(props.diagram, props.query, props.role, props.focusedId, props.relation),
+  architectureVisibleIds(
+    displayDiagram.value,
+    props.query,
+    props.role,
+    props.focusedId,
+    props.relation,
+  ),
 );
 const nodes = computed(() =>
-  props.diagram.nodes
+  displayDiagram.value.nodes
     .filter((n) => positions.value.has(n.id))
     .map((n) => ({
       id: n.id,
@@ -180,11 +202,16 @@ const nodes = computed(() =>
       position: positions.value.get(n.id)!,
       zIndex: 2,
       selected: n.id === props.focusedId,
-      data: { ...n, source: props.source, dimmed: !visible.value.has(n.id) },
+      data: {
+        ...n,
+        source: props.source,
+        dimmed: !visible.value.has(n.id),
+        ports: routing.value.ports.get(n.id),
+      },
     })),
 );
 const groupNodes = computed(() =>
-  (props.diagram.groups ?? []).flatMap((group) => {
+  (displayDiagram.value.groups ?? []).flatMap((group) => {
     const bounds = architectureGroupBounds(positions.value, group);
     if (!bounds) return [];
     return [
@@ -206,76 +233,121 @@ const groupNodes = computed(() =>
   }),
 );
 const flowNodes = computed(() => [...groupNodes.value, ...nodes.value]);
-const obstacles = computed(() => [
-  ...[...positions.value].map(([id, p]) => ({ id, ...p, width: 236, height: 150 })),
-  ...(props.diagram.groups ?? []).flatMap((g) => {
+const componentBoxes = computed(() =>
+  [...positions.value].map(([id, p]) => ({ id, ...p, width: 236, height: 150 })),
+);
+const groupHeaders = computed(() =>
+  (displayDiagram.value.groups ?? []).flatMap((g) => {
     const bounds = architectureGroupBounds(positions.value, g);
     return bounds ? [{ id: `header:${g.id}`, ...bounds.header }] : [];
   }),
-]);
-const edges = computed(() => {
-  const routed = props.diagram.edges.map((e, index) => {
-    const color = architectureRole(props.diagram.nodes.find((n) => n.id === e.source)?.role).color;
+);
+const obstacles = computed(() => [...componentBoxes.value, ...groupHeaders.value]);
+const relatedEdge = (source: string, target: string) =>
+  Boolean(props.focusedId && (source === props.focusedId || target === props.focusedId));
+const labels = computed(() =>
+  placeArchitectureLabels(
+    displayDiagram.value.edges.map((edge, index) => ({
+      route: routing.value.routes[index]?.route ?? [],
+      label: edge.label,
+      priority: relatedEdge(edge.source, edge.target) ? 1 : 0,
+    })),
+    obstacles.value,
+    labelMeasure.value,
+  ),
+);
+const drawingBounds = computed(() =>
+  architectureDrawingBounds(
+    [
+      ...obstacles.value,
+      ...groupNodes.value.map((group) => ({
+        id: group.id,
+        ...group.position,
+        width: group.data.width,
+        height: group.data.height,
+      })),
+    ],
+    routing.value.routes,
+    labels.value,
+  ),
+);
+const edges = computed(() =>
+  displayDiagram.value.edges.map((edge, index) => {
+    const color = architectureRole(
+      displayDiagram.value.nodes.find((n) => n.id === edge.source)?.role,
+    ).color;
+    const related = relatedEdge(edge.source, edge.target);
+    const visibleEdge = visible.value.has(edge.source) && visible.value.has(edge.target);
+    const description = `${displayDiagram.value.nodes.find((n) => n.id === edge.source)?.label ?? edge.source} → ${displayDiagram.value.nodes.find((n) => n.id === edge.target)?.label ?? edge.target}：${edge.label}`;
     return {
-      id: `${props.diagram.id}-edge-${index}`,
-      source: e.source,
-      target: e.target,
-      sourceHandle: 'out',
-      targetHandle: 'in',
+      id: `${displayDiagram.value.id}-edge-${index}`,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: routing.value.routes[index]?.sourceHandle ?? `out:${index}`,
+      targetHandle: routing.value.routes[index]?.targetHandle ?? `in:${index}`,
       type: 'architecture',
-      label: e.label,
+      label: edge.label,
+      ariaLabel: description,
+      zIndex: related ? 4 : 0,
       data: {
-        obstacles: obstacles.value,
-        route: (() => {
-          const a = positions.value.get(e.source),
-            b = positions.value.get(e.target);
-          return a && b
-            ? routeArchitectureEdge(
-                { x: a.x + 236, y: a.y + 75 },
-                { x: b.x, y: b.y + 75 },
-                obstacles.value,
-              )
-            : [];
-        })(),
+        route: routing.value.routes[index]?.route ?? [],
+        labelPosition: labels.value[index],
+        related,
+        description,
       },
-      markerEnd: { type: MarkerType.ArrowClosed, color, width: 18, height: 18 },
+      markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
       style: {
         stroke: color,
-        strokeWidth: 1.8,
-        opacity: visible.value.has(e.source) && visible.value.has(e.target) ? 0.85 : 0.1,
+        strokeWidth: related ? 2.3 : 1.6,
+        opacity: !visibleEdge ? 0.08 : props.focusedId ? (related ? 1 : 0.16) : 0.78,
       },
     };
-  });
-  const labels = architectureLabels(
-    routed.map((e) => ({ route: e.data.route, label: e.label ?? '' })),
-    obstacles.value,
-  );
-  return routed.map((e, i) => ({ ...e, data: { ...e.data, labelPosition: labels[i] } }));
-});
+  }),
+);
 let generation = 0;
 watch(
   () => props.diagram,
   async (diagram) => {
     const ticket = ++generation;
     layoutPending = true;
+    arranging.value = true;
     error.value = '';
     try {
       const result = await layoutArchitecture(diagram);
-      if (ticket !== generation) return;
+      if (ticket !== generation || disposed) return;
+      const boxes = [...result].map(([id, point]) => ({ id, ...point, width: 236, height: 150 }));
+      const headers = (diagram.groups ?? []).flatMap((group) => {
+        const bounds = architectureGroupBounds(result, group);
+        return bounds ? [{ id: `header:${group.id}`, ...bounds.header }] : [];
+      });
+      const plan = await routeArchitectureAsync(
+        diagram,
+        boxes,
+        headers,
+        () => ticket !== generation || disposed,
+      );
+      if (!plan || ticket !== generation || disposed) return;
+      routing.value = plan;
       positions.value = result;
+      displayDiagram.value = diagram;
       await nextTick();
       if (ticket !== generation || disposed) return;
       updateNodeInternals(diagram.nodes.map((n) => n.id));
       await nextTick();
       if (ticket !== generation || disposed) return;
       layoutPending = false;
-      if (pendingFocus) applyFocus(pendingFocus);
+      arranging.value = false;
+      if (pendingFit) {
+        pendingFit = false;
+        void fitDrawing(0.2);
+      } else if (pendingFocus) applyFocus(pendingFocus);
       if (initialFocus) {
         initialFocus = false;
         locate(props.focusedId);
       } else fitWhenReady();
     } catch {
       if (ticket !== generation || disposed) return;
+      arranging.value = false;
       error.value = '布局未完成，请切换版本后重试';
     }
   },
@@ -298,6 +370,7 @@ function applyFocus(intent: { id: string; sequence: number; generation: number }
   }
 }
 function locate(id: string) {
+  pendingFit = false;
   const intent = { id, sequence: ++focusSequence, generation };
   initialFocus = false;
   pendingFocus = intent;
@@ -309,7 +382,7 @@ watch(
   () => {
     if (follows.value) {
       focusSequence++;
-      void fitView({ padding: 0.2, duration: 0 });
+      void fitDrawing(0.2);
     }
   },
 );
@@ -317,6 +390,7 @@ defineExpose({ fit, reset: fit, locate });
 </script>
 <template>
   <div ref="canvas" class="design-diagram">
+    <p v-if="arranging" class="architecture-arranging" role="status">正在整理架构连线…</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <VueFlow
       v-else-if="flowNodes.length"
@@ -355,7 +429,22 @@ defineExpose({ fit, reset: fit, locate });
         ><ArchitectureGroup v-bind="nodeProps"
       /></template>
       <template #node-architecture="nodeProps"><ArchitectureNode v-bind="nodeProps" /></template>
-      <template #edge-architecture="edgeProps"><GraphEdge v-bind="edgeProps" /></template>
+      <template #edge-architecture="edgeProps"><ArchitectureEdge v-bind="edgeProps" /></template>
     </VueFlow>
   </div>
 </template>
+
+<style scoped>
+.architecture-arranging {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #fffffff0;
+  color: #657b86;
+  font-size: 12px;
+  pointer-events: none;
+}
+</style>

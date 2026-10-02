@@ -6,7 +6,9 @@ const elk = new ELK();
 const options = {
   'elk.algorithm': 'layered',
   'elk.direction': 'RIGHT',
-  'elk.spacing.nodeNode': '110',
+  'elk.spacing.nodeNode': '96',
+  // Disconnected members still need a real routing corridor between cards.
+  'elk.spacing.componentComponent': '96',
   'elk.layered.spacing.nodeNodeBetweenLayers': '150',
   'elk.padding': '[top=100,left=48,bottom=48,right=48]',
 };

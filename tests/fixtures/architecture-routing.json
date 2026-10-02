@@ -1,0 +1,37 @@
+{
+  "id": "cognitive-routing-fixture",
+  "title": "认知引擎 · 连线路由验证（合成数据）",
+  "kind": "architecture",
+  "nodes": [
+    {"id":"kernel","label":"共享契约内核：实体 ID / 位置 / 时间戳","description":"库内被各层共用的值类型与端口契约。","role":"backend"},
+    {"id":"runtime","label":"引擎无关运行时：端口装配与调度","description":"把感知总线、动作执行器、触发器注册表、决策层端口装配为可运行的实例。","role":"backend"},
+    {"id":"action","label":"行为层：动作契约 / 注册表 / 执行","description":"定义动作规格与执行状态，以 call_id 关联反馈。","role":"backend"},
+    {"id":"sense","label":"感知层：类型化感知输入与快照","description":"把外部世界事件转换为类型化感知快照。","role":"backend"},
+    {"id":"trigger","label":"触发器层：被动规则 → 唤起决策","description":"规则被动订阅感知输入与行为反馈，按条件唤起决策。","role":"backend"},
+    {"id":"decision","label":"决策层：三源驱动决策与模型调用","description":"由定时器、触发器唤起、行为反馈三类来源驱动。","role":"backend"},
+    {"id":"engine","label":"宿主游戏引擎 / 运行时（库外适配）","description":"提供可见性、可听性等空间判定与外部世界事件。","role":"external"},
+    {"id":"llm","label":"LLM / 模型服务（库外边界）","description":"提供类型化、校准过的决策输出。","role":"external"}
+  ],
+  "groups":[
+    {"id":"shared","label":"共享内核与运行时装配","description":"被各层共用的值类型 / 时间端口，以及负责装配与调度的引擎无关运行时。","kind":"shared","member_node_ids":["kernel","runtime"]},
+    {"id":"cognition","label":"认知四层（引擎无关核心库）","description":"四层职责与其契约，层间只依赖内核契约与端口。","kind":"domain","member_node_ids":["action","sense","trigger","decision"]},
+    {"id":"external","label":"库外边界（引擎与模型）","description":"端口的生产者：游戏引擎适配器与模型服务适配器。","kind":"external","member_node_ids":["engine","llm"]}
+  ],
+  "edges":[
+    {"source":"runtime","target":"action","label":"装配执行器与反馈端口"},
+    {"source":"runtime","target":"sense","label":"装配总线并驱动投递"},
+    {"source":"runtime","target":"decision","label":"tick 定时驱动决策"},
+    {"source":"sense","target":"trigger","label":"订阅推送感知输入（按序）"},
+    {"source":"sense","target":"decision","label":"提供感知快照"},
+    {"source":"trigger","target":"decision","label":"投递唤醒（原因 / 优先级）"},
+    {"source":"decision","target":"action","label":"发出 ActionCall 或 NoOp"},
+    {"source":"action","target":"decision","label":"回报执行结果（终态 / 耗时）"},
+    {"source":"action","target":"trigger","label":"推送行为反馈（call_id 关联）"},
+    {"source":"action","target":"engine","label":"执行请求（Action Executor 端口）"},
+    {"source":"engine","target":"action","label":"回报终态结果"},
+    {"source":"engine","target":"sense","label":"注入外部世界事件（端口调用）"},
+    {"source":"engine","target":"runtime","label":"提供时钟与生命周期"},
+    {"source":"decision","target":"llm","label":"调用模型（超时 / 降级）"}
+  ],
+  "milestone_ids":[],"attachment_ids":[]
+}

@@ -240,6 +240,7 @@ async function harness(realViews = false) {
         const flow = { id, attrs: null, viewport: { x: 0, y: 0, zoom: 1 }, fits: [], centers: [], cameras: [] }; flows.push(flow);
         return { dimensions: ref({ width: 880, height: 320 }), getViewport: () => ({ ...flow.viewport }),
           setViewport: async (value, options) => { flow.cameras.push([value, options]); flow.viewport = { ...value }; return true; },
+          fitBounds: async (bounds, options) => { flow.fits.push(options); return true; },
           fitView: async options => { flow.fits.push(options); return true; },
           setCenter: async (...args) => { flow.centers.push(args); return true; },
           updateNodeInternals() {}, findNode: id => flow.attrs?.nodes.find(node => node.id === id) };
@@ -261,6 +262,7 @@ async function harness(realViews = false) {
       '../../lib/graphGeometry': moduleUrl(
         'export const separateBoxes = boxes => boxes; export const routeAroundBoxes = () => []; export const routeArchitectureEdge = () => []; export const architectureLabels = () => [];',
       ),
+      '../../lib/architectureRouting': moduleUrl(compile(source('lib/architectureRouting.ts'))),
       '../../lib/architectureLayout': moduleUrl(
         'export const architectureGroupBounds = () => null;',
       ),
@@ -283,6 +285,7 @@ async function harness(realViews = false) {
       './ArchitectureNode.vue',
       './ArchitectureGroup.vue',
       '../graph/GraphEdge.vue',
+      './ArchitectureEdge.vue',
       './DiagramImage.vue',
       './ArchitectureQuality.vue',
       './ComponentPassport.vue',
