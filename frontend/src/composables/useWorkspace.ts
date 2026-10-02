@@ -4,6 +4,7 @@ import type { Project, ProjectSummary, Settings } from '../types';
 import type { PageId } from '../lib/navigation';
 import { useNotifications } from './useNotifications';
 import { agentDrafts } from './useAgentDrafts';
+import { workflowDrafts } from './useWorkflowDrafts';
 
 const state = reactive({
   projects: [] as ProjectSummary[],
@@ -26,6 +27,13 @@ let refreshSequence = 0;
 let snapshotSequence = 0;
 let pendingSelection: { id: string; sequence: number } | null = null;
 
+function reconcileWorkflowDrafts(project: Project) {
+  workflowDrafts.reconcile(
+    project.id,
+    [...project.milestones, ...(project.source_milestones ?? [])].map((node) => node.id),
+  );
+}
+
 async function loadProject(id: string, navigate = false) {
   const sequence = ++selectSequence;
   pendingSelection = { id, sequence };
@@ -38,6 +46,8 @@ async function loadProject(id: string, navigate = false) {
     const project = await command<Project>('projects.get', { project_id: id });
     if (sequence !== selectSequence) return;
     agentDrafts.activate(id);
+    workflowDrafts.activate(id);
+    reconcileWorkflowDrafts(project);
     state.project = project;
     localStorage.setItem('evograph.project', id);
   } catch (error) {
@@ -49,6 +59,7 @@ async function loadProject(id: string, navigate = false) {
 
 function discardProject(id: string) {
   agentDrafts.discard(id);
+  workflowDrafts.discard(id);
   // Deleting the rendered A must not cancel an in-flight user selection of B.
   if (pendingSelection?.id === id || (!pendingSelection && state.project?.id === id)) {
     selectSequence++;
@@ -81,6 +92,7 @@ async function refresh() {
     // creation or restore). It is not authority to discard the newer draft.
     if (!current() || selecting || pendingSelection) return;
     agentDrafts.retain(state.projects.map((project) => project.id));
+    workflowDrafts.retain(state.projects.map((project) => project.id));
     if (state.project && !state.projects.some((p) => p.id === state.project!.id)) {
       discardProject(state.project.id);
       return;
@@ -92,8 +104,10 @@ async function refresh() {
       !pendingSelection &&
       state.project?.id === projectId &&
       project.revision >= state.project.revision
-    )
+    ) {
+      reconcileWorkflowDrafts(project);
       state.project = project;
+    }
   } catch (error) {
     // Superseded refresh failures are as stale as superseded project data.
     if (current()) throw error;
@@ -157,6 +171,7 @@ export function useWorkspace() {
     applyProject: (project: Project) => {
       if (state.project?.id === project.id && project.revision >= state.project.revision) {
         snapshotSequence++;
+        reconcileWorkflowDrafts(project);
         state.project = project;
       }
     },

@@ -224,3 +224,38 @@ export function turnSummaryNotice(summary: TurnSummary): string {
 export function turnSummaryMessage(summary: TurnSummary): string {
   return `${turnSummaryStatus(summary)} · ${turnSummaryHeadline(summary)}；${turnSummaryNotice(summary)}`;
 }
+
+/** Node history contains only persisted changes that explicitly name this node. */
+export function milestoneTurnHistory(project: Pick<Project, 'events'>, milestoneId: string) {
+  return (project.events ?? []).flatMap((event) => {
+    if (event.kind !== 'agent_turn_finished') return [];
+    const summary = parseTurnSummary(event.detail);
+    if (!summary || !turnSummaryHasChanges(summary)) return [];
+    const milestones = {
+      added: summary.changes.milestones.added.filter((item) => item.id === milestoneId),
+      updated: summary.changes.milestones.updated.filter((item) => item.id === milestoneId),
+      removed: summary.changes.milestones.removed.filter((item) => item.id === milestoneId),
+    };
+    const involved = (item: { source: string; target: string }) =>
+      item.source === milestoneId || item.target === milestoneId;
+    const dependencies = {
+      added: summary.changes.dependencies.added.filter(involved),
+      updated: summary.changes.dependencies.updated.filter(involved),
+      removed: summary.changes.dependencies.removed.filter(involved),
+    };
+    if (
+      ![...Object.values(milestones), ...Object.values(dependencies)].some((items) => items.length)
+    )
+      return [];
+    return [
+      {
+        id: event.id,
+        createdAt: event.created_at,
+        summary: {
+          ...summary,
+          changes: { milestones, dependencies, target: null, architecture: null, other: [] },
+        },
+      },
+    ];
+  });
+}

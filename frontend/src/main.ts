@@ -14,3 +14,5 @@ import './styles/studio.css';
 import './styles/spatial.css';
 
 import './styles/composer.css';
+
+import './styles/explanatory-inspector.css';

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useAgent } from '../../composables/useAgent';
 import WorkspaceHeader from './WorkspaceHeader.vue';
 import GraphToolbar from '../graph/GraphToolbar.vue';
@@ -28,7 +28,7 @@ function resume() {
 }
 watch(() => agent.state.navigationTick, followPage);
 defineEmits<{ edit: [] }>();
-const { selected, selectNode } = useWorkspace();
+const { state, selected, selectNode } = useWorkspace();
 const planningContent = ref<HTMLElement>();
 const finderOpen = ref(false);
 function openFinder() {
@@ -39,12 +39,27 @@ const milestones = computed(() => [
   ...(props.project.source_milestones ?? []),
   ...props.project.milestones,
 ]);
+let locateSequence = 0;
+onBeforeUnmount(() => {
+  locateSequence++;
+});
 async function locate(id: string) {
   if (!milestones.value.some((item) => item.id === id)) return;
+  const sequence = ++locateSequence;
+  const projectId = props.project.id;
   finderOpen.value = false;
+  tab.value = 'graph';
   selectNode(id);
   agent.freeView(props.project.id);
   await nextTick();
+  if (
+    sequence !== locateSequence ||
+    props.project.id !== projectId ||
+    state.project?.id !== projectId ||
+    state.selectedId !== id ||
+    tab.value !== 'graph'
+  )
+    return;
   if (planningContent.value) planningContent.value.scrollTop = 0;
   graph.value?.locate(id);
 }
@@ -99,12 +114,14 @@ watch(tab, (value) => {
         :key="selected.id"
         :milestone="selected"
         :project="project"
+        @locate="locate"
       />
       <AgentDock
         :project="project"
         :view="tab"
         :compact="tab === 'architecture' || (tab === 'graph' && Boolean(selected))"
         @resume="resume"
+        @locate="locate"
       />
     </section>
     <MilestoneFinder

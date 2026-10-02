@@ -12,6 +12,8 @@ import {
 } from '../../lib/turnSummary';
 
 const props = defineProps<{ summary: TurnSummary; milestones: Milestone[] }>();
+defineEmits<{ locate: [id: string] }>();
+const exists = (id: string) => props.milestones.some((item) => item.id === id);
 const changes = computed(() => props.summary.changes);
 const milestoneGroups = computed(() => [
   { label: '新增', items: changes.value.milestones.added },
@@ -88,9 +90,16 @@ function version(value: number | null, prefix: string): string {
             <template v-for="group in milestoneGroups" :key="group.label">
               <li v-for="item in group.items" :key="`${group.label}-${item.id}`">
                 <span class="turn-change-action">{{ group.label }}</span
-                >「{{ item.title || item.id }}」<span
-                  v-if="item.fields.length"
-                  class="turn-change-detail"
+                >「<button
+                  v-if="group.label !== '移除' && exists(item.id)"
+                  type="button"
+                  class="turn-node-link"
+                  :aria-label="`定位里程碑：${item.title || item.id}`"
+                  @click="$emit('locate', item.id)"
+                >
+                  {{ item.title || item.id }}</button
+                ><span v-else>{{ item.title || item.id }}</span
+                >」<span v-if="item.fields.length" class="turn-change-detail"
                   >：{{ fieldNames(item.fields) }}</span
                 >
               </li>
@@ -103,7 +112,25 @@ function version(value: number | null, prefix: string): string {
             <template v-for="group in dependencyGroups" :key="group.label">
               <li v-for="item in group.items" :key="`${group.label}-${item.source}-${item.target}`">
                 <span class="turn-change-action">{{ group.label }}</span
-                >「{{ milestoneTitle(item.source) }}」→「{{ milestoneTitle(item.target) }}」
+                >「<button
+                  v-if="exists(item.source)"
+                  type="button"
+                  class="turn-node-link"
+                  :aria-label="`定位里程碑：${milestoneTitle(item.source)}`"
+                  @click="$emit('locate', item.source)"
+                >
+                  {{ milestoneTitle(item.source) }}</button
+                ><span v-else>{{ milestoneTitle(item.source) }}</span
+                >」→「<button
+                  v-if="exists(item.target)"
+                  type="button"
+                  class="turn-node-link"
+                  :aria-label="`定位里程碑：${milestoneTitle(item.target)}`"
+                  @click="$emit('locate', item.target)"
+                >
+                  {{ milestoneTitle(item.target) }}</button
+                ><span v-else>{{ milestoneTitle(item.target) }}</span
+                >」
                 <span class="turn-change-detail">：{{ dependencyDescription(item) }}</span>
               </li>
             </template>
@@ -111,9 +138,25 @@ function version(value: number | null, prefix: string): string {
               v-for="item in changes.dependencies.updated"
               :key="`updated-${item.source}-${item.target}`"
             >
-              <span class="turn-change-action">更新</span>「{{ milestoneTitle(item.source) }}」→「{{
-                milestoneTitle(item.target)
-              }}」
+              <span class="turn-change-action">更新</span>「<button
+                v-if="exists(item.source)"
+                type="button"
+                class="turn-node-link"
+                :aria-label="`定位里程碑：${milestoneTitle(item.source)}`"
+                @click="$emit('locate', item.source)"
+              >
+                {{ milestoneTitle(item.source) }}</button
+              ><span v-else>{{ milestoneTitle(item.source) }}</span
+              >」→「<button
+                v-if="exists(item.target)"
+                type="button"
+                class="turn-node-link"
+                :aria-label="`定位里程碑：${milestoneTitle(item.target)}`"
+                @click="$emit('locate', item.target)"
+              >
+                {{ milestoneTitle(item.target) }}</button
+              ><span v-else>{{ milestoneTitle(item.target) }}</span
+              >」
               <span class="turn-change-detail"
                 >（{{ fieldNames(item.fields) }}）：{{ dependencyDescription(item.before) }} →
                 {{ dependencyDescription(item.after) }}</span
@@ -153,6 +196,24 @@ function version(value: number | null, prefix: string): string {
 </template>
 
 <style scoped>
+.turn-node-link {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.turn-node-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .agent-turn-summary {
   margin: 0 0 8px;
   border: 1px solid var(--line);

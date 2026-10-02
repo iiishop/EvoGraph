@@ -309,8 +309,8 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
   globalThis.HTMLElement = HostElement;
   globalThis.document = Object.assign(new Document(), { activeElement: null });
   const workspaceUrl = url(`import { reactive, computed } from ${JSON.stringify(vue)};
-    export const data = reactive({ selectedId: null, milestones: [] });
-    export const useWorkspace = () => ({ selected: computed(() => data.milestones.find(item => item.id === data.selectedId)), selectNode: id => { data.selectedId = id; } });`);
+    export const data = reactive({ selectedId: null, milestones: [], project: null });
+    export const useWorkspace = () => ({ state: data, selected: computed(() => data.milestones.find(item => item.id === data.selectedId)), selectNode: id => { data.selectedId = id; } });`);
   const viewsUrl = url(`import { h } from ${JSON.stringify(vue)};
     export const calls = []; export const graph = { inheritAttrs: false, setup(_, { expose }) { expose({ locate: id => calls.push(id) }); return () => h('graph'); } };
     export const workspaceViews = [{ id: 'graph', component: graph }]; export default graph;`);
@@ -348,6 +348,7 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
     source_milestones: data.milestones.filter((item) => item.origin === 'source'),
     milestones: data.milestones.filter((item) => item.origin !== 'source'),
   };
+  data.project = project;
   const app = renderer.createApp(Workspace, { project }),
     root = new HostElement();
   app.mount(root);

@@ -30,7 +30,7 @@ import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem } from '../../types';
 
 const props = defineProps<{ project: Project; compact?: boolean; view?: string }>();
-defineEmits<{ resume: [] }>();
+defineEmits<{ resume: []; locate: [id: string] }>();
 const conversationOpen = ref(false);
 const dockCollapsed = ref(false);
 const latestReply = computed(() =>
@@ -478,6 +478,7 @@ function choose(option: string) {
         :key="`${project.id}-${turnSummary.turn_id}`"
         :summary="turnSummary"
         :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
+        @locate="$emit('locate', $event)"
       />
       <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="referencedAttachmentIds" />
       <div v-if="failedAttempt" class="agent-recovery-card">

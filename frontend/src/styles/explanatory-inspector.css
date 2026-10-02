@@ -1,0 +1,205 @@
+/* Explanatory detail has one scroll owner; long source text remains selectable. */
+.spatial-app .explanatory-inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.spatial-app .explanatory-inspector > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 20px 22px 8px;
+}
+.explanatory-inspector > header > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.explanatory-inspector > header > button {
+  flex-shrink: 0;
+}
+.spatial-app .explanatory-inspector .inspector-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 22px 22px;
+  overscroll-behavior: contain;
+}
+.spatial-app .explanatory-inspector .inspector-title {
+  padding: 12px 0 0;
+}
+.spatial-app .explanatory-inspector .inspector-title h2 {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 23px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+.explanatory-inspector .inspector-outcome {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.9;
+  margin: 20px 0 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.explanatory-inspector .inspector-intent {
+  margin: 12px 0 20px;
+}
+.explanatory-inspector .inspector-intent strong,
+.explanatory-inspector .disclosure-content {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.explanatory-inspector .inspector-intent p,
+.explanatory-inspector .disclosure-content p,
+.explanatory-inspector .disclosure-content pre,
+.explanatory-inspector .disclosure-content code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.explanatory-inspector .meaning-card {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faff;
+  margin: 16px 0 20px;
+}
+.explanatory-inspector .meaning-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.explanatory-inspector .meaning-card p {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.explanatory-inspector .meaning-card strong,
+.explanatory-inspector .meaning-card span {
+  display: block;
+}
+.explanatory-inspector .meaning-card p > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary);
+}
+.explanatory-inspector .meaning-card small {
+  display: block;
+  margin-top: 8px;
+}
+.explanatory-inspector .inspector-disclosure {
+  border-top: 1px solid var(--line);
+}
+.explanatory-inspector .inspector-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 17px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+.explanatory-inspector .inspector-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.explanatory-inspector .inspector-disclosure > summary::after {
+  content: '›';
+  color: var(--muted);
+}
+.explanatory-inspector .inspector-disclosure[open] > summary::after {
+  content: '⌄';
+}
+.explanatory-inspector .inspector-disclosure > summary strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  flex: 1;
+}
+.explanatory-inspector .inspector-disclosure > summary span {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.explanatory-inspector .disclosure-content {
+  padding-bottom: 16px;
+  line-height: 1.75;
+}
+.spatial-app .explanatory-inspector .disclosure-content > section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+}
+.explanatory-inspector .scope-path {
+  display: block;
+  margin: 6px 0;
+}
+.explanatory-inspector .source-contract {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.explanatory-inspector .source-contract p {
+  margin: 6px 0;
+}
+.explanatory-inspector .source-baseline-warning,
+.explanatory-inspector .workflow-sync {
+  padding: 12px;
+  border-radius: 8px;
+  background: #fff8e9;
+  color: #805e22;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.explanatory-inspector .workflow-notice {
+  color: var(--positive);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.explanatory-inspector .inspector-execution {
+  margin-top: 24px;
+}
+.explanatory-inspector .inspector-composer-note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.9;
+}
+.explanatory-inspector .node-change-record > time {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin: 10px 0 6px;
+}
+.explanatory-inspector .turn-summary-scroll {
+  max-height: none;
+  overflow: visible;
+}
+.explanatory-inspector .agent-turn-summary > summary {
+  flex-wrap: wrap;
+}
+.explanatory-inspector .turn-summary-preview {
+  white-space: normal;
+}
+.explanatory-inspector .inspector-scroll:focus-visible,
+.explanatory-inspector summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 5px;
+}
+@media (max-width: 760px) {
+  .spatial-app .explanatory-inspector .inspector-title h2 {
+    font-size: 19px;
+  }
+  .spatial-app .explanatory-inspector > header {
+    padding: 12px 16px 4px;
+  }
+  .spatial-app .explanatory-inspector .inspector-scroll {
+    padding: 0 16px 16px;
+  }
+}

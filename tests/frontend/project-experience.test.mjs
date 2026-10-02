@@ -87,6 +87,7 @@ for (const name of [
   '../design/DiagramView.vue',
   '../design/UmlView.vue',
   './TaskWorkflow.vue',
+  '../agent/AgentTurnSummary.vue',
 ]) {
   imports[name] = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 }
@@ -102,6 +103,7 @@ async function component(path) {
   return (await import(moduleUrl(compiled))).default;
 }
 const MilestoneInspector = await component('graph/MilestoneInspector');
+const SourceInspector = await component('graph/SourceInspector');
 const ProjectDialog = await component('projects/ProjectDialog');
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const EvidencePanel = await component('workspace/EvidencePanel');
@@ -390,8 +392,8 @@ test('milestone detail opens on delivery planning with execution still available
       attachment_ids: [],
     },
   });
-  assert.match(html, /aria-pressed="true"[^>]*>交付规划/);
-  assert.match(html, /执行与验收/);
+  assert.match(html, /<summary><strong>交付约定<\/strong>/);
+  assert.match(html, /执行与证据/);
   for (const text of [
     '验收标准',
     'The outcome is reviewable',
@@ -480,4 +482,82 @@ test('long questions retain complete accessible copy and separate immediate-answ
   assert.match(html, /aria-pressed="true"[^>]*[^]*?标题与作者/);
   const blocked = await render(AgentQuestion, { question, answer: '', disabled: true });
   assert.equal((blocked.match(/ disabled/g) ?? []).length, 5);
+});
+
+test('source inspector keeps full long explanation, contracts, paths, dependency basis and provenance', async () => {
+  const long = '完整源码说明及换行\n'.repeat(80),
+    path = 'src/' + 'long-source-reference/'.repeat(20);
+  const html = await render(SourceInspector, {
+    project: project({
+      baselines: [
+        { id: 'new', number: 2 },
+        { id: 'latest', number: 3 },
+      ],
+      source_analysis_summary: '原始推导依据',
+      source_milestones: [{ id: 'S0', title: '前置源码能力' }],
+    }),
+    milestone: {
+      id: 'S1',
+      title: '源码能力标题'.repeat(25),
+      intent: long,
+      scope: [path],
+      dependencies: ['S0'],
+      dependency_reasons: { S0: long },
+      dependency_types: { S0: 'migration' },
+      source_refs: [path],
+      source_behaviors: [{ key: 'source.behavior', statement: long, source_refs: [path] }],
+      source_baseline_id: 'old',
+    },
+  });
+  for (const value of [
+    long,
+    path,
+    '原始推导依据',
+    '前置源码能力',
+    '依据旧基线推导',
+    '不代表真实历史 PR',
+    '独立验收',
+    '不计入待交付任务',
+    '迁移前置',
+  ])
+    assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /领取任务|复制制作提示词|导入报告并更新状态/);
+});
+
+test('explanatory styles are isolated and shared evidence, activity and investigation styles remain imported', () => {
+  const base = readFileSync(
+    new URL('../../frontend/src/styles/inspector.css', import.meta.url),
+    'utf8',
+  );
+  const styles = readFileSync(new URL('../../frontend/src/styles.css', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../../frontend/src/main.ts', import.meta.url), 'utf8');
+  const focused = readFileSync(
+    new URL('../../frontend/src/styles/explanatory-inspector.css', import.meta.url),
+    'utf8',
+  );
+  for (const name of [
+    '.evidence-panel',
+    '.activity-panel',
+    '.panel-heading',
+    '.evidence-item',
+    '.evidence-body',
+    '.metric-row',
+    '.timeline',
+    '.obligation-edit',
+    '.check-box',
+    '.dependency-item',
+    '.blockers',
+  ])
+    assert.ok(base.includes(name), name);
+  assert.match(styles, /@import '\.\/styles\/inspector.css'/);
+  assert.doesNotMatch(main, /import '\.\/styles\/inspector.css'/);
+  assert.equal((main.match(/explanatory-inspector.css/g) || []).length, 1);
+  assert.match(
+    focused,
+    /\.explanatory-inspector \.inspector-title h2\s*\{[^}]*-webkit-line-clamp: unset;[^}]*overflow: visible;/,
+  );
+  assert.match(
+    focused,
+    /\.explanatory-inspector \.turn-summary-scroll\s*\{[^}]*max-height: none;[^}]*overflow: visible;/,
+  );
 });

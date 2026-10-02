@@ -51,6 +51,12 @@ async function harness(initialize = true) {
       `from ${JSON.stringify(vueUrl)}`,
     ) + `\n// ${id}`,
   );
+  const workflowUrl = moduleUrl(
+    compile('composables/useWorkflowDrafts.ts').replace(
+      "from 'vue'",
+      `from ${JSON.stringify(vueUrl)}`,
+    ) + `\n// ${id}`,
+  );
   const imports = {
     [composerDocumentUrl]: composerDocumentUrl,
     '../../lib/composerDocument': composerDocumentUrl,
@@ -59,6 +65,7 @@ async function harness(initialize = true) {
     vue: vueUrl,
     '../api/client': apiUrl,
     './useAgentDrafts': draftsUrl,
+    './useWorkflowDrafts': workflowUrl,
     './useNotifications': moduleUrl('export const useNotifications = () => ({ push() {} });'),
   };
   const code = compile('composables/useWorkspace.ts').replace(
@@ -70,6 +77,7 @@ async function harness(initialize = true) {
   );
   const { useWorkspace } = await import(moduleUrl(code));
   const { agentDrafts } = await import(draftsUrl);
+  const { workflowDrafts } = await import(workflowUrl);
   const { env } = await import(apiUrl);
   const records = new Map(['A', 'B', 'C'].map((id) => [id, project(id)]));
   const handlers = {};
@@ -101,7 +109,15 @@ async function harness(initialize = true) {
   };
   const workspace = useWorkspace();
   if (initialize) await workspace.init();
-  return { workspace, drafts: agentDrafts, records, handlers, env, saved };
+  return {
+    workspace,
+    drafts: agentDrafts,
+    workflows: workflowDrafts,
+    records,
+    handlers,
+    env,
+    saved,
+  };
 }
 
 test('a pending user selection beats an earlier A refresh in either response order', async () => {
@@ -384,4 +400,38 @@ test('a delayed read from before deletion cannot overwrite a restored project in
   assert.equal(workspace.state.project.revision, 1);
   assert.deepEqual(workspace.state.project.messages, ['restored']);
   assert.equal(drafts.bind(() => 'A').content.value, 'restored project draft');
+});
+
+test('only accepted complete snapshots invalidate removed-node drafts and reintroduced IDs get clean entries', async () => {
+  const { workspace, records, workflows } = await harness();
+  const withNodes = (revision, ids) => ({
+    ...project('A', revision),
+    milestones: ids.map((id) => ({ id })),
+  });
+  workspace.applyProject(withNodes(1, ['M1', 'M2']));
+  const first = workflows.bind(
+      () => 'A',
+      () => 'M1',
+    ),
+    second = workflows.bind(
+      () => 'A',
+      () => 'M2',
+    );
+  first.report.value = 'A M1';
+  second.report.value = 'A M2';
+  workspace.applyProject(withNodes(0, []));
+  assert.equal(first.report.value, 'A M1', 'rejected stale snapshot cannot delete drafts');
+  workspace.applyProject(withNodes(2, ['M2']));
+  assert.equal(first.draft.value, undefined);
+  assert.equal(second.report.value, 'A M2');
+  records.set('A', withNodes(3, ['M1', 'M2']));
+  await workspace.refresh();
+  assert.equal(first.report.value, '');
+  first.report.value = 'fresh';
+  await workspace.selectProject('B');
+  await workspace.selectProject('A');
+  assert.equal(first.report.value, 'fresh');
+  records.set('A', withNodes(4, ['M2']));
+  await workspace.selectProject('A');
+  assert.equal(first.draft.value, undefined);
 });

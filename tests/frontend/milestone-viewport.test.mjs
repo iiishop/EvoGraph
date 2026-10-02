@@ -113,6 +113,7 @@ async function harness(count = 64, reduced = false, initial = {}) {
     '../../composables/useWorkspace': workspaceUrl,
     '../../composables/useAgent': agentUrl,
     '../../lib/milestoneViewport': geometryUrl,
+    '../../lib/milestoneInteraction': url(compile(source('lib/milestoneInteraction.ts'))),
     '../../lib/graphGeometry': url(
       'export const separateBoxes = boxes => boxes; export const routeAroundBoxes = () => [];',
     ),

@@ -28,6 +28,7 @@ const read = (path) => readFileSync(new URL(`../../frontend/src/${path}`, import
 const summaryUrl = moduleUrl(transpile(read('lib/turnSummary.ts')));
 const {
   parseTurnSummary,
+  milestoneTurnHistory,
   latestTurnSummary,
   turnSummaryHasChanges,
   turnSummaryHeadline,
@@ -390,5 +391,52 @@ test('expanded receipts yield space to the composer and share one bounded review
   assert.match(
     workspace,
     /\.planning-content :deep\(\.milestone-stage > \.graph-canvas\)\s*\{\s*min-height: 0;/,
+  );
+});
+
+test('receipt exposes current changed-node and dependency links without invented removed-node destinations', async () => {
+  const html = await render(AgentTurnSummary, {
+    summary: summary(),
+    milestones: [
+      { id: 'M1', title: '订单录入' },
+      { id: 'M2', title: '迁移到数据库' },
+      { id: 'M3', title: '准备数据库' },
+    ],
+  });
+  for (const title of ['订单录入', '迁移到数据库', '准备数据库'])
+    assert.ok(html.includes(`aria-label="定位里程碑：${title}"`));
+  assert.doesNotMatch(html, /aria-label="定位里程碑：临时 CSV 存储"/);
+  const missing = await render(AgentTurnSummary, { summary: summary(), milestones: [] });
+  assert.doesNotMatch(missing, /class="turn-node-link"/);
+  assert.match(missing, /临时 CSV 存储/);
+});
+
+test('node history filters persisted explicit node changes and never attributes global target or architecture changes', () => {
+  const history = milestoneTurnHistory(
+    {
+      events: [
+        event(summary({ status: 'failed' })),
+        event(undefined, { detail: '{broken' }),
+        event(summary({ changed: false })),
+      ],
+    },
+    'M2',
+  );
+  assert.equal(history.length, 1);
+  assert.equal(history[0].summary.status, 'failed');
+  assert.deepEqual(
+    history[0].summary.changes.milestones.added.map((item) => item.id),
+    ['M2'],
+  );
+  assert.deepEqual(history[0].summary.changes.milestones.updated, []);
+  assert.deepEqual(history[0].summary.changes.dependencies.removed, []);
+  assert.equal(history[0].summary.changes.dependencies.updated[0].after.reason, '先完成数据迁移');
+  assert.equal(history[0].summary.changes.target, null);
+  assert.equal(history[0].summary.changes.architecture, null);
+  assert.deepEqual(milestoneTurnHistory(project(), 'unrelated'), []);
+  assert.equal(
+    milestoneTurnHistory(project(), 'M3').length,
+    1,
+    'dependency endpoint alone is a factual node connection',
   );
 });

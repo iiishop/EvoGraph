@@ -5,6 +5,7 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { GitBranch, Maximize } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
+import { activateMilestoneKey } from '../../lib/milestoneInteraction';
 import GraphEdge from './GraphEdge.vue';
 import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
 import { useWorkspace } from '../../composables/useWorkspace';
@@ -91,6 +92,7 @@ const nodes = computed(() =>
     .map((m) => ({
       id: m.id,
       type: 'milestone',
+      ariaLabel: `${m.title}，按 Enter 或空格查看详情`,
       position: displayPositions.value.get(m.id)!,
       selected: state.selectedId === m.id,
       data: {
@@ -223,6 +225,16 @@ function fit() {
 function initialized() {
   scheduleCamera();
 }
+function activateNodeKey(event: KeyboardEvent) {
+  activateMilestoneKey(
+    event,
+    allMilestones.value.map((milestone) => milestone.id),
+    (id) => {
+      selectNode(id);
+      locate(id);
+    },
+  );
+}
 function locate(id: string) {
   if (!allMilestones.value.some((milestone) => milestone.id === id)) return false;
   agent.freeView(props.project.id);
@@ -306,7 +318,7 @@ defineExpose({ fit, reset, locate });
 <template>
   <div class="milestone-stage">
     <BaselineMilestoneStatus :project="project" />
-    <div class="graph-canvas">
+    <div class="graph-canvas" @keydown.capture="activateNodeKey">
       <GoalMarker :project="project" />
       <VueFlow
         v-if="nodes.length"

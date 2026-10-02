@@ -229,7 +229,7 @@ export function createComposerEditor(options: ComposerEditorOptions) {
             : references > MAX_COMPOSER_REFERENCES
               ? '每条消息最多引用32处对象，请减少引用。'
               : new Set([...options.attachments(), ...documentAttachmentIds(document)]).size > 6
-                ? '本条最多引用6份项目资料，粘贴未应用。'
+                ? '本条最多引用6份项目资料，请移除一份后再添加。'
                 : '';
       if (message) options.onError(message);
       return !message;
