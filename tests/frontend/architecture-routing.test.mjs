@@ -61,21 +61,19 @@ function verifyGeometry(diagram, result) {
     const outgoing = result.ports.get(source.id).outgoing.find((p) => p.id === sourceHandle);
     const incoming = result.ports.get(target.id).incoming.find((p) => p.id === targetHandle);
     assert.deepEqual(route[0], {
-      x: source.x + (outgoing.side === 'right' ? source.width : 0),
+      x: source.x + outgoing.x,
       y: source.y + outgoing.y,
     });
     assert.deepEqual(route.at(-1), {
-      x: target.x + (incoming.side === 'right' ? target.width : 0),
+      x: target.x + incoming.x,
       y: target.y + incoming.y,
     });
-    assert.ok(
-      (route[1].x - route[0].x) * (outgoing.side === 'right' ? 1 : -1) > 0,
-      'source leaves its actual chosen side port',
-    );
-    assert.ok(
-      (route.at(-1).x - route.at(-2).x) * (incoming.side === 'left' ? 1 : -1) > 0,
-      'arrow enters its actual chosen side port',
-    );
+    const normals = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1] };
+    const dot = (a, b, side) => (b.x - a.x) * normals[side][0] + (b.y - a.y) * normals[side][1];
+    assert.ok(dot(route[0], route[1], outgoing.side) > 0, 'source leaves its chosen face');
+    assert.ok(dot(route.at(-1), route.at(-2), incoming.side) > 0, 'arrow enters its chosen face');
+    assert.ok(outgoing.edges.includes(index));
+    assert.ok(incoming.edges.includes(index));
     for (const [a, b] of allSegments(route)) {
       assert.ok(a.x === b.x || a.y === b.y, 'reserved route must be orthogonal');
       for (const box of [...result.boxes, ...result.headers])
@@ -102,7 +100,7 @@ test('screenshot-inspired synthetic fixture preserves all directed edges, groups
   });
 });
 
-test('parallel, opposite and self edges have separate actual handles and visible routes', () => {
+test('parallel edges share directional face handles while opposite and self paths remain distinct', () => {
   const boxes = [
     { id: 'a', x: 0, y: 0, width: 236, height: 150 },
     { id: 'b', x: 400, y: 0, width: 236, height: 150 },
@@ -118,10 +116,13 @@ test('parallel, opposite and self edges have separate actual handles and visible
   const result = { boxes, headers: [], ...routeArchitecture(diagram, boxes) };
   verifyGeometry(diagram, result);
   assert.equal(new Set(result.routes.map(({ route }) => JSON.stringify(route))).size, 4);
+  assert.equal(result.routes[0].sourceHandle, result.routes[1].sourceHandle);
+  assert.equal(result.routes[0].targetHandle, result.routes[1].targetHandle);
+  assert.notEqual(result.routes[0].sourceHandle, result.routes[2].targetHandle);
   for (const nodePorts of result.ports.values())
     for (const side of ['incoming', 'outgoing'])
       assert.equal(
-        new Set(nodePorts[side].map((p) => `${p.side}:${p.y}`)).size,
+        new Set(nodePorts[side].map((p) => `${p.side}:${p.x}:${p.y}`)).size,
         nodePorts[side].length,
       );
   assert.ok(
@@ -340,6 +341,127 @@ test('return dependencies use inward-facing side ports and avoid unnecessary per
   assert.ok(length(result.routes[1].route) < 250);
   for (const node of result.ports.values()) {
     const all = [...node.incoming, ...node.outgoing];
-    assert.equal(new Set(all.map((p) => `${p.side}:${p.y}`)).size, all.length);
+    assert.equal(new Set(all.map((p) => `${p.side}:${p.x}:${p.y}`)).size, all.length);
   }
+});
+
+test('all four faces have at most one input and output and unused faces are absent', () => {
+  const boxes = [
+    { id: 'center', x: 400, y: 400, width: 236, height: 150 },
+    { id: 'left', x: 0, y: 400, width: 236, height: 150 },
+    { id: 'right', x: 800, y: 400, width: 236, height: 150 },
+    { id: 'top', x: 400, y: 0, width: 236, height: 150 },
+    { id: 'bottom', x: 400, y: 800, width: 236, height: 150 },
+    { id: 'unused', x: 1200, y: 1200, width: 236, height: 150 },
+  ];
+  const edges = boxes.slice(1, 5).flatMap((box) => [
+    { source: 'center', target: box.id, label: `out ${box.id}` },
+    { source: 'center', target: box.id, label: `out duplicate ${box.id}` },
+    { source: box.id, target: 'center', label: `in ${box.id}` },
+  ]);
+  const diagram = { edges };
+  const result = { boxes, headers: [], ...routeArchitecture(diagram, boxes) };
+  verifyGeometry(diagram, result);
+  const center = result.ports.get('center');
+  assert.equal(center.incoming.length, 4);
+  assert.equal(center.outgoing.length, 4);
+  assert.deepEqual(result.ports.get('unused'), { incoming: [], outgoing: [] });
+  for (const ports of result.ports.values()) {
+    for (const direction of ['incoming', 'outgoing']) {
+      assert.ok(ports[direction].length <= 4);
+      assert.equal(new Set(ports[direction].map((p) => p.side)).size, ports[direction].length);
+    }
+    assert.equal(
+      new Set([...ports.incoming, ...ports.outgoing].map((p) => `${p.x}:${p.y}`)).size,
+      ports.incoming.length + ports.outgoing.length,
+    );
+  }
+  for (const port of center.outgoing) {
+    assert.equal(port.edges.length, 2);
+    const [a, b] = port.edges.map((index) => result.routes[index].route);
+    assert.deepEqual(a[0], b[0]);
+    // Every branch shares a short outward trunk before its independently routed body.
+    const n = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1] }[port.side];
+    for (const r of [a, b]) assert.ok((r[1].x - r[0].x) * n[0] + (r[1].y - r[0].y) * n[1] >= 24);
+  }
+});
+
+test('face selection avoids obstructed group headers and remains stable after edge reorder', () => {
+  const boxes = [
+    { id: 'a', x: 400, y: 400, width: 236, height: 150 },
+    { id: 'b', x: 400, y: 0, width: 236, height: 150 },
+    { id: 'c', x: 800, y: 400, width: 236, height: 150 },
+  ];
+  const headers = [{ id: 'header:a', x: 372, y: 316, width: 292, height: 66 }];
+  const edges = [
+    { source: 'a', target: 'b', label: 'up' },
+    { source: 'a', target: 'c', label: 'right' },
+    { source: 'b', target: 'a', label: 'down' },
+  ];
+  const result = { boxes, headers, ...routeArchitecture({ edges }, boxes, headers) };
+  verifyGeometry({ edges }, result);
+  assert.notEqual(result.routes[0].sourceHandle, 'out:top');
+  const reversed = routeArchitecture({ edges: [...edges].reverse() }, boxes, headers);
+  assert.deepEqual(result.routes, [...reversed.routes].reverse());
+  for (const [id, ports] of result.ports) {
+    for (const direction of ['incoming', 'outgoing'])
+      assert.deepEqual(
+        ports[direction].map(({ edges, ...port }) => port),
+        reversed.ports.get(id)[direction].map(({ edges, ...port }) => port),
+      );
+  }
+});
+
+test('measured top/bottom handles preserve orthogonal terminal axes without mutating routes', () => {
+  const reserved = [
+    { x: 106, y: 150 },
+    { x: 106, y: 174 },
+    { x: 300, y: 174 },
+    { x: 300, y: 250 },
+    { x: 518, y: 250 },
+    { x: 518, y: 300 },
+  ];
+  const source = { x: 107, y: 152.5 },
+    target = { x: 519, y: 297.5 };
+  const original = JSON.stringify(reserved);
+  const route = anchorArchitectureRoute(reserved, source, target);
+  assert.deepEqual(route[0], source);
+  assert.deepEqual(route.at(-1), target);
+  for (const [a, b] of allSegments(route)) assert.ok(a.x === b.x || a.y === b.y);
+  assert.equal(JSON.stringify(reserved), original);
+  const straight = anchorArchitectureRoute(
+    [
+      { x: 0, y: 0 },
+      { x: 0, y: 100 },
+    ],
+    { x: 1, y: 2 },
+    { x: 2, y: 98 },
+  );
+  for (const [a, b] of allSegments(straight)) assert.ok(a.x === b.x || a.y === b.y);
+});
+
+test('busy central routing uses nearby parallel corridors without unnecessary outside detours', async () => {
+  const result = await geometry(fixture);
+  const segments = result.routes.flatMap(({ route }, index) =>
+    allSegments(route).map(([a, b]) => ({ a, b, index })),
+  );
+  let crossings = 0;
+  for (const [index, a] of segments.entries()) {
+    for (const b of segments.slice(index + 1)) {
+      if (a.index === b.index || (a.a.x === a.b.x) === (b.a.x === b.b.x)) continue;
+      const [v, h] = a.a.x === a.b.x ? [a, b] : [b, a];
+      if (
+        v.a.x > Math.min(h.a.x, h.b.x) &&
+        v.a.x < Math.max(h.a.x, h.b.x) &&
+        h.a.y > Math.min(v.a.y, v.b.y) &&
+        h.a.y < Math.max(v.a.y, v.b.y)
+      )
+        crossings++;
+    }
+  }
+  assert.ok(crossings <= 10, 'avoid the original crowded 13-crossing central weave');
+  assert.ok(
+    result.routes.reduce((sum, item) => sum + length(item.route), 0) < 11000,
+    'cleaner corridors must not produce giant perimeter loops',
+  );
 });

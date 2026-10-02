@@ -38,7 +38,15 @@ const imports = {
       { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
     ).outputText,
   ),
-  '../../lib/architectureLayout': url('export const architectureGroupBounds = () => null;'),
+  '../../lib/architectureLayout': url(
+    ts.transpileModule(
+      readFileSync(
+        new URL('../../frontend/src/lib/architectureLayout.ts', import.meta.url),
+        'utf8',
+      ),
+      { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
+    ).outputText,
+  ),
   '../../lib/architectureRoles': url('export const architectureRole = () => ({ color: "blue" });'),
   '../../composables/useAgent': url(
     'export const useAgent = () => ({ state: { follow: { P1: false }, pulse: 0 }, freeView() {} });',
@@ -142,6 +150,8 @@ async function harness(initial = {}, initialLayout) {
   const flush = async () => {
     for (let i = 0; i < 8; i++) {
       await nextTick();
+      // Route planning may cooperatively yield to a browser task between edges.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       const callbacks = [...frames.values()];
       frames.clear();
       callbacks.forEach((callback) => callback());
@@ -504,6 +514,193 @@ test('selected incident relations highlight without removing edges or recomputin
       before,
     );
     assert.equal(captured.attrs.edges[0].ariaLabel, 'One → Two：First relation');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('individual relation previews highlight the complete route and both grouped endpoint handles', async () => {
+  const diagram = {
+    id: 'preview',
+    nodes: [
+      { id: 'one', label: 'One' },
+      { id: 'two', label: 'Two' },
+      { id: 'three', label: 'Three' },
+      { id: 'four', label: 'Four' },
+    ],
+    edges: [
+      { source: 'one', target: 'two', label: 'First relation' },
+      { source: 'one', target: 'three', label: 'Shared outgoing relation' },
+      { source: 'three', target: 'four', label: 'Other relation' },
+    ],
+    groups: [],
+  };
+  const h = await harness({ diagram, focusedId: 'four' });
+  try {
+    await h.flush();
+    const routes = captured.attrs.edges.map((edge) => edge.data.route);
+    const labels = captured.attrs.edges.map((edge) => edge.data.labelPosition);
+    const model = JSON.stringify(h.props.diagram);
+    const original = captured.attrs.edges[0];
+    assert.deepEqual(
+      original.data.previewPeers.map((peer) => peer.index),
+      [0, 1],
+    );
+    assert.equal(original.sourceHandle, captured.attrs.edges[1].sourceHandle);
+    original.data.onPreview(0);
+    await h.flush();
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.data.previewed),
+      [true, false, false],
+    );
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.style.opacity),
+      [1, 0.1, 0.1],
+    );
+    assert.ok(
+      captured.attrs.edges[0].style.strokeWidth > captured.attrs.edges[1].style.strokeWidth,
+    );
+    assert.ok(captured.attrs.edges[0].zIndex > captured.attrs.edges[1].zIndex);
+    const nodes = captured.attrs.nodes.filter((node) => node.type === 'architecture');
+    assert.deepEqual(
+      nodes.filter((node) => node.data.previewed).map((node) => node.id),
+      ['one', 'two'],
+    );
+    assert.deepEqual(nodes[0].data.previewHandles, [original.sourceHandle]);
+    assert.deepEqual(nodes[1].data.previewHandles, [original.targetHandle]);
+    assert.equal(nodes[2].data.dimmed, true);
+    assert.equal(nodes[3].selected, true, 'hover never changes selected component');
+    assert.equal(centers.length, 1, 'hover never changes the camera');
+    original.data.onPreview(1);
+    await h.flush();
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.data.previewed),
+      [false, true, false],
+    );
+    assert.deepEqual(
+      captured.attrs.nodes.filter((node) => node.data.previewed).map((node) => node.id),
+      ['one', 'three'],
+    );
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.data.route),
+      routes,
+    );
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.data.labelPosition),
+      labels,
+    );
+    assert.equal(JSON.stringify(h.props.diagram), model, 'preview is transient UI state only');
+    const other = captured.attrs.edges[2];
+    other.data.onPreview(2);
+    original.data.onPreview(null);
+    await h.flush();
+    assert.equal(
+      captured.attrs.edges[2].data.previewed,
+      true,
+      'late leave from an old edge cannot erase the new preview',
+    );
+    other.data.onPreview(null);
+    await h.flush();
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.data.previewed),
+      [false, false, false],
+    );
+    assert.deepEqual(
+      captured.attrs.edges.map((edge) => edge.style.opacity),
+      [0.16, 0.16, 1],
+    );
+    assert.ok(
+      captured.attrs.nodes.every(
+        (node) => !node.data.previewed && node.data.previewHandles.length === 0,
+      ),
+    );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('diagram replacement immediately clears preview and rejects stale callbacks during and after arranging', async () => {
+  const h = await harness({
+    diagram: {
+      id: 'same-id',
+      nodes: [
+        { id: 'one', label: 'One' },
+        { id: 'two', label: 'Two' },
+      ],
+      edges: [{ source: 'one', target: 'two', label: 'Old' }],
+      groups: [],
+    },
+  });
+  try {
+    await h.flush();
+    const oldPreview = captured.attrs.edges[0].data.onPreview;
+    oldPreview(0);
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].data.previewed, true);
+    let resolve;
+    layoutState.run = () =>
+      new Promise((yes) => {
+        resolve = yes;
+      });
+    h.props.diagram = {
+      ...h.props.diagram,
+      edges: [{ source: 'one', target: 'two', label: 'Replacement' }],
+    };
+    await nextTick();
+    oldPreview(0);
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].data.previewed, false);
+    assert.equal(captured.attrs.edges[0].data.previewEnabled, false);
+    resolve(
+      new Map([
+        ['one', { x: 0, y: 0 }],
+        ['two', { x: 346, y: 0 }],
+      ]),
+    );
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].label, 'Replacement');
+    assert.equal(captured.attrs.edges[0].data.previewEnabled, true);
+    oldPreview(0);
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].data.previewed, false);
+    captured.attrs.edges[0].data.onPreview(0);
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].data.previewed, true);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('semantic group wrappers cannot shield the relation paths beneath their bounds', async () => {
+  const h = await harness({
+    diagram: {
+      id: 'grouped',
+      nodes: [
+        { id: 'one', label: 'One' },
+        { id: 'two', label: 'Two' },
+      ],
+      edges: [{ source: 'one', target: 'two', label: 'Inside group' }],
+      groups: [{ id: 'boundary', label: 'Boundary', member_node_ids: ['one', 'two'] }],
+    },
+  });
+  try {
+    await h.flush();
+    const group = captured.attrs.nodes.find((node) => node.type === 'architecture-group');
+    assert.ok(group);
+    assert.equal(
+      group.style.pointerEvents,
+      'none',
+      'the Vue Flow wrapper, not only its child, must ignore hit testing',
+    );
+    assert.equal(group.selectable, false);
+    assert.equal(group.draggable, false);
+    assert.equal(captured.attrs.edges[0].style.opacity, 0.65);
+    assert.equal(captured.attrs.edges[0].style.strokeWidth, 1.4);
+    captured.attrs.edges[0].data.onPreview(0);
+    await h.flush();
+    assert.equal(captured.attrs.edges[0].style.opacity, 1);
+    assert.equal(captured.attrs.edges[0].style.strokeWidth, 3.2);
+    assert.equal(captured.attrs.nodes.filter((node) => node.data.previewed).length, 2);
   } finally {
     h.dispose();
   }

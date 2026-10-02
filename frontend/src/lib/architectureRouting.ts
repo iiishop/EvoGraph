@@ -2,11 +2,13 @@ import type { Diagram } from '../types';
 import type { Box } from './graphGeometry';
 import type { ArchitecturePoint as Point } from './architectureLayout';
 
+export type ArchitectureSide = 'left' | 'right' | 'top' | 'bottom';
 export interface ArchitecturePort {
   id: string;
+  x: number;
   y: number;
-  edge: number;
-  side: 'left' | 'right';
+  edges: number[];
+  side: ArchitectureSide;
 }
 export interface ArchitectureRoute {
   route: Point[];
@@ -17,6 +19,14 @@ const EPSILON = 0.01;
 const CLEARANCE = 16;
 const LANE_GAP = 12;
 const STUB = 24;
+const PORT_OFFSET = 12;
+const SIDES: ArchitectureSide[] = ['left', 'right', 'top', 'bottom'];
+const NORMAL: Record<ArchitectureSide, Point> = {
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+  top: { x: 0, y: -1 },
+  bottom: { x: 0, y: 1 },
+};
 const distance = (a: Point, b: Point) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 const expand = (b: Box, amount: number): Box => ({
   ...b,
@@ -57,12 +67,22 @@ export function anchorArchitectureRoute(route: Point[], start: Point, end: Point
   const points = route.map((point) => ({ ...point }));
   points[0] = start;
   points[points.length - 1] = end;
+  // Infer each terminal axis from its reserved segment. Top/bottom ports
+  // must not be pulled sideways when Vue Flow measures their outer anchor.
+  const sourceHorizontal = route[0].y === route[1].y;
+  const last = route.length - 1;
+  const targetHorizontal = route[last].y === route[last - 1].y;
   if (points.length > 2) {
-    points[1].y = start.y;
-    points[points.length - 2].y = end.y;
-  } else if (Math.abs(start.y - end.y) > EPSILON) {
+    if (sourceHorizontal) points[1].y = start.y;
+    else points[1].x = start.x;
+    if (targetHorizontal) points[last - 1].y = end.y;
+    else points[last - 1].x = end.x;
+  } else if (sourceHorizontal && Math.abs(start.y - end.y) > EPSILON) {
     const x = (start.x + end.x) / 2;
     return [start, { x, y: start.y }, { x, y: end.y }, end];
+  } else if (!sourceHorizontal && Math.abs(start.x - end.x) > EPSILON) {
+    const y = (start.y + end.y) / 2;
+    return [start, { x: start.x, y }, { x: end.x, y }, end];
   }
   return points;
 }
@@ -151,7 +171,10 @@ function laneCost(a: Point, b: Point, reserved: Segment[]) {
         h.a.y > Math.min(v.a.y, v.b.y) &&
         h.a.y <= Math.max(v.a.y, v.b.y)
       )
-        cost += 60;
+        // Prefer a nearby parallel corridor over weaving through several
+        // existing relations. This is a soft penalty, not a forced perimeter:
+        // a long outside detour still costs more than a local crossing.
+        cost += 90;
     }
   }
   return cost;
@@ -162,6 +185,8 @@ function* findRouteSteps(
   end: Point,
   obstacles: Box[],
   reserved: Segment[],
+  sourceSide: ArchitectureSide,
+  targetSide: ArchitectureSide,
 ): Generator<void, Point[]> {
   const xs = [
     ...new Set([
@@ -190,11 +215,13 @@ function* findRouteSteps(
   const point = (id: number) => ({ x: xs[id % xs.length], y: ys[Math.floor(id / xs.length)] });
   const source = ys.indexOf(start.y) * xs.length + xs.indexOf(start.x);
   const target = ys.indexOf(end.y) * xs.length + xs.indexOf(end.x);
-  const costs = new Map<number, number>([[source * 2, 0]]);
+  const sourceAxis = NORMAL[sourceSide].x ? 0 : 1;
+  const targetAxis = NORMAL[targetSide].x ? 0 : 1;
+  const costs = new Map<number, number>([[source * 2 + sourceAxis, 0]]);
   const previous = new Map<number, number>();
   const penalties = new Map<string, number>();
   const queue = new Queue();
-  queue.push({ id: source * 2, cost: distance(start, end) });
+  queue.push({ id: source * 2 + sourceAxis, cost: distance(start, end) });
   let expansions = 0;
   while (queue.items.length) {
     // Yield inside a large search as well as between edges. This keeps both
@@ -226,6 +253,13 @@ function* findRouteSteps(
       if (nx < 0 || ny < 0 || nx >= xs.length || ny >= ys.length) continue;
       const next = ny * xs.length + nx,
         b = point(next);
+      // Keep the shared trunk intact: no immediate reversal back toward the
+      // node, and no arrival from behind an input trunk.
+      const delta = { x: b.x - a.x, y: b.y - a.y };
+      if (cell === source && delta.x * NORMAL[sourceSide].x + delta.y * NORMAL[sourceSide].y < 0)
+        continue;
+      if (next === target && delta.x * NORMAL[targetSide].x + delta.y * NORMAL[targetSide].y > 0)
+        continue;
       const key = cell < next ? `${cell}:${next}` : `${next}:${cell}`;
       let penalty = penalties.get(key);
       if (penalty === undefined) {
@@ -239,7 +273,7 @@ function* findRouteSteps(
         distance(a, b) +
         penalty +
         (direction === axis ? 0 : 28) +
-        (next === target && axis !== 0 ? 28 : 0);
+        (next === target && axis !== targetAxis ? 28 : 0);
       const state = next * 2 + axis;
       if (nextCost >= (costs.get(state) ?? Infinity)) continue;
       costs.set(state, nextCost);
@@ -250,7 +284,45 @@ function* findRouteSteps(
   return [];
 }
 
-/** All edges share a routing plan, while their declared endpoints and order remain unchanged. */
+/** Fixed coordinates keep ports stable as edges are added, removed or reordered. */
+function portPosition(box: Box, side: ArchitectureSide, incoming: boolean): Point {
+  const sign = side === 'right' || side === 'bottom' ? 1 : -1;
+  const offset = (incoming ? -1 : 1) * sign * PORT_OFFSET;
+  return side === 'left' || side === 'right'
+    ? { x: side === 'right' ? box.width : 0, y: box.height / 2 + offset }
+    : { x: box.width / 2 + offset, y: side === 'bottom' ? box.height : 0 };
+}
+
+function chooseSide(
+  box: Box,
+  neighbor: Box,
+  incoming: boolean,
+  obstacles: Box[],
+): ArchitectureSide {
+  const dx = (neighbor.x + neighbor.width / 2 - box.x - box.width / 2) / box.width;
+  const dy = (neighbor.y + neighbor.height / 2 - box.y - box.height / 2) / box.height;
+  const magnitude = Math.hypot(dx, dy) || 1;
+  // Direction is based on geometry rather than edge order. A header or nearby
+  // component can veto a face before any handle is allocated there.
+  return SIDES.map((side, order) => {
+    const local = portPosition(box, side, incoming);
+    const start = { x: box.x + local.x, y: box.y + local.y };
+    const normal = NORMAL[side];
+    const exit = { x: start.x + normal.x * STUB, y: start.y + normal.y * STUB };
+    const blocked = obstacles.some(
+      (other) => other.id !== box.id && architectureSegmentHitsBox(start, exit, other),
+    );
+    const alignment =
+      box.id === neighbor.id
+        ? side === 'right'
+          ? 1
+          : 0
+        : (normal.x * dx + normal.y * dy) / magnitude;
+    return { side, order, score: (blocked ? 1e9 : 0) - alignment * 1000 };
+  }).sort((a, b) => a.score - b.score || a.order - b.order)[0].side;
+}
+
+/** Each face has one input and one output trunk; every relation keeps its own full path. */
 function* architectureRoutingSteps(
   diagram: Pick<Diagram, 'edges'>,
   boxes: Box[],
@@ -260,75 +332,81 @@ function* architectureRoutingSteps(
   const ports = new Map<string, { incoming: ArchitecturePort[]; outgoing: ArchitecturePort[] }>(
     boxes.map((box) => [box.id, { incoming: [], outgoing: [] }]),
   );
-  const routes: ArchitectureRoute[] = diagram.edges.map((_, index) => ({
-    route: [],
-    sourceHandle: `out:${index}`,
-    targetHandle: `in:${index}`,
-  }));
-  const sides = diagram.edges.map((edge) => {
-    const source = byId.get(edge.source),
-      target = byId.get(edge.target);
-    const backward = Boolean(source && target && target.x + target.width <= source.x);
-    return {
-      source: backward ? ('left' as const) : ('right' as const),
-      target: backward ? ('right' as const) : ('left' as const),
-    };
-  });
-  for (const box of boxes) {
-    const incident = diagram.edges.flatMap((edge, index) => [
-      ...(edge.source === box.id
-        ? [{ index, incoming: false, neighbor: byId.get(edge.target), side: sides[index].source }]
-        : []),
-      ...(edge.target === box.id
-        ? [{ index, incoming: true, neighbor: byId.get(edge.source), side: sides[index].target }]
-        : []),
-    ]);
-    for (const side of ['left', 'right'] as const) {
-      const ordered = incident
-        .filter((port) => port.side === side)
-        .sort(
-          (a, b) =>
-            (a.neighbor?.y ?? 0) - (b.neighbor?.y ?? 0) ||
-            (a.neighbor?.x ?? 0) - (b.neighbor?.x ?? 0) ||
-            Number(a.incoming) - Number(b.incoming) ||
-            a.index - b.index,
-        );
-      ordered.forEach((port, rank) => {
-        ports.get(box.id)![port.incoming ? 'incoming' : 'outgoing'].push({
-          id: port.incoming ? routes[port.index].targetHandle : routes[port.index].sourceHandle,
-          y: 24 + ((box.height - 48) * (rank + 1)) / (ordered.length + 1),
-          edge: port.index,
-          side,
-        });
-      });
-    }
-  }
   const obstacles = [
     ...boxes.map((b) => expand(b, CLEARANCE)),
     ...headers.map((b) => expand(b, 6)),
   ];
+  const sides = diagram.edges.map((edge) => {
+    const source = byId.get(edge.source),
+      target = byId.get(edge.target);
+    return {
+      source:
+        source && target
+          ? chooseSide(source, target, false, obstacles)
+          : ('right' as ArchitectureSide),
+      target:
+        source && target
+          ? chooseSide(target, source, true, obstacles)
+          : ('left' as ArchitectureSide),
+    };
+  });
+  const routes: ArchitectureRoute[] = diagram.edges.map((_, index) => ({
+    route: [],
+    sourceHandle: `out:${sides[index].source}`,
+    targetHandle: `in:${sides[index].target}`,
+  }));
+  for (const box of boxes) {
+    for (const side of SIDES) {
+      for (const incoming of [true, false]) {
+        const indices = diagram.edges.flatMap((edge, index) =>
+          (incoming ? edge.target : edge.source) === box.id &&
+          (incoming ? sides[index].target : sides[index].source) === side
+            ? [index]
+            : [],
+        );
+        if (!indices.length) continue;
+        ports.get(box.id)![incoming ? 'incoming' : 'outgoing'].push({
+          id: `${incoming ? 'in' : 'out'}:${side}`,
+          ...portPosition(box, side, incoming),
+          edges: indices,
+          side,
+        });
+      }
+    }
+  }
   const reserved: Segment[] = [];
   const work = diagram.edges
     .map((edge, index) => {
       const source = byId.get(edge.source),
         target = byId.get(edge.target);
-      if (!source || !target) return { index, start: null, end: null, span: Infinity };
-      const start = {
-        x: source.x + (sides[index].source === 'right' ? source.width : 0),
-        y: source.y + ports.get(source.id)!.outgoing.find((p) => p.edge === index)!.y,
+      if (!source || !target) return { index, start: null, end: null, span: Infinity, key: '' };
+      const sourcePort = portPosition(source, sides[index].source, false);
+      const targetPort = portPosition(target, sides[index].target, true);
+      const start = { x: source.x + sourcePort.x, y: source.y + sourcePort.y };
+      const end = { x: target.x + targetPort.x, y: target.y + targetPort.y };
+      return {
+        index,
+        start,
+        end,
+        span: distance(start, end),
+        key: JSON.stringify([edge.source, edge.target, edge.label]),
       };
-      const end = {
-        x: target.x + (sides[index].target === 'right' ? target.width : 0),
-        y: target.y + ports.get(target.id)!.incoming.find((p) => p.edge === index)!.y,
-      };
-      return { index, start, end, span: distance(start, end) };
     })
-    .sort((a, b) => a.span - b.span || a.index - b.index);
+    .sort((a, b) => a.span - b.span || a.key.localeCompare(b.key) || a.index - b.index);
   for (const { index, start, end } of work) {
     if (!start || !end) continue;
-    const exit = { x: start.x + (sides[index].source === 'right' ? STUB : -STUB), y: start.y },
-      entry = { x: end.x + (sides[index].target === 'right' ? STUB : -STUB), y: end.y };
-    const middle = yield* findRouteSteps(exit, entry, obstacles, reserved);
+    const sourceNormal = NORMAL[sides[index].source],
+      targetNormal = NORMAL[sides[index].target];
+    const exit = { x: start.x + sourceNormal.x * STUB, y: start.y + sourceNormal.y * STUB };
+    const entry = { x: end.x + targetNormal.x * STUB, y: end.y + targetNormal.y * STUB };
+    const middle = yield* findRouteSteps(
+      exit,
+      entry,
+      obstacles,
+      reserved,
+      sides[index].source,
+      sides[index].target,
+    );
     // Never silently substitute a line through a component on failure.
     if (!middle.length) continue;
     routes[index].route = simplifyArchitectureRoute([start, exit, ...middle, entry, end]);

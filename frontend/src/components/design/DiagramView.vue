@@ -52,6 +52,29 @@ const emit = defineEmits<{
 // The owner remounts for another browse context. Never chase our own saved camera updates.
 const displayDiagram = shallowRef(props.diagram);
 const arranging = ref(true);
+const hoveredEdgeIndex = ref<number | null>(null);
+const previewOwner = ref<string | null>(null);
+function clearEdgePreview() {
+  hoveredEdgeIndex.value = null;
+  previewOwner.value = null;
+}
+function previewEdge(diagram: Diagram, owner: string, index: number | null) {
+  if (disposed || arranging.value || displayDiagram.value !== diagram || props.diagram !== diagram)
+    return;
+  if (index === null) {
+    if (previewOwner.value === owner) clearEdgePreview();
+    return;
+  }
+  if (!Number.isInteger(index) || !diagram.edges[index]) return;
+  previewOwner.value = owner;
+  hoveredEdgeIndex.value = index;
+}
+const previewedEdge = computed(() =>
+  hoveredEdgeIndex.value === null ? undefined : displayDiagram.value.edges[hoveredEdgeIndex.value],
+);
+const previewedRoute = computed(() =>
+  hoveredEdgeIndex.value === null ? undefined : routing.value.routes[hoveredEdgeIndex.value],
+);
 const routing = shallowRef<NonNullable<Awaited<ReturnType<typeof routeArchitectureAsync>>>>({
   routes: [],
   ports: new Map(),
@@ -153,6 +176,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   disposed = true;
+  clearEdgePreview();
   focusSequence++;
   generation++;
   cancelAnimationFrame(frame);
@@ -205,7 +229,15 @@ const nodes = computed(() =>
       data: {
         ...n,
         source: props.source,
-        dimmed: !visible.value.has(n.id),
+        dimmed:
+          hoveredEdgeIndex.value === null
+            ? !visible.value.has(n.id)
+            : n.id !== previewedEdge.value?.source && n.id !== previewedEdge.value?.target,
+        previewed: n.id === previewedEdge.value?.source || n.id === previewedEdge.value?.target,
+        previewHandles: [
+          ...(n.id === previewedEdge.value?.source ? [previewedRoute.value?.sourceHandle] : []),
+          ...(n.id === previewedEdge.value?.target ? [previewedRoute.value?.targetHandle] : []),
+        ].filter((id): id is string => Boolean(id)),
         ports: routing.value.ports.get(n.id),
       },
     })),
@@ -221,6 +253,8 @@ const groupNodes = computed(() =>
         position: { x: bounds.x, y: bounds.y },
         selectable: false,
         draggable: false,
+        // The full group rectangle must not intercept any relation beneath it.
+        style: { pointerEvents: 'none' as const },
         zIndex: 1,
         data: {
           ...group,
@@ -271,6 +305,13 @@ const drawingBounds = computed(() =>
     labels.value,
   ),
 );
+const edgeDescriptions = computed(() => {
+  const names = new Map(displayDiagram.value.nodes.map((node) => [node.id, node.label]));
+  return displayDiagram.value.edges.map(
+    (edge) =>
+      `${names.get(edge.source) ?? edge.source} → ${names.get(edge.target) ?? edge.target}：${edge.label}`,
+  );
+});
 const edges = computed(() =>
   displayDiagram.value.edges.map((edge, index) => {
     const color = architectureRole(
@@ -278,28 +319,63 @@ const edges = computed(() =>
     ).color;
     const related = relatedEdge(edge.source, edge.target);
     const visibleEdge = visible.value.has(edge.source) && visible.value.has(edge.target);
-    const description = `${displayDiagram.value.nodes.find((n) => n.id === edge.source)?.label ?? edge.source} → ${displayDiagram.value.nodes.find((n) => n.id === edge.target)?.label ?? edge.target}：${edge.label}`;
+    const description = edgeDescriptions.value[index];
+    const diagram = displayDiagram.value;
+    const id = `${diagram.id}-edge-${index}`;
+    const route = routing.value.routes[index];
+    const previewed = hoveredEdgeIndex.value === index;
+    const sharedIndices = new Set([
+      index,
+      ...(routing.value.ports
+        .get(edge.source)
+        ?.outgoing.find((port) => port.id === route?.sourceHandle)?.edges ?? []),
+      ...(routing.value.ports
+        .get(edge.target)
+        ?.incoming.find((port) => port.id === route?.targetHandle)?.edges ?? []),
+    ]);
     return {
-      id: `${displayDiagram.value.id}-edge-${index}`,
+      id,
       source: edge.source,
       target: edge.target,
-      sourceHandle: routing.value.routes[index]?.sourceHandle ?? `out:${index}`,
-      targetHandle: routing.value.routes[index]?.targetHandle ?? `in:${index}`,
+      sourceHandle: route?.sourceHandle,
+      targetHandle: route?.targetHandle,
       type: 'architecture',
       label: edge.label,
       ariaLabel: description,
-      zIndex: related ? 4 : 0,
+      zIndex: previewed ? 5 : related ? 4 : 0,
+      // The inner edge is the tab stop; keep Vue Flow's bubbled selection keys.
+      domAttributes: { tabindex: -1 },
       data: {
         route: routing.value.routes[index]?.route ?? [],
         labelPosition: labels.value[index],
         related,
         description,
+        index,
+        previewed,
+        previewIndex: hoveredEdgeIndex.value,
+        previewEnabled: !arranging.value,
+        previewOwned: previewOwner.value === id,
+        previewPeers: [...sharedIndices]
+          .sort((a, b) => a - b)
+          .map((peer) => ({ index: peer, description: edgeDescriptions.value[peer] })),
+        onPreview: (peer: number | null) => previewEdge(diagram, id, peer),
       },
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
       style: {
         stroke: color,
-        strokeWidth: related ? 2.3 : 1.6,
-        opacity: !visibleEdge ? 0.08 : props.focusedId ? (related ? 1 : 0.16) : 0.78,
+        strokeWidth: previewed ? 3.2 : related ? 2.3 : 1.4,
+        opacity:
+          hoveredEdgeIndex.value !== null
+            ? previewed
+              ? 1
+              : 0.1
+            : !visibleEdge
+              ? 0.08
+              : props.focusedId
+                ? related
+                  ? 1
+                  : 0.16
+                : 0.65,
       },
     };
   }),
@@ -309,6 +385,7 @@ watch(
   () => props.diagram,
   async (diagram) => {
     const ticket = ++generation;
+    clearEdgePreview();
     layoutPending = true;
     arranging.value = true;
     error.value = '';
