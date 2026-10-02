@@ -1,3 +1,4 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -45,6 +46,7 @@ const imports = {
   '../../lib/composerDocument': composerDocumentUrl,
   './ComposerEditor.vue': composerEditorStubUrl,
   './MessageContent.vue': messageContentStubUrl,
+  './MarkdownContent': markdownContentUrl,
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../lib/turnSummary': summaryUrl,

@@ -100,3 +100,31 @@ def test_database_restore_checks_repository_ownership_atomically(app, repository
     with pytest.raises(ValueError, match="已有活跃项目"):
         app.db.save(stale, "project_restored")
     assert app.db.get(archived.id).archived
+
+
+def test_markdown_history_is_persisted_by_project_and_survives_application_reopen(app, tmp_path):
+    from conftest import MemorySecrets
+    from evograph.application.api import Application
+
+    a = app.projects.create("Project A")
+    b = app.projects.create("Project B")
+    # Interleave writes to model another project's admitted turn finishing offscreen.
+    a_request = app.db.message(a.id, "user", "A request")
+    b_request = app.db.message(b.id, "user", "B request")
+    a_reply = app.db.message(a.id, "assistant", "# A result\n\n- persisted\n\n```ts\nconst a = 1;")
+    b_reply = app.db.message(
+        b.id, "assistant", "## B result\n\n| item | state |\n| --- | --- |\n| B | done |"
+    )
+    reopened = Application(tmp_path / "data", MemorySecrets())
+    for project, expected in [
+        (a, [a_request, a_reply]),
+        (b, [b_request, b_reply]),
+        (a, [a_request, a_reply]),
+    ]:
+        messages = reopened.projects.get(project.id)["messages"]
+        assert messages == expected
+        assert all(message["project_id"] == project.id for message in messages)
+    # Renaming does not move or share a project's history by its display label.
+    reopened.projects.update(b.id, a.name, "", "")
+    assert reopened.projects.get(b.id)["messages"] == [b_request, b_reply]
+    assert reopened.projects.get(a.id)["messages"] == [a_request, a_reply]

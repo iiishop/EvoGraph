@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue';
 import { ChevronUp, X } from 'lucide-vue-next';
 import MessageContent from './MessageContent.vue';
+import { markdownTextPreview } from './MarkdownContent';
 import AgentTurnSummary from './AgentTurnSummary.vue';
 import { turnSummaryHeadline, turnSummaryStatus } from '../../lib/turnSummary';
 import type { Project, TurnSummary } from '../../types';
@@ -38,7 +39,7 @@ const latestReply = computed(() =>
   props.project.messages.filter((message) => message.role === 'assistant').at(-1),
 );
 const replyPreview = computed(() => {
-  const text = latestReply.value?.content.replace(/\s+/g, ' ').trim() ?? '';
+  const text = markdownTextPreview(latestReply.value?.content ?? '');
   if (props.running) return '正在处理 · 查看已保存的对话';
   if (props.project.messages.at(-1)?.role === 'user')
     return `${props.summary ? turnSummaryStatus(props.summary) : '尚无新回复'} · 查看已保存的对话`;
@@ -468,7 +469,9 @@ onUnmounted(() => {
             <div>
               <strong>{{ shown === 'receipt' ? '最近变更' : '对话记录' }}</strong>
               <span>{{
-                shown === 'receipt' && summary ? turnSummaryStatus(summary) : '已保存的请求与回复'
+                shown === 'receipt' && summary
+                  ? turnSummaryStatus(summary)
+                  : `${project.name} · ${project.messages.length} 条已保存的请求与回复`
               }}</span>
             </div>
             <button
@@ -485,9 +488,13 @@ onUnmounted(() => {
             v-show="shown === 'reply'"
             class="review-reader review-history"
             tabindex="0"
-            aria-label="项目对话记录"
+            :aria-label="`${project.name}的对话记录`"
           >
-            <article v-for="message in project.messages" :key="message.id" :class="message.role">
+            <article
+              v-for="message in project.messages"
+              :key="`${project.id}:${message.id}`"
+              :class="message.role"
+            >
               <strong>{{ message.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
               <MessageContent :message="message" />
             </article>
@@ -658,6 +665,8 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--line, #d8e1e7);
 }
 .review-surface-heading > div {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -667,6 +676,11 @@ onUnmounted(() => {
   font-size: 13px;
 }
 .review-surface-heading span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-secondary, #617383);
   font-size: 11px;
 }
@@ -705,8 +719,10 @@ onUnmounted(() => {
 }
 .review-history :deep(.message-content) {
   margin: 5px 0 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.review-history :deep(.message-content:not(.markdown-content)) {
+  white-space: pre-wrap;
 }
 .review-history article.user :deep(.message-content) {
   padding: 8px 10px;
