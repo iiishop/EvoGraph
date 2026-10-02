@@ -11,6 +11,27 @@ export interface ProjectSummary {
   milestone_count: number;
   acceptance: Acceptance;
 }
+export interface ArchivedProjectSummary extends ProjectSummary {
+  repository: string;
+  updated_at: string;
+}
+// Write responses are persisted aggregates, not hydrated workspace snapshots.
+// Only metadata used to confirm a save is projected here; messages, acceptance,
+// evidence validity and other computed view fields must come from projects.get.
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description: string;
+  repository: string;
+  revision: number;
+  created_at: string;
+  archived: boolean;
+}
+export interface ProjectCreationOutcome {
+  outcome: 'created' | 'reused_request' | 'existing_repository';
+  project: ProjectRecord;
+}
+export type ProjectOpenResult = 'accepted' | 'failed' | 'superseded';
 export interface Behavior {
   id: string;
   behavior_key: string;
@@ -73,9 +94,11 @@ export interface Baseline {
 }
 export interface Message {
   id: string;
+  project_id?: string;
   role: string;
   content: string;
   created_at: string;
+  composer_document?: ComposerDocument | null;
 }
 export interface Proposal {
   target: string;
@@ -100,9 +123,29 @@ export interface Attachment {
   size: number;
   excerpt: string;
 }
+export type ReferenceKind =
+  | 'milestone'
+  | 'source_milestone'
+  | 'architecture_component'
+  | 'source_component'
+  | 'attachment'
+  | 'repository';
+export interface ComposerReferencePart {
+  type: 'reference';
+  kind: ReferenceKind;
+  id: string;
+  project_id: string;
+  label: string;
+}
+export type ComposerPart = { type: 'text'; text: string } | ComposerReferencePart;
+export interface ComposerDocument {
+  version: 1;
+  parts: ComposerPart[];
+}
 export interface ReferenceItem {
   id: string;
-  kind: 'attachment' | 'repository';
+  kind: ReferenceKind;
+  project_id: string;
   name: string;
   label: string;
   detail: string;
@@ -151,6 +194,7 @@ export interface TurnSummary {
   version: 1;
   turn_id: string;
   status: 'completed' | 'waiting' | 'stopped' | 'failed';
+  history_warning?: string;
   changed: boolean;
   before_revision: number;
   after_revision: number;
@@ -188,6 +232,7 @@ export interface TurnSummary {
   };
 }
 export interface Project extends ProjectSummary {
+  created_at: string;
   class_model_state: { current: boolean; reasons: string[] };
   uml_diagrams: UmlDiagram[];
   source_milestones: Milestone[];
@@ -250,7 +295,15 @@ export interface PendingQuestion {
   context: string;
   options: string[];
 }
+// Only explicitly negotiated stream frames may omit history. Commands and
+// admission/terminal frames continue to carry complete project views.
+export type CompactProjectSnapshot = Omit<Project, 'messages' | 'events'> & {
+  snapshot_mode: 'compact-v1';
+};
+export type ProjectSnapshot = Project | CompactProjectSnapshot;
 export interface AgentEvent {
+  snapshot_mode?: 'full' | 'compact-v1';
+  saved_message?: Message;
   cancelled?: boolean;
   turn_id?: string;
   summary?: TurnSummary;
@@ -258,7 +311,7 @@ export interface AgentEvent {
   diagram_id?: string;
   diagram_kind?: string;
   type: string;
-  project?: Project;
+  project?: ProjectSnapshot;
   project_id?: string;
   node_id?: string;
   node_ids?: string[];
@@ -293,7 +346,10 @@ export interface ClassDetailResult {
   status: 'ready' | 'empty' | 'unmapped' | 'too_large' | 'unsupported';
   message: string;
   diagram?: UmlDiagram;
+  semantic?: SourceClassModel;
   image?: string;
+  render_status?: 'ready' | 'unavailable';
+  render_error?: string;
   files: string[];
   component_ids: string[];
   boundaries: string[];
@@ -314,4 +370,62 @@ export interface UmlDiagram {
   milestone_ids: string[];
   revision: number;
   baseline_id: string;
+}
+
+/** Bounded syntax declarations from selected source files, never a parsed PlantUML document. */
+export interface SourceLocation {
+  path: string;
+  line: number;
+  end_line: number;
+}
+export interface SourceClassMember {
+  id: string;
+  name: string;
+  kind: 'field' | 'method';
+  text: string;
+  visibility: 'public' | 'protected' | 'private' | 'unspecified';
+  qualifiers: string[];
+  location: SourceLocation;
+}
+export interface SourceClass {
+  id: string;
+  name: string;
+  declaration?: string;
+  kind: string;
+  language: string;
+  package_ids: string[];
+  location: SourceLocation;
+  members: SourceClassMember[];
+}
+export interface SourceBoundary {
+  id: string;
+  label: string;
+  kind: 'import' | 'base' | 'architecture';
+  origin: 'source' | 'design';
+  reason?: string;
+}
+export interface SourceRelation {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'extends' | 'implements' | 'import' | 'architecture';
+  label: string;
+  origin: 'source' | 'design';
+  resolution?: 'selected' | 'boundary' | 'architecture';
+  location?: SourceLocation;
+}
+export interface SourceClassModel {
+  schema_version: 1;
+  origin: 'source';
+  project_id: string;
+  architecture_revision: number;
+  component_ids: string[];
+  files: string[];
+  baseline_id: string;
+  source_fingerprints: Record<string, string>;
+  classes: SourceClass[];
+  packages: { id: string; component_id: string; label: string }[];
+  boundaries: SourceBoundary[];
+  relations: SourceRelation[];
+  limitations: string[];
 }

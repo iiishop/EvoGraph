@@ -1,39 +1,116 @@
-import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
-const require=createRequire(import.meta.url);
-const data=code=>'data:text/javascript;base64,'+Buffer.from(code).toString('base64');
-const compile=path=>ts.transpileModule(readFileSync(new URL(path,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
-const summaryUrl=data(compile('../../frontend/src/lib/changeSummary.ts'));
-const {changeSummary,truncate}=await import(summaryUrl);
-const notificationsCode=compile('../../frontend/src/composables/useNotifications.ts').replace("'vue'",JSON.stringify(pathToFileURL(require.resolve('vue')).href)).replace("'../lib/changeSummary'",JSON.stringify(summaryUrl));
-const {useNotifications}=await import(data(notificationsCode));
+const require = createRequire(import.meta.url);
+const data = (code) => 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
+const compile = (path) =>
+  ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+const summaryUrl = data(compile('../../frontend/src/lib/changeSummary.ts'));
+const { changeSummary, truncate } = await import(summaryUrl);
+const notificationsCode = compile('../../frontend/src/composables/useNotifications.ts')
+  .replace("'vue'", JSON.stringify(pathToFileURL(require.resolve('vue')).href))
+  .replace("'../lib/changeSummary'", JSON.stringify(summaryUrl));
+const { useNotifications } = await import(data(notificationsCode));
 
-test('updates describe changed fields and never exceed 86 characters',()=>{
- const before={id:'P1',name:'登录项目',milestones:[{id:'A',title:'登录',scope:['old']}],architectures:[],uml_diagrams:[],diagrams:[],targets:[]};
- const after={...before,milestones:[{...before.milestones[0],scope:['new']}]};
- assert.equal(changeSummary(before,after),'「登录」更新范围');
- assert.equal(Array.from(truncate('字'.repeat(100))).length,86);
+test('updates describe changed fields and never exceed 86 characters', () => {
+  const before = {
+    id: 'P1',
+    name: '登录项目',
+    milestones: [{ id: 'A', title: '登录', scope: ['old'] }],
+    architectures: [],
+    uml_diagrams: [],
+    diagrams: [],
+    targets: [],
+  };
+  const after = { ...before, milestones: [{ ...before.milestones[0], scope: ['new'] }] };
+  assert.equal(changeSummary(before, after), '「登录」更新范围');
+  assert.equal(Array.from(truncate('字'.repeat(100))).length, 86);
 });
 
-test('background updates never compare unrelated project snapshots',()=>{
- const selected={id:'B',name:'库存项目',milestones:[{id:'B1',title:'库存校验'}],architectures:[],uml_diagrams:[],diagrams:[],targets:[]};
- const updated={id:'A',name:'目录项目',milestones:[{id:'A1',title:'目录查询'}],architectures:[{number:2}],uml_diagrams:[],diagrams:[],targets:[{}]};
- for(const previous of [selected,null]) {
-  const summary=changeSummary(previous,updated,'更新里程碑');
-  assert.equal(summary,'「目录项目」更新里程碑');
-  assert.doesNotMatch(summary,/新增|移除|架构更新|项目目标已更新/);
- }
+test('background updates never compare unrelated project snapshots', () => {
+  const selected = {
+    id: 'B',
+    name: '库存项目',
+    milestones: [{ id: 'B1', title: '库存校验' }],
+    architectures: [],
+    uml_diagrams: [],
+    diagrams: [],
+    targets: [],
+  };
+  const updated = {
+    id: 'A',
+    name: '目录项目',
+    milestones: [{ id: 'A1', title: '目录查询' }],
+    architectures: [{ number: 2 }],
+    uml_diagrams: [],
+    diagrams: [],
+    targets: [{}],
+  };
+  for (const previous of [selected, null]) {
+    const summary = changeSummary(previous, updated, '更新里程碑');
+    assert.equal(summary, '「目录项目」更新里程碑');
+    assert.doesNotMatch(summary, /新增|移除|架构更新|项目目标已更新/);
+  }
 });
 
-test('new notices append below old notices and expire independently at five seconds',t=>{
- t.mock.timers.enable({apis:['setTimeout']});
- const n=useNotifications();n.push('第一次更新');t.mock.timers.tick(1000);n.push('第二次更新');
- assert.deepEqual(n.items.map(x=>x.message),['第一次更新','第二次更新']);
- t.mock.timers.tick(3999);assert.equal(n.items.length,2);
- t.mock.timers.tick(1);assert.deepEqual(n.items.map(x=>x.message),['第二次更新']);
- t.mock.timers.tick(1000);assert.equal(n.items.length,0);
+test('new notices append below old notices and expire independently at five seconds', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const n = useNotifications();
+  n.push('第一次更新');
+  t.mock.timers.tick(1000);
+  n.push('第二次更新');
+  assert.deepEqual(
+    n.items.map((x) => x.message),
+    ['第一次更新', '第二次更新'],
+  );
+  t.mock.timers.tick(3999);
+  assert.equal(n.items.length, 2);
+  t.mock.timers.tick(1);
+  assert.deepEqual(
+    n.items.map((x) => x.message),
+    ['第二次更新'],
+  );
+  t.mock.timers.tick(1000);
+  assert.equal(n.items.length, 0);
+});
+
+test('a burst of Agent edits updates one stable notice and renews only its timer', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const n = useNotifications();
+  for (const item of [...n.items]) n.dismiss(item.id);
+  n.push('第一项更新', 'agent:A');
+  const id = n.items[0].id;
+  t.mock.timers.tick(4000);
+  for (let index = 0; index < 64; index++) n.push(`更新 ${index}`, 'agent:A');
+  assert.equal(n.items.length, 1);
+  assert.equal(n.items[0].id, id);
+  assert.equal(n.items[0].message, '更新 63');
+  n.push('资料已保存');
+  t.mock.timers.tick(1000);
+  assert.equal(n.items.length, 2, 'the replaced timer must not dismiss the current Agent update');
+  n.dismiss(id);
+  assert.equal(n.items.length, 1);
+  t.mock.timers.tick(4000);
+  assert.equal(n.items.length, 0);
+});
+
+test('update stack is bounded at the top and announces coalesced text changes', () => {
+  const css = readFileSync(
+    new URL('../../frontend/src/styles/spatial.css', import.meta.url),
+    'utf8',
+  );
+  const component = readFileSync(
+    new URL('../../frontend/src/components/ui/NotificationStack.vue', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    css,
+    /\.spatial-app \.notification-stack\s*\{[^}]*top: 16px;[^}]*bottom: auto;[^}]*max-height: min\(32dvh, 240px\)/,
+  );
+  assert.match(component, /aria-relevant="additions text"/);
 });

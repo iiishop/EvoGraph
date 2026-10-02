@@ -1,24 +1,39 @@
 import { computed, reactive } from 'vue';
-import type { Attachment, PendingQuestion } from '../types';
+import type { Attachment, ComposerDocument, PendingQuestion } from '../types';
+import {
+  cloneComposerDocument,
+  normalizeComposerDocument,
+  renderComposerDocument,
+  documentAttachmentIds,
+  composerFreeText,
+} from '../lib/composerDocument';
 import type { AttachmentUploadResult } from '../lib/attachmentUpload';
 
 type DraftContent = {
   text: string;
+  composerDocument?: ComposerDocument;
   ids: string[];
   questionId?: string;
   question?: Pick<PendingQuestion, 'id' | 'prompt' | 'context' | 'verification_milestone'>;
   verificationMilestone?: string;
 };
-export type DraftRequest = { text: string; questionId?: string; verificationMilestone?: string };
+export type DraftRequest = {
+  text: string;
+  composerDocument?: ComposerDocument;
+  questionId?: string;
+  verificationMilestone?: string;
+};
 export type FailedDraft = DraftContent & { id: number; restoredRevision?: number };
 type DraftEntry = {
   text: string;
+  composerDocument?: ComposerDocument;
   ids: string[];
   revision: number;
   failures: FailedDraft[];
   pending: Set<number>;
   recoveryError: string;
   composerOrigin: FailedDraft | null;
+  composerAnchor: FailedDraft | null;
   confirmedAttachments: Attachment[];
   attachmentTransfer: {
     id: number;
@@ -63,6 +78,7 @@ export function createAgentDraftStore() {
         pending: new Set(),
         recoveryError: '',
         composerOrigin: null,
+        composerAnchor: null,
         confirmedAttachments: [],
         attachmentTransfer: null,
       });
@@ -84,13 +100,18 @@ export function createAgentDraftStore() {
       // recovery item too. Other saved requests must remain recoverable.
       draft.failures = draft.failures.filter((item) => item.restoredRevision !== draft.revision);
       draft.text = '';
+      draft.composerDocument = undefined;
       draft.ids = [];
       draft.composerOrigin = null;
+      draft.composerAnchor = null;
       draft.revision++;
     }
     draft.pending.add(id);
     return {
       ...content,
+      ...(content.composerDocument
+        ? { composerDocument: cloneComposerDocument(content.composerDocument) }
+        : {}),
       ids: [...content.ids],
       question: content.question ? { ...content.question } : undefined,
       verificationMilestone:
@@ -120,6 +141,9 @@ export function createAgentDraftStore() {
     const failure: FailedDraft = {
       id: attempt.id,
       text: attempt.text,
+      ...(attempt.composerDocument
+        ? { composerDocument: cloneComposerDocument(attempt.composerDocument) }
+        : {}),
       ids: [...attempt.ids],
       questionId: attempt.questionId,
       question: attempt.question ? { ...attempt.question } : undefined,
@@ -128,9 +152,11 @@ export function createAgentDraftStore() {
     const restored = attempt.restoreRevision === draft.revision;
     if (restored) {
       draft.text = attempt.text;
+      draft.composerDocument = cloneComposerDocument(attempt.composerDocument);
       draft.ids = [...attempt.ids];
       failure.restoredRevision = ++draft.revision;
       draft.composerOrigin = failure;
+      draft.composerAnchor = failure;
     }
     draft.failures.push(failure);
     return restored;
@@ -141,7 +167,13 @@ export function createAgentDraftStore() {
     const origin = draft?.composerOrigin;
     if (!draft || !origin) return;
     if (!draft.failures.some((item) => item.id === origin.id))
-      draft.failures.push({ ...origin, ids: [...origin.ids] });
+      draft.failures.push({
+        ...origin,
+        ...(origin.composerDocument
+          ? { composerDocument: cloneComposerDocument(origin.composerDocument) }
+          : {}),
+        ids: [...origin.ids],
+      });
     return origin;
   }
 
@@ -158,10 +190,19 @@ export function createAgentDraftStore() {
       restoreRevision: useComposer ? draft.revision : failure.restoredRevision,
       failure: {
         ...failure,
+        text: useComposer ? draft.text : failure.text,
+        ...((useComposer ? draft.composerDocument : failure.composerDocument)
+          ? {
+              composerDocument: cloneComposerDocument(
+                useComposer ? draft.composerDocument : failure.composerDocument,
+              ),
+            }
+          : {}),
         ids: [...(useComposer ? draft.ids : failure.ids)],
         question: failure.question ? { ...failure.question } : undefined,
       },
     };
+    if (useComposer && !draft.composerDocument) delete preparation.failure.composerDocument;
     draft.pending.add(preparation.id);
     preparations.set(preparation.id, preparation);
     return preparation;
@@ -189,8 +230,10 @@ export function createAgentDraftStore() {
     // The old answer remains in recovery, rather than becoming an implicit
     // answer to a different current question. Never clear a newer edit.
     draft.text = '';
+    draft.composerDocument = undefined;
     if (failure.restoredRevision === draft.revision) draft.ids = [];
     draft.composerOrigin = null;
+    draft.composerAnchor = null;
     draft.revision++;
     failure.restoredRevision = undefined;
   }
@@ -239,7 +282,8 @@ export function createAgentDraftStore() {
         ...draft.confirmedAttachments.filter((item) => item.id !== asset.id),
         { ...asset, excerpt: '' },
       ];
-      if (!draft.ids.includes(asset.id) && draft.ids.length < limit) {
+      const referenced = new Set([...draft.ids, ...documentAttachmentIds(draft.composerDocument)]);
+      if (!draft.ids.includes(asset.id) && (referenced.has(asset.id) || referenced.size < limit)) {
         draft.ids = [...draft.ids, asset.id];
         draft.revision++;
       }
@@ -279,11 +323,34 @@ export function createAgentDraftStore() {
         preparation.entry.failures = preparation.entry.failures.filter(
           (item) => item.id !== preparation.failure.id,
         );
-        attempt.request = { ...request };
+        attempt.request = {
+          ...request,
+          ...(request.composerDocument
+            ? { composerDocument: cloneComposerDocument(request.composerDocument) }
+            : {}),
+        };
       }
       return attempt;
     },
     settle,
+    // Keep this owner even while its project is offscreen. Deletion/restore
+    // replaces the entry, so a late receipt cannot touch the new incarnation.
+    captureOwner: (projectId: string) => {
+      const draft = entry(projectId);
+      return () => Boolean(draft && entries.get(projectId) === draft);
+    },
+    confirmDelivered: (attempt: DraftAttempt) => {
+      const draft = entries.get(attempt.projectId);
+      if (draft !== attempt.entry) return;
+      const pending = draft.pending.delete(attempt.id);
+      const recovered = draft.failures.some((item) => item.id === attempt.id);
+      if (!pending && !recovered) return;
+      draft.failures = draft.failures.filter((item) => item.id !== attempt.id);
+      if (recovered && !draft.failures.length) draft.recoveryError = '';
+      // Retain every current composer edit, including restored text, and its
+      // question provenance. Untouched Send still passes through retry checks;
+      // removing that anchor could silently bind an old answer to a new question.
+    },
     discard,
     activate: (projectId: string) => {
       deleted.delete(projectId);
@@ -309,7 +376,33 @@ export function createAgentDraftStore() {
           const draft = entry(projectId());
           if (!draft || draft.text === text) return;
           draft.text = text;
-          draft.composerOrigin = null;
+          draft.composerDocument = undefined;
+          const anchor = draft.composerAnchor;
+          draft.composerOrigin =
+            anchor &&
+            composerFreeText(undefined, text) ===
+              composerFreeText(anchor.composerDocument, anchor.text)
+              ? anchor
+              : null;
+          draft.revision++;
+        },
+      }),
+      composerDocument: computed({
+        get: () => cloneComposerDocument(entry(projectId())?.composerDocument),
+        set: (value: ComposerDocument | undefined) => {
+          const draft = entry(projectId());
+          if (!draft) return;
+          const next = value ? normalizeComposerDocument(value) : undefined;
+          if (JSON.stringify(next) === JSON.stringify(draft.composerDocument)) return;
+          draft.composerDocument = cloneComposerDocument(next);
+          draft.text = next ? renderComposerDocument(next) : draft.text;
+          const anchor = draft.composerAnchor;
+          draft.composerOrigin =
+            anchor &&
+            composerFreeText(next, draft.text) ===
+              composerFreeText(anchor.composerDocument, anchor.text)
+              ? anchor
+              : null;
           draft.revision++;
         },
       }),

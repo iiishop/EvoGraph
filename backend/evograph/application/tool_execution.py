@@ -26,9 +26,10 @@ async def _drain_worker(task: asyncio.Task) -> None:
 
 
 class ToolExecutor:
-    def __init__(self, context, registry):
+    def __init__(self, context, registry, *, compact_snapshots=False):
         self.context = context
         self.registry = registry
+        self.compact_snapshots = compact_snapshots
         self.changed = False
         self.calls_used = 0
         self.seen_results = set()
@@ -59,7 +60,9 @@ class ToolExecutor:
                     "view": "graph",
                     **result,
                     "label": spec.label,
-                    "project": self.context.application.projects.get(self.context.project_id),
+                    "project": self.context.application.projects.get(
+                        self.context.project_id, include_history=not self.compact_snapshots
+                    ),
                 }
             elif spec.effect == "question":
                 event = {"type": "question", **result}

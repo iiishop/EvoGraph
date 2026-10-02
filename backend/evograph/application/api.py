@@ -49,11 +49,14 @@ class Application:
         # A service method is registered once. HTTP and pywebview share this table.
         operations = {
             "projects.list": self.projects.list,
+            "projects.list_archived": self.projects.list_archived,
             "projects.create": self.projects.create,
+            "projects.create_with_outcome": self.projects.create_with_outcome,
             "projects.get": self.projects.get,
             "projects.update": self.projects.update,
             "projects.delete": self.projects.delete,
             "projects.restore": self.projects.restore,
+            "projects.restore_archived": self.projects.restore_archived,
             "projects.bootstrap": self.bootstrap,
             "projects.demo": self.demo,
             "settings.get": self.settings.get,
@@ -61,10 +64,13 @@ class Application:
             "settings.test": self.settings.test,
             "research.settings": self.research.settings,
             "research.configure": self.research.configure,
+            "research.configure_search": self.research.configure_search,
+            "research.configure_vision": self.research.configure_vision,
             "attachments.upload": self.attachments.upload,
             "attachments.read": self.attachments.read,
             "attachments.formats": self.attachments.formats,
             "references.list": self.references.list,
+            "references.catalog": self.references.catalog,
             "design.update": self.design.update,
             "design.diagram": self.design.save_diagram,
             "architecture.class_detail": self.uml.class_detail,
@@ -109,11 +115,14 @@ class Application:
         lock = None
         readonly = action in {
             "projects.list",
+            "projects.list_archived",
             "projects.get",
             "settings.get",
+            "research.settings",
             "uml.preview",
             "architecture.class_detail",
             "references.list",
+            "references.catalog",
             "agent.turn_result",
         }
         if not readonly:

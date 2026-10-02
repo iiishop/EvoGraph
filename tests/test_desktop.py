@@ -70,3 +70,26 @@ def test_desktop_cancellation_delivers_snapshot_after_partial_changes_are_saved(
     assert final["summary"]["status"] == "stopped"
     assert final["project"]["milestones"][0]["title"] == "Committed before stop completed"
     assert final["project"]["revision"] == app.db.get(planned.id).revision
+
+
+def test_desktop_stream_forwards_compact_negotiation_on_one_admission(app, planned):
+    delivered = threading.Event()
+    requests = []
+
+    class Window:
+        def evaluate_js(self, script):
+            if '"type": "done"' in script:
+                delivered.set()
+
+    async def stream(**params):
+        requests.append(params)
+        yield {"type": "done", "changed": False}
+
+    app.agent.stream = stream
+    bridge = DesktopBridge(app)
+    bridge._window = Window()
+    bridge.start_agent(
+        "compact", {"project_id": planned.id, "content": "test", "snapshot_mode": "compact-v1"}
+    )
+    assert delivered.wait(3)
+    assert len(requests) == 1 and requests[0]["snapshot_mode"] == "compact-v1"

@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -11,18 +16,36 @@ import ts from 'typescript';
 const require = createRequire(import.meta.url);
 const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 const transpile = (code) =>
-  ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-const turnSummaryUrl = moduleUrl(transpile(readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8')));
+  ts
+    .transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
+const turnSummaryUrl = moduleUrl(
+  transpile(
+    readFileSync(new URL('../../frontend/src/lib/turnSummary.ts', import.meta.url), 'utf8'),
+  ),
+);
 const imports = {
+  [composerDocumentUrl]: composerDocumentUrl,
+  '../../lib/composerDocument': composerDocumentUrl,
+  './ComposerEditor.vue': composerEditorStubUrl,
+  './MessageContent.vue': messageContentStubUrl,
   '../../lib/turnSummary': turnSummaryUrl,
   '../../lib/agentRetry': moduleUrl(
-    transpile(readFileSync(new URL('../../frontend/src/lib/agentRetry.ts', import.meta.url), 'utf8')),
+    transpile(
+      readFileSync(new URL('../../frontend/src/lib/agentRetry.ts', import.meta.url), 'utf8'),
+    ),
   ),
   '../../composables/useAgentDrafts': moduleUrl(
     transpile(
-      readFileSync(new URL('../../frontend/src/composables/useAgentDrafts.ts', import.meta.url), 'utf8'),
+      readFileSync(
+        new URL('../../frontend/src/composables/useAgentDrafts.ts', import.meta.url),
+        'utf8',
+      ),
     ).replace("from 'vue'", `from ${JSON.stringify(pathToFileURL(require.resolve('vue')).href)}`),
   ),
   vue: pathToFileURL(require.resolve('vue')).href,
@@ -34,7 +57,9 @@ const imports = {
   '../../composables/useAgent': moduleUrl(`export const agent = {
     state: { running: false, projectId: '', label: '', follow: {} }, send: async () => true, stop() {}
   }; export const useAgent = () => agent;`),
-  '../../api/client': moduleUrl('export const command = async () => ({ items: [] });'),
+  '../../api/client': moduleUrl(
+    'export class CommandError extends Error {} export const command = async () => ({ items: [] });',
+  ),
   '../../composables/useBaseline': moduleUrl(
     'export const useBaseline = () => ({ refresh() {} });',
   ),
@@ -52,9 +77,29 @@ const imports = {
     ).replace("'./turnSummary'", JSON.stringify(turnSummaryUrl)),
   ),
 };
+imports['../../composables/useProjectForm'] = moduleUrl(
+  transpile(
+    readFileSync(
+      new URL('../../frontend/src/composables/useProjectForm.ts', import.meta.url),
+      'utf8',
+    ),
+  ).replace(
+    /from (['"])([^'"]+)\1/g,
+    (_, quote, name) =>
+      `from ${JSON.stringify(
+        {
+          vue: imports.vue,
+          '../api/client': imports['../../api/client'],
+          './useWorkspace': imports['../../composables/useWorkspace'],
+        }[name],
+      )}`,
+  ),
+);
 for (const name of [
   './AgentQuestion.vue',
+  '../attachments/AttachmentReceipt.vue',
   './AgentTurnSummary.vue',
+  './AgentReviewTray.vue',
   '../graph/FollowAgentButton.vue',
   '../attachments/AttachmentPicker.vue',
   './ReferenceMentionPicker.vue',
@@ -63,6 +108,7 @@ for (const name of [
   '../design/DiagramView.vue',
   '../design/UmlView.vue',
   './TaskWorkflow.vue',
+  '../agent/AgentTurnSummary.vue',
 ]) {
   imports[name] = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 }
@@ -75,13 +121,21 @@ async function component(path) {
     assert.ok(imports[name], `Unexpected component dependency: ${name}`);
     return `from ${JSON.stringify(imports[name])}`;
   });
-  return (await import(moduleUrl(compiled))).default;
+  const compiledUrl = moduleUrl(compiled);
+  if (path === 'agent/AgentReviewTray') imports['./AgentReviewTray.vue'] = compiledUrl;
+  return (await import(compiledUrl)).default;
 }
 const MilestoneInspector = await component('graph/MilestoneInspector');
+const SourceInspector = await component('graph/SourceInspector');
 const ProjectDialog = await component('projects/ProjectDialog');
+imports['../graph/BaselineMilestoneStatus.vue'] = moduleUrl(
+  'export default { inheritAttrs: false, render() { return null; } };',
+);
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const EvidencePanel = await component('workspace/EvidencePanel');
+await component('agent/AgentReviewTray');
 const AgentDock = await component('agent/AgentDock');
+const AgentQuestion = await component('agent/AgentQuestion');
 const { workspace } = await import(imports['../../composables/useWorkspace']);
 const { agent } = await import(imports['../../composables/useAgent']);
 const render = (view, props) => renderToString(createSSRApp(view, props));
@@ -99,7 +153,9 @@ const project = (overrides) => ({
   evidence_validity: {},
   messages: [],
   events: [],
-  source_milestones: [], diagrams: [], attachments: [],
+  source_milestones: [],
+  diagrams: [],
+  attachments: [],
   ...overrides,
 });
 const evidence = (overrides) => ({
@@ -251,24 +307,44 @@ test('legacy and malformed evidence remain inspectable', async () => {
   assert.match(local, /all tests passed/);
 });
 
-test('agent conversation previews the latest assistant response and retains the transcript', async () => {
+test('pending reply preview stays truthful and keeps every saved message in its floating reader', async () => {
+  const context = {};
+  const html = await renderToString(
+    createSSRApp(AgentDock, {
+      project: project({
+        messages: [
+          { id: '1', role: 'assistant', content: '旧回复' },
+          { id: '2', role: 'user', content: '继续调整' },
+          { id: '3', role: 'assistant', content: '最新回复：规划已更新' },
+          { id: '4', role: 'user', content: '还有一个问题' },
+        ],
+      }),
+    }),
+    context,
+  );
+  const preview = html.match(/class="review-tile-preview"[^>]*>([\s\S]*?)<\/span>/)?.[1] || '';
+  assert.match(preview, /尚无新回复.*查看已保存的对话/);
+  assert.doesNotMatch(preview, /旧回复|最新回复：规划已更新|还有一个问题/);
+  const reader = context.teleports?.body || '';
+  assert.match(reader, /aria-label="项目对话记录"/);
+  for (const content of ['旧回复', '继续调整', '最新回复：规划已更新', '还有一个问题']) {
+    assert.ok(reader.includes(content));
+  }
+});
+
+test('reply tile previews the latest saved assistant text when no newer user request is waiting', async () => {
   const html = await render(AgentDock, {
     project: project({
       messages: [
-        { id: '1', role: 'assistant', content: '旧回复' },
-        { id: '2', role: 'user', content: '继续调整' },
-        { id: '3', role: 'assistant', content: '最新回复：规划已更新' },
-        { id: '4', role: 'user', content: '还有一个问题' },
+        { id: 'old', role: 'assistant', content: '旧回复' },
+        { id: 'request', role: 'user', content: '更新规划' },
+        { id: 'latest', role: 'assistant', content: '最新回复：规划已更新' },
       ],
     }),
   });
-  const summary = html.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(summary, /最新回复：规划已更新/);
-  assert.doesNotMatch(summary, /旧回复|还有一个问题/);
-  assert.match(html, /aria-label="项目对话记录"/);
-  for (const content of ['旧回复', '继续调整', '最新回复：规划已更新', '还有一个问题']) {
-    assert.ok(html.includes(content));
-  }
+  const preview = html.match(/class="review-tile-preview"[^>]*>([\s\S]*?)<\/span>/)?.[1] || '';
+  assert.match(preview, /已保存.*最新回复：规划已更新/);
+  assert.doesNotMatch(preview, /旧回复|更新规划/);
 });
 
 test('agent completion remains visible only in the project that produced it', async () => {
@@ -288,76 +364,248 @@ test('agent send button submits the composer when clicked', async () => {
   assert.match(sendButton, /type="submit"/);
 });
 
-
 test('long milestone instructions stay collapsed inside the scrollable inspector', async () => {
   const intent = 'Long model-written task description. '.repeat(80);
   const html = await render(MilestoneInspector, {
     project: project(),
-    milestone: { id: 'M1', title: 'A long task title', intent, status: 'ready', behavior_revision_ids: [], scope: ['src/feature.ts'], dependencies: [], architecture_components: [], attachment_ids: [] },
+    milestone: {
+      id: 'M1',
+      title: 'A long task title',
+      intent,
+      status: 'ready',
+      behavior_revision_ids: [],
+      scope: ['src/feature.ts'],
+      dependencies: [],
+      architecture_components: [],
+      attachment_ids: [],
+    },
   });
   const details = html.match(/<details\b([^>]*)>([\s\S]*?)<\/details>/);
   assert.ok(details);
   assert.doesNotMatch(details[1], /\bopen\b/);
   assert.ok(details[2].includes(intent));
   assert.match(html, /class="inspector-scroll"[\s\S]*?<details/);
-  assert.doesNotMatch(html.match(/class="inspector-title"[\s\S]*?<nav/)?.[0] || '', /Long model-written/);
+  assert.doesNotMatch(
+    html.match(/class="inspector-title"[\s\S]*?<nav/)?.[0] || '',
+    /Long model-written/,
+  );
 });
 
-test('architecture compact conversation keeps the mounted composer and has an explicit expand control', async () => {
-  const html = await render(AgentDock, { project: project(), compact: true });
+test('compact conversation collapses history while keeping its natural-language composer visible', async () => {
+  const html = await render(AgentDock, {
+    project: project({ messages: [{ id: 'm1', role: 'assistant', content: '已保存的结果' }] }),
+    compact: true,
+  });
   assert.match(html, /is-collapsed/);
   assert.match(html, /展开项目对话/);
   assert.match(html, /aria-expanded="false"/);
-  assert.match(html, /<form\b[^>]*style="[^"]*display:none/);
+  assert.doesNotMatch(html, /<form\b[^>]*style="[^"]*display:none/);
   assert.match(html, /id="agent-message"/);
 });
 
 test('a pending decision stays visible even in compact architecture mode', async () => {
   const html = await render(AgentDock, {
-    project: project({ question: { id: 'Q1', prompt: '需要确认', options: [] } }), compact: true,
+    project: project({ question: { id: 'Q1', prompt: '需要确认', options: [] } }),
+    compact: true,
   });
   assert.doesNotMatch(html, /is-collapsed/);
   assert.match(html, /需要你的判断/);
-  assert.match(html, /收起项目对话/);
-  assert.match(html, /aria-expanded="true"/);
+  assert.doesNotMatch(html, /<form\b[^>]*style="[^"]*display:none/);
 });
-
 
 test('milestone detail opens on delivery planning with execution still available', async () => {
   const html = await render(MilestoneInspector, {
-    project: project({milestones: [{id: 'M0', title: 'Shared contract'}], behaviors: [{id: 'B1', behavior_key: 'feature.works', version: 1, statement: 'The outcome is reviewable'}]}),
-    milestone: {id: 'M1', title: 'Delivery', intent: 'Intent', status: 'PLANNED', scope: ['src/feature.ts'], behavior_revision_ids: ['B1'], dependencies: ['M0'], dependency_reasons: {M0: 'Consumes its contract'}, architecture_components: [], attachment_ids: []},
+    project: project({
+      milestones: [{ id: 'M0', title: 'Shared contract' }],
+      behaviors: [
+        {
+          id: 'B1',
+          behavior_key: 'feature.works',
+          version: 1,
+          statement: 'The outcome is reviewable',
+        },
+      ],
+    }),
+    milestone: {
+      id: 'M1',
+      title: 'Delivery',
+      intent: 'Intent',
+      status: 'PLANNED',
+      scope: ['src/feature.ts'],
+      behavior_revision_ids: ['B1'],
+      dependencies: ['M0'],
+      dependency_reasons: { M0: 'Consumes its contract' },
+      architecture_components: [],
+      attachment_ids: [],
+    },
   });
-  assert.match(html, /aria-pressed="true"[^>]*>交付规划/);
-  assert.match(html, /执行与验收/);
-  for (const text of ['验收标准', 'The outcome is reviewable', 'Shared contract', 'Consumes its contract', 'src/feature.ts']) assert.ok(html.includes(text));
+  assert.match(html, /<summary><strong>交付约定<\/strong>/);
+  assert.match(html, /执行与证据/);
+  for (const text of [
+    '验收标准',
+    'The outcome is reviewable',
+    'Shared contract',
+    'Consumes its contract',
+    'src/feature.ts',
+  ])
+    assert.ok(html.includes(text));
 });
 
-
 test('selecting a milestone gives detail space without unmounting the conversation', () => {
-  const source = readFileSync(new URL('../../frontend/src/components/workspace/ProjectWorkspace.vue', import.meta.url), 'utf8');
-  assert.match(source, /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/);
+  const source = readFileSync(
+    new URL('../../frontend/src/components/workspace/ProjectWorkspace.vue', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/,
+  );
   assert.equal((source.match(/<AgentDock/g) || []).length, 1);
 });
 
-test('inspector transitions preserve the viewport and respect reduced motion', () => {
-  const css = readFileSync(new URL('../../frontend/src/styles/studio.css', import.meta.url), 'utf8');
+test('inspector content stays immediate while preserving its viewport and reduced-motion colors', () => {
+  const css = readFileSync(
+    new URL('../../frontend/src/styles/studio.css', import.meta.url),
+    'utf8',
+  );
   assert.match(css, /\.inspector-scroll\s*\{\s*scrollbar-gutter: stable;/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.inspector-panel,[\s\S]*?animation: none;[\s\S]*?\.detail-tabs button\s*\{\s*transition: none;/);
-  const animation = css.match(/@keyframes inspector-reveal\s*\{([\s\S]*?)\n\}/)?.[1] || '';
-  assert.match(animation, /opacity: 0/);
-  assert.doesNotMatch(animation, /height|width|transform|margin/);
+  assert.match(
+    css,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.detail-tabs button\s*\{\s*transition: none;/,
+  );
+  // Repeated inspector navigation must not restart an entrance, even in normal motion mode.
+  assert.doesNotMatch(css, /inspector-reveal/);
+  for (const block of css.matchAll(/\.inspector-(?:panel|intent)(?:[^{}]*)\{([^{}]*)\}/g))
+    assert.doesNotMatch(block[1], /animation\s*:|transition\s*:\s*(?:opacity|transform)/);
 });
 
 test('unmapped roadmap steps stay visibly pending without claiming architecture coverage', async () => {
-  const milestone = { id: 'M1', title: 'New roadmap slice', intent: 'Plan first', status: 'PLANNED', behavior_revision_ids: [], scope: ['src/new/'], dependencies: [], architecture_components: [], attachment_ids: [] };
-  const pending = await render(MilestoneInspector, { project: project({ architectures: [{ number: 1 }] }), milestone });
+  const milestone = {
+    id: 'M1',
+    title: 'New roadmap slice',
+    intent: 'Plan first',
+    status: 'PLANNED',
+    behavior_revision_ids: [],
+    scope: ['src/new/'],
+    dependencies: [],
+    architecture_components: [],
+    attachment_ids: [],
+  };
+  const pending = await render(MilestoneInspector, {
+    project: project({ architectures: [{ number: 1 }] }),
+    milestone,
+  });
   assert.match(pending, /组件待关联/);
   assert.match(pending, /执行与验收要求仍然保留/);
-  const mapped = await render(MilestoneInspector, { project: project({ architectures: [{ number: 1 }] }), milestone: { ...milestone, architecture_components: ['existing-api'] } });
+  const mapped = await render(MilestoneInspector, {
+    project: project({ architectures: [{ number: 1 }] }),
+    milestone: { ...milestone, architecture_components: ['existing-api'] },
+  });
   assert.match(mapped, /关联组件/);
   assert.match(mapped, /existing-api/);
   assert.doesNotMatch(mapped, /组件待关联/);
-  const absent = await render(MilestoneInspector, { project: project({ architectures: [] }), milestone });
+  const absent = await render(MilestoneInspector, {
+    project: project({ architectures: [] }),
+    milestone,
+  });
   assert.doesNotMatch(absent, /组件待关联/);
+});
+
+test('long questions retain complete accessible copy and separate immediate-answer choices', async () => {
+  const prompt = '请确认字段、顺序及空值处理。'.repeat(50).slice(0, 600);
+  const context = '这些约定用于文档与验收。'.repeat(30);
+  const question = {
+    id: 'Q-long',
+    prompt,
+    context,
+    options: ['仅标题', '标题与作者', '加入年份', '加入分类', '全部字段'],
+  };
+  const html = await render(AgentQuestion, { question, answer: '标题与作者', disabled: false });
+  assert.ok(html.includes(prompt));
+  assert.ok(html.includes(context));
+  assert.match(html, /aria-describedby="question-copy-Q-long"/);
+  assert.match(html, /class="question-copy" tabindex="0" role="region" aria-label="完整问题说明"/);
+  assert.doesNotMatch(html.match(/<legend[^>]*>(.*?)<\/legend>/)?.[1] ?? '', /请确认字段/);
+  assert.equal((html.match(/title="点击即作为你的回答发送"/g) ?? []).length, 5);
+  assert.match(html, /aria-pressed="true"[^>]*[^]*?标题与作者/);
+  const blocked = await render(AgentQuestion, { question, answer: '', disabled: true });
+  assert.equal((blocked.match(/ disabled/g) ?? []).length, 5);
+});
+
+test('source inspector keeps full long explanation, contracts, paths, dependency basis and provenance', async () => {
+  const long = '完整源码说明及换行\n'.repeat(80),
+    path = 'src/' + 'long-source-reference/'.repeat(20);
+  const html = await render(SourceInspector, {
+    project: project({
+      baselines: [
+        { id: 'new', number: 2 },
+        { id: 'latest', number: 3 },
+      ],
+      source_analysis_summary: '原始推导依据',
+      source_milestones: [{ id: 'S0', title: '前置源码能力' }],
+    }),
+    milestone: {
+      id: 'S1',
+      title: '源码能力标题'.repeat(25),
+      intent: long,
+      scope: [path],
+      dependencies: ['S0'],
+      dependency_reasons: { S0: long },
+      dependency_types: { S0: 'migration' },
+      source_refs: [path],
+      source_behaviors: [{ key: 'source.behavior', statement: long, source_refs: [path] }],
+      source_baseline_id: 'old',
+    },
+  });
+  for (const value of [
+    long,
+    path,
+    '原始推导依据',
+    '前置源码能力',
+    '依据旧基线推导',
+    '不代表真实历史 PR',
+    '独立验收',
+    '不计入待交付任务',
+    '迁移前置',
+  ])
+    assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /领取任务|复制制作提示词|导入报告并更新状态/);
+});
+
+test('explanatory styles are isolated and shared evidence, activity and investigation styles remain imported', () => {
+  const base = readFileSync(
+    new URL('../../frontend/src/styles/inspector.css', import.meta.url),
+    'utf8',
+  );
+  const styles = readFileSync(new URL('../../frontend/src/styles.css', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../../frontend/src/main.ts', import.meta.url), 'utf8');
+  const focused = readFileSync(
+    new URL('../../frontend/src/styles/explanatory-inspector.css', import.meta.url),
+    'utf8',
+  );
+  for (const name of [
+    '.evidence-panel',
+    '.activity-panel',
+    '.panel-heading',
+    '.evidence-item',
+    '.evidence-body',
+    '.metric-row',
+    '.timeline',
+    '.obligation-edit',
+    '.check-box',
+    '.dependency-item',
+    '.blockers',
+  ])
+    assert.ok(base.includes(name), name);
+  assert.match(styles, /@import '\.\/styles\/inspector.css'/);
+  assert.doesNotMatch(main, /import '\.\/styles\/inspector.css'/);
+  assert.equal((main.match(/explanatory-inspector.css/g) || []).length, 1);
+  assert.match(
+    focused,
+    /\.explanatory-inspector \.inspector-title h2\s*\{[^}]*-webkit-line-clamp: unset;[^}]*overflow: visible;/,
+  );
+  assert.match(
+    focused,
+    /\.explanatory-inspector \.turn-summary-scroll\s*\{[^}]*max-height: none;[^}]*overflow: visible;/,
+  );
 });

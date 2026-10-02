@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { LoaderCircle, Plus } from 'lucide-vue-next';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { LoaderCircle, Plus, X, FilePlus2, Files, Settings2 } from 'lucide-vue-next';
 import { useAttachments } from '../../composables/useAttachments';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useNotifications } from '../../composables/useNotifications';
 import { agentDrafts, useAgentDraft } from '../../composables/useAgentDrafts';
 import type { Project } from '../../types';
 
-const props = defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project; contextKey?: string; inlineIds?: string[] }>();
+const emit = defineEmits<{ settings: [] }>();
 const selected = defineModel<string[]>({ default: () => [] });
 const { state } = useWorkspace();
 const { formats, formatError, loadFormats, uploadBatch } = useAttachments();
@@ -25,12 +26,108 @@ const available = computed(() => [
     ].map((asset) => [asset.id, asset]),
   ).values(),
 ]);
-const referenced = computed(
-  () => report.value?.assets.filter((asset) => selected.value.includes(asset.id)).length ?? 0,
+const selectedAssets = computed(() =>
+  available.value.filter((asset) => selected.value.includes(asset.id)),
 );
+const menuOpen = ref(false);
+const savedOpen = ref(false);
+const toolsAnchor = ref<HTMLElement>();
+const addButton = ref<HTMLButtonElement>();
+const toolsPanel = ref<HTMLElement>();
+let menuSequence = 0;
+let disposed = false;
+let menuAnimation: Animation | undefined;
+const motionPreference =
+  typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+function cancelMenuMotion() {
+  menuAnimation?.cancel();
+  menuAnimation = undefined;
+}
+function motionChanged(event: MediaQueryListEvent) {
+  if (event.matches) cancelMenuMotion();
+}
+async function closeMenu(restoreFocus = false) {
+  const sequence = ++menuSequence;
+  const previousFocus = typeof document !== 'undefined' ? document.activeElement : null;
+  cancelMenuMotion();
+  menuOpen.value = false;
+  savedOpen.value = false;
+  if (restoreFocus) {
+    await nextTick();
+    if (disposed || sequence !== menuSequence || menuOpen.value) return;
+    // A newer pointer/focus action outside the menu owns focus, even before
+    // this close's nextTick completes.
+    if (
+      document.activeElement === previousFocus ||
+      document.activeElement === document.body ||
+      toolsAnchor.value?.contains(document.activeElement)
+    )
+      addButton.value?.focus();
+  }
+}
+async function toggleMenu(event?: MouseEvent) {
+  if (menuOpen.value) {
+    await closeMenu(true);
+    return;
+  }
+  const sequence = ++menuSequence;
+  cancelMenuMotion();
+  menuOpen.value = true;
+  await nextTick();
+  if (disposed || sequence !== menuSequence || !menuOpen.value) return;
+  toolsPanel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  // Occasional pointer disclosure shows where the tools came from. Keyboard,
+  // assistive activation and coarse pointers keep immediate final content.
+  if (
+    event?.detail &&
+    typeof matchMedia === 'function' &&
+    matchMedia('(hover: hover) and (pointer: fine)').matches &&
+    !motionPreference?.matches
+  ) {
+    menuAnimation = toolsPanel.value?.animate?.(
+      [
+        { opacity: 0, transform: 'scale(0.97)' },
+        { opacity: 1, transform: 'scale(1)' },
+      ],
+      { duration: 180, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+    );
+  }
+}
+function outside(event: Event) {
+  if (menuOpen.value && event.target instanceof Node && !toolsAnchor.value?.contains(event.target))
+    void closeMenu();
+}
+function focusLeft(event: FocusEvent) {
+  if (event.relatedTarget instanceof Node && !toolsAnchor.value?.contains(event.relatedTarget))
+    void closeMenu();
+}
+function uploadFromMenu() {
+  input.value?.click();
+  void closeMenu(true);
+}
+function settingsFromMenu() {
+  void closeMenu();
+  emit('settings');
+}
+watch(
+  () => [props.project.id, props.contextKey],
+  () => void closeMenu(),
+);
+onMounted(() => {
+  motionPreference?.addEventListener?.('change', motionChanged);
+  if (typeof document !== 'undefined') document.addEventListener?.('pointerdown', outside);
+});
+onUnmounted(() => {
+  disposed = true;
+  menuSequence++;
+  cancelMenuMotion();
+  motionPreference?.removeEventListener?.('change', motionChanged);
+  if (typeof document !== 'undefined') document.removeEventListener?.('pointerdown', outside);
+});
 const input = ref<HTMLInputElement>();
 const LIMIT = 6;
-const atLimit = computed(() => selected.value.length >= LIMIT);
+const referencedIds = computed(() => [...new Set([...selected.value, ...(props.inlineIds ?? [])])]);
+const atLimit = computed(() => referencedIds.value.length >= LIMIT);
 onMounted(loadFormats);
 
 function normalizedFiles(files: FileList | File[]) {
@@ -115,13 +212,13 @@ async function changed(event: Event) {
   }
 }
 
-defineExpose({ acceptFiles });
+defineExpose({ acceptFiles, closeMenu });
 function toggle(id: string) {
   if (selected.value.includes(id)) {
     selected.value = selected.value.filter((x) => x !== id);
     return;
   }
-  if (atLimit.value) return;
+  if (atLimit.value && !props.inlineIds?.includes(id)) return;
   selected.value = [...selected.value, id];
 }
 </script>
@@ -136,122 +233,103 @@ function toggle(id: string) {
       aria-label="上传文档或图片"
       @change="changed"
     />
-    <small class="attachment-upload-help"
-      >所选文件上传成功后都会保存到项目；本条消息最多引用 {{ LIMIT }} 份资料内容</small
-    >
-    <button
-      type="button"
-      class="attachment-add"
-      :disabled="state.busy || uploading"
-      :aria-label="uploading ? '正在处理资料' : '添加资料'"
-      :title="
-        atLimit
-          ? `本条引用已满；所选文件上传成功后仍会保存到当前项目，最多引用 ${LIMIT} 份资料内容`
-          : `所选文件上传成功后都会保存到当前项目；每条消息最多引用 ${LIMIT} 份资料内容`
-      "
-      @click="input?.click()"
-    >
-      <LoaderCircle v-if="uploading" :size="16" class="spinning" aria-hidden="true" />
-      <Plus v-else :size="17" aria-hidden="true" />
-    </button>
-    <button
-      v-for="asset in available"
-      :key="asset.id"
-      type="button"
-      :disabled="state.busy || (atLimit && !selected.includes(asset.id))"
-      :class="['attachment-chip', { selected: selected.includes(asset.id) }]"
-      :aria-pressed="selected.includes(asset.id)"
-      :title="
-        atLimit && !selected.includes(asset.id)
-          ? '本条最多引用 6 份；资料已保存在项目中，取消一份后可选择'
-          : asset.name
-      "
-      @click="toggle(asset.id)"
-    >
-      {{ asset.media_type.startsWith('image/') ? '▧' : '≡' }} {{ asset.name }}
-    </button>
-    <small
-      v-if="selected.length"
-      class="attachment-count"
-      :title="`${selected.length}/${LIMIT} 份资料内容将在发送时提供给当前模型${atLimit ? '，已满' : ''}`"
-      >{{ selected.length }}/{{ LIMIT }}</small
-    >
+    <div v-if="selectedAssets.length" class="attachment-selection" aria-label="本条引用的项目资料">
+      <button
+        v-for="asset in selectedAssets"
+        :key="asset.id"
+        type="button"
+        class="attachment-chip selected"
+        :disabled="state.busy"
+        :aria-label="`取消引用 ${asset.name}`"
+        :title="asset.name"
+        @click="toggle(asset.id)"
+      >
+        <span class="attachment-chip-name"
+          >{{ asset.media_type.startsWith('image/') ? '▧' : '≡' }} {{ asset.name }}</span
+        ><X :size="12" aria-hidden="true" />
+      </button>
+    </div>
     <div
-      v-if="uploading || report || formatError"
-      class="attachment-upload-status"
-      role="status"
-      tabindex="0"
-      aria-label="资料上传状态"
+      ref="toolsAnchor"
+      class="attachment-tools-anchor"
+      @focusout="focusLeft"
+      @keydown.esc.stop.prevent="closeMenu(true)"
     >
-      <p v-if="uploading">
-        {{
-          attachmentTransfer?.phase === 'preparing'
-            ? '正在读取资料格式，文件尚未上传…'
-            : attachmentTransfer?.phase === 'refreshing'
-              ? '正在同步已处理的资料…'
-              : `正在处理资料（已确认 ${attachmentTransfer?.completed}/${attachmentTransfer?.total} 个文件）…`
-        }}
-      </p>
-      <template v-if="report">
-        <p v-if="report.assets.length">
-          本次已保存/复用 {{ report.assets.length }} 份资料；其中当前已引用 {{ referenced }} 份，{{
-            report.assets.length - referenced
-          }}
-          份未引用<span v-if="report.assets.length > referenced"
-            >（本条最多 {{ LIMIT }} 份，可稍后选择）</span
+      <button
+        ref="addButton"
+        type="button"
+        class="attachment-add"
+        aria-label="添加资料与工具"
+        title="添加资料与工具"
+        aria-haspopup="dialog"
+        :aria-expanded="menuOpen"
+        @click="toggleMenu"
+      >
+        <LoaderCircle v-if="uploading" :size="17" class="spinning" aria-hidden="true" /><Plus
+          v-else
+          :size="23"
+          aria-hidden="true"
+        />
+      </button>
+      <div
+        v-if="menuOpen"
+        ref="toolsPanel"
+        class="attachment-tools"
+        role="dialog"
+        aria-label="添加资料与工具"
+      >
+        <button
+          type="button"
+          class="attachment-tool"
+          :disabled="state.busy || uploading"
+          @click="uploadFromMenu"
+        >
+          <FilePlus2 :size="16" aria-hidden="true" />添加文件或图片
+        </button>
+        <button
+          type="button"
+          class="attachment-tool"
+          :aria-expanded="savedOpen"
+          @click="savedOpen = !savedOpen"
+        >
+          <Files :size="16" aria-hidden="true" />引用项目资料<small
+            >{{ referencedIds.length }}/{{ LIMIT }}</small
           >
-        </p>
-        <p v-if="report.failure">
-          {{ report.failure.status === 'not_uploaded' ? '未上传' : '未确认保存' }}「{{
-            report.failure.name
-          }}」：{{ report.failure.message }}。<span v-if="report.unattempted.length"
-            >其余 {{ report.unattempted.length }} 个文件尚未尝试。</span
+        </button>
+        <div v-if="savedOpen" class="attachment-saved-list">
+          <p v-if="!available.length">项目中还没有资料，可以先添加文件。</p>
+          <button
+            v-for="asset in available"
+            :key="asset.id"
+            type="button"
+            class="attachment-tool"
+            :disabled="
+              state.busy ||
+              (atLimit && !selected.includes(asset.id) && !inlineIds?.includes(asset.id))
+            "
+            :aria-pressed="selected.includes(asset.id)"
+            :title="
+              atLimit && !selected.includes(asset.id) && !inlineIds?.includes(asset.id)
+                ? '本条最多引用6份；资料已保存在项目中，取消一份后可选择'
+                : asset.name
+            "
+            @click="toggle(asset.id)"
           >
+            <span>{{ asset.name }}</span
+            ><small v-if="selected.includes(asset.id)">已引用</small>
+          </button>
+        </div>
+        <button type="button" class="attachment-tool" @click="settingsFromMenu">
+          <Settings2 :size="16" aria-hidden="true" />模型与工具设置
+        </button>
+        <small class="attachment-upload-help"
+          >所选文件上传成功后都会保存到项目；本条消息最多引用 {{ LIMIT }} 份资料内容</small
+        >
+        <p v-if="formatError" class="attachment-format-error" role="status">
+          {{ formatError
+          }}<button type="button" class="text-button" @click="loadFormats">重试读取格式</button>
         </p>
-        <p v-if="report.failure || report.selectionError">
-          请先检查项目资料，再重新选择未确认或尚未尝试的文件；重复文件会复用已有资料。
-        </p>
-        <details v-if="report.unattempted.length" class="attachment-unattempted">
-          <summary>查看尚未尝试的文件（{{ report.unattempted.length }}）</summary>
-          <ul>
-            <li v-for="(name, index) in report.unattempted" :key="index">{{ name }}</li>
-          </ul>
-        </details>
-        <p v-if="report.selectionError">{{ report.selectionError }}</p>
-        <p v-if="report.refresh === 'failed' || report.refresh === 'timeout'">
-          项目同步暂未完成；已确认保存的资料仍可引用。
-        </p>
-      </template>
-      <p v-if="formatError">
-        {{ formatError }}
-        <button type="button" class="text-button" @click="loadFormats">重试读取格式</button>
-      </p>
+      </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.attachment-picker {
-  max-height: min(180px, 24vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.attachment-upload-help,
-.attachment-upload-status {
-  flex-basis: 100%;
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-.attachment-unattempted li {
-  overflow-wrap: anywhere;
-}
-.attachment-upload-status p {
-  margin: 3px 0;
-  overflow-wrap: anywhere;
-}
-.attachment-upload-status {
-  max-height: 112px;
-  overflow-y: auto;
-}
-</style>

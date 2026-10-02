@@ -1,12 +1,14 @@
 import { onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { command } from '../api/client';
 import type { ClassDetailResult, UmlDiagram } from '../types';
+import { validSourceClassModel } from '../lib/sourceClassModel';
 
 export const MAX_DETAIL_COMPONENTS = 3;
 export const MAX_DETAIL_FILES = 12;
 export interface ClassDetailContext {
   key: string;
   projectId: string;
+  baselineId?: string;
   architectureRevision: number;
   componentIds: string[];
   componentFiles: Record<string, string[]>;
@@ -96,6 +98,13 @@ export function useScopedClassDetail(
     open.value = false;
     loading.value = false;
   }
+  async function reload() {
+    if (loading.value) return;
+    sequence++;
+    result.value = null;
+    error.value = '';
+    await show();
+  }
   function showSaved() {
     sequence++;
     loading.value = false;
@@ -107,7 +116,10 @@ export function useScopedClassDetail(
     if (result.value) return;
     const current = ++sequence;
     const selected = [...componentIds.value];
-    const { projectId, architectureRevision } = context();
+    const { projectId, baselineId, architectureRevision, componentFiles } = context();
+    const requestedFiles = [
+      ...new Set(filePaths.value ?? selected.flatMap((id) => componentFiles[id] ?? [])),
+    ].sort();
     loading.value = true;
     error.value = '';
     try {
@@ -125,6 +137,28 @@ export function useScopedClassDetail(
           detail.diagram.architecture_revision !== architectureRevision)
       ) {
         throw new Error('局部结构与当前模块范围不一致，请返回总览后重试。');
+      }
+      if (detail.semantic) {
+        const semantic = detail.semantic;
+        if (
+          semantic.project_id !== projectId ||
+          semantic.architecture_revision !== architectureRevision ||
+          (baselineId !== undefined && semantic.baseline_id !== baselineId) ||
+          !Array.isArray(semantic.component_ids) ||
+          !Array.isArray(semantic.files) ||
+          [...new Set(semantic.component_ids)].sort().join('\0') !==
+            [...selected].sort().join('\0') ||
+          [...new Set(semantic.files)].sort().join('\0') !== requestedFiles.join('\0') ||
+          [...new Set(detail.files)].sort().join('\0') !== requestedFiles.join('\0')
+        )
+          throw new Error('源码语义结果与当前项目、基线或文件范围不一致，请刷新后重试。');
+        if (!validSourceClassModel(semantic)) {
+          detail.semantic = undefined;
+          detail.limitations = [
+            ...detail.limitations,
+            '语义结构格式无法核验，保留标准 PlantUML 图与源码。',
+          ];
+        }
       }
       if (detail.status === 'ready' && !detail.diagram && !detail.image) {
         throw new Error('局部结构未返回可显示的图，请重试。');
@@ -149,6 +183,7 @@ export function useScopedClassDetail(
     toggleFile,
     close,
     show,
+    reload,
     showSaved,
   };
 }

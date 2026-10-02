@@ -1,0 +1,927 @@
+/* Spatial foundation. Shared tokens also reach native dialogs and popovers. */
+:root {
+  --ink: #28344b;
+  --text-secondary: #59677e;
+  --muted: #59677e;
+  --accent: #635bc3;
+  --green: #635bc3;
+  --green-dark: #5047aa;
+  --canvas: #edf1f7;
+  --surface: #fff;
+  --line: #d7dfeb;
+  --positive: #28715d;
+  --warning: #895c1c;
+  --spatial-soft: #eeebfb;
+  --spatial-shadow: 0 8px 28px #5367860a;
+  color: var(--ink);
+  background: var(--canvas);
+}
+.spatial-app {
+  background:
+    radial-gradient(ellipse at 15% 15%, #e5e6f6, transparent 60%),
+    radial-gradient(ellipse at 85% 90%, #e0f2ed, transparent 60%), #eff3f8;
+  min-height: 0;
+}
+.spatial-app .app-main {
+  min-height: 0;
+}
+.spatial-app .sidebar {
+  width: 220px;
+  flex: 0 0 220px;
+  padding: 18px 12px 12px;
+  border-right: 1px solid #d7dfeb88;
+  background: #ffffff52;
+}
+.spatial-app .brand-mark {
+  color: var(--accent);
+}
+.spatial-app .brand strong {
+  font-size: 19px;
+}
+.spatial-app .nav-item.active,
+.spatial-app .project-item.active {
+  background: #ffffffd9;
+  color: var(--accent);
+  border-color: var(--line);
+}
+.spatial-app .project-item.active::before {
+  display: none;
+}
+.spatial-app .project-item {
+  border-radius: 12px;
+}
+.spatial-app .project-name,
+.spatial-app .project-search input,
+.spatial-app .sidebar-footer {
+  color: var(--text-secondary);
+}
+.spatial-app .add-project {
+  border-radius: 10px;
+}
+.sidebar-rail {
+  width: 64px;
+  flex: 0 0 64px;
+  padding: 17px 8px;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  border-right: 1px solid #d7dfeb88;
+  background: #ffffff3d;
+}
+.sidebar-rail button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 14px;
+  color: var(--text-secondary);
+}
+.sidebar-rail button:hover,
+.sidebar-rail button.active {
+  background: #fff;
+  color: var(--accent);
+}
+.sidebar-rail .rail-brand {
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+.rail-bottom {
+  margin-top: auto;
+  display: grid;
+  gap: 10px;
+}
+html[data-sidebar='collapsed'] .spatial-app .app-main {
+  padding-left: 0;
+}
+.spatial-app .project-workspace {
+  padding: 16px 22px 18px;
+  gap: 12px;
+  background: transparent;
+  min-height: 0;
+}
+.spatial-app .graph-toolbar {
+  height: 54px;
+  min-height: 54px;
+  padding: 7px 16px;
+  gap: 16px;
+  border: 1px solid #fff;
+  border-radius: 17px;
+  background: #ffffffbf;
+  box-shadow: var(--spatial-shadow);
+}
+.workspace-brand {
+  font-size: 19px;
+  letter-spacing: -0.5px;
+  font-weight: 700;
+}
+.spatial-app .view-tabs {
+  height: 38px;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 24px;
+  background: #e7eaf0;
+  margin: 0 auto;
+}
+.spatial-app .view-tabs > button {
+  border: 0;
+  border-radius: 20px;
+  font-size: 12px;
+  padding: 0 12px;
+  color: var(--text-secondary);
+}
+.spatial-app .view-tabs > button > svg {
+  display: none;
+}
+.spatial-app .view-tabs > button.active {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: 0 2px 5px #5367860b;
+}
+.spatial-app .view-tabs > button > span {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 10px;
+}
+.spatial-app .graph-actions {
+  gap: 3px;
+}
+.spatial-app .prerequisite-label {
+  display: none;
+}
+.spatial-app .workspace-header {
+  padding: 3px 5px 0;
+  background: transparent;
+}
+.spatial-app .breadcrumb {
+  color: var(--text-secondary);
+}
+.spatial-app .breadcrumb > span {
+  color: inherit;
+}
+.spatial-app .header-local {
+  display: none;
+}
+.spatial-app .title-row {
+  margin-top: 9px;
+  gap: 16px;
+}
+.spatial-app .title-row h1 {
+  display: block;
+  font-size: 25px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spatial-app .title-row p {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.spatial-app .repository-location {
+  margin-top: 5px;
+  color: var(--text-secondary);
+}
+.spatial-app .version-strip {
+  border: 0;
+  padding: 8px 0 0;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.spatial-app .version-strip strong {
+  color: var(--ink);
+}
+.spatial-app .progress-track {
+  background: #dce4eb;
+}
+.spatial-app .progress-track > span {
+  background: var(--positive);
+}
+.spatial-app .workspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(180px, 1fr) auto;
+  grid-template-areas: 'planning' 'composer';
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+.spatial-app .workspace-detail-open {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 27vw, 360px);
+  grid-template-areas: 'planning detail' 'composer detail';
+}
+.spatial-app .workspace-body.question-active {
+  grid-template-rows: minmax(140px, 1fr) auto;
+}
+.spatial-app .planning-region {
+  grid-area: planning;
+  min-height: 0;
+  min-width: 0;
+}
+.spatial-app .planning-content {
+  border: 0;
+  margin: 0;
+  border-radius: 18px;
+  background: transparent;
+  min-height: 0;
+}
+.spatial-app .milestone-stage {
+  gap: 8px;
+}
+.spatial-app .graph-canvas {
+  border: 1px solid #d7dfeb88;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #ffffff20;
+}
+.spatial-app .vue-flow {
+  background: transparent;
+}
+.spatial-app .goal-marker {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid #d7dfeb88;
+  background: #ffffff90;
+  padding: 10px 13px;
+  color: var(--text-secondary);
+}
+.spatial-app .goal-marker strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.spatial-app .goal-marker small,
+.spatial-app .goal-counts {
+  color: var(--text-secondary);
+}
+.spatial-app .baseline-milestone-status {
+  background: #ffffffa8;
+  border-color: #d7dfeb88;
+  font-size: 11px;
+}
+.spatial-app .milestone-node {
+  width: 236px;
+  height: 150px;
+  padding: 12px 15px 9px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #cbd4e5;
+  border-radius: 13px;
+  background: #fffffffa;
+  box-shadow: 0 5px 14px #44537908;
+  outline: none;
+}
+.spatial-app .milestone-node.selected,
+.spatial-app .milestone-node.agent-focused {
+  border: 1px solid var(--accent);
+  background: #fbfaff;
+  outline: none;
+  box-shadow: 0 5px 14px #44537908;
+}
+.spatial-app .milestone-node.complete {
+  border-color: #8ab5a6;
+}
+.spatial-app .milestone-node.source-node {
+  background: #f5fbfc;
+  border-color: #8faeb9;
+}
+.spatial-app .milestone-node.source-node.selected {
+  border-color: var(--accent);
+}
+.spatial-app .milestone-node h3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.45;
+  min-height: 40px;
+  max-height: 40px;
+  margin: 8px 0 5px;
+  letter-spacing: 0;
+}
+.spatial-app .node-id {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.spatial-app .node-scope {
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.spatial-app .node-bottom {
+  margin-top: auto;
+  border-top: 0;
+  padding: 6px 0 0;
+}
+.spatial-app .node-bottom > span,
+.spatial-app .status-badge {
+  font-size: 10px;
+}
+.spatial-app .status-badge.planned {
+  color: var(--text-secondary);
+}
+.spatial-app .status-badge.planned i {
+  background: #8090a5;
+}
+.spatial-app .vue-flow__handle {
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  min-height: 7px;
+  background: #9288c6;
+  border: 2px solid white;
+}
+.spatial-app .node-agent-label {
+  background: #fff;
+  color: var(--accent);
+  border-color: var(--line);
+  font-size: 10px;
+}
+.spatial-app .vue-flow__controls {
+  border: 1px solid #fff;
+  border-radius: 22px;
+  box-shadow: var(--spatial-shadow);
+  background: #fff;
+  bottom: 13px;
+  left: 15px;
+  padding: 3px;
+}
+.spatial-app .vue-flow__controls-button {
+  width: 31px;
+  height: 31px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  fill: currentColor;
+}
+.spatial-app .edge-legend {
+  color: var(--text-secondary);
+}
+.spatial-app .edge-legend > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.spatial-app .inspector {
+  grid-area: detail;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  border: 1px solid #fff;
+  border-radius: 20px;
+  background: #ffffffec;
+  box-shadow: var(--spatial-shadow);
+  overflow: hidden;
+}
+.spatial-app .inspector > header {
+  padding: 14px 17px 5px;
+  font-size: 11px;
+}
+.spatial-app .inspector-title {
+  padding: 5px 18px 13px;
+}
+.spatial-app .inspector-title h2 {
+  font-size: 19px;
+  line-height: 1.5;
+  margin-bottom: 7px;
+}
+.spatial-app .detail-tabs {
+  padding: 3px 16px;
+  gap: 5px;
+  border: 0;
+  background: #f3f4fa;
+}
+.spatial-app .detail-tabs button {
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.spatial-app .detail-tabs button[aria-pressed='true'] {
+  background: #fff;
+  color: var(--accent);
+}
+.spatial-app .inspector-scroll {
+  padding: 0 18px 18px;
+}
+.spatial-app .scope-path {
+  color: #554d94;
+  background: #f1effb;
+}
+.spatial-app .inspector section {
+  margin-top: 15px;
+  padding-top: 15px;
+}
+.spatial-app .inspector-intent {
+  background: #f8f9fc;
+  border-radius: 10px;
+}
+.spatial-app .planning-dependencies article {
+  border-radius: 10px;
+  background: #f9fafc;
+}
+.spatial-app .architecture-workbench,
+.spatial-app .evidence-panel,
+.spatial-app .activity-panel {
+  background: #ffffffb8;
+  border-radius: 18px;
+  border: 1px solid #fff;
+}
+.spatial-app .architecture-node {
+  border-width: 1px;
+  border-radius: 13px;
+  box-shadow: 0 4px 12px #44537908;
+}
+.spatial-app .architecture-node.selected {
+  box-shadow: none;
+  border: 1px solid var(--accent);
+}
+.spatial-app .architecture-group {
+  border-width: 1px;
+  border-radius: 18px;
+}
+.spatial-app .component-passport {
+  background: #ffffffee;
+  border-left-color: var(--line);
+}
+.spatial-app .class-scope {
+  background: #f4f4fb;
+  border-radius: 12px;
+}
+.spatial-app .agent-dock {
+  grid-area: composer;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  gap: 8px;
+}
+.spatial-app .agent-dock-heading {
+  gap: 8px;
+  margin: 0;
+  min-height: 26px;
+}
+.spatial-app .agent-dock-heading strong {
+  font-size: 12px;
+}
+.spatial-app .agent-collapse-toggle {
+  min-height: 26px;
+  height: 26px;
+  border: 0;
+  background: #ffffff9c;
+  color: var(--text-secondary);
+}
+.spatial-app .agent-dock.is-collapsed {
+  padding: 0;
+}
+.spatial-app .agent-review {
+  max-height: clamp(80px, calc(100dvh - 740px), 200px);
+  min-height: 0;
+  margin: 0;
+  padding: 2px;
+}
+.spatial-app .agent-conversation,
+.spatial-app .agent-turn-summary,
+.spatial-app .attachment-receipt,
+.spatial-app .agent-recovery-card {
+  background: #ffffffb5;
+  border: 1px solid #fff;
+  border-radius: 12px;
+  margin: 0 0 8px;
+}
+.spatial-app .agent-conversation-scroll {
+  padding: 0 13px 12px;
+}
+.spatial-app .agent-conversation article.user p {
+  border-radius: 10px;
+  background: var(--spatial-soft);
+  padding: 10px 12px;
+}
+.spatial-app .attachment-receipt,
+.spatial-app .agent-recovery-card {
+  padding: 11px 13px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.spatial-app .attachment-receipt p {
+  margin: 4px 0;
+}
+.spatial-app .attachment-receipt strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+.spatial-app .inline-question {
+  border: 1px solid #fff;
+  background: #ffffffa8;
+  border-radius: 12px;
+  margin: 0 0 8px;
+  padding: 12px 14px;
+}
+.spatial-app .agent-dock > .inline-question {
+  flex-shrink: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px;
+}
+.spatial-app .agent-dock.has-question .agent-review {
+  max-height: 48px;
+}
+.spatial-app .agent-dock > .inline-question .question-options {
+  margin-top: 0;
+}
+.spatial-app .agent-dock > .inline-question .question-hint {
+  margin-top: 0;
+}
+.spatial-app .inline-question legend {
+  font-size: 14px;
+  padding: 0 4px;
+}
+.spatial-app .question-options button {
+  border-radius: 10px;
+  font-size: 12px;
+}
+.spatial-app .agent-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'assets assets' 'input input' 'tools send';
+  align-items: end;
+  gap: 0 12px;
+  flex-shrink: 0;
+  border: 1px solid #d7d7eb;
+  border-radius: 20px;
+  background: #ffffffef;
+  box-shadow: var(--spatial-shadow);
+  padding: 12px 14px 10px;
+}
+.spatial-app .agent-input:focus-within {
+  border-color: #8b80c9;
+  box-shadow: var(--spatial-shadow);
+}
+.spatial-app .agent-input textarea {
+  grid-area: input;
+  padding: 4px 4px 8px;
+  min-height: 50px;
+  max-height: min(120px, 16dvh);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.spatial-app .agent-input-footer {
+  display: contents;
+}
+.spatial-app .send-button,
+.spatial-app .stop-agent {
+  grid-area: send;
+  width: 33px;
+  height: 33px;
+  min-width: 33px;
+  padding: 0;
+  border-radius: 50%;
+  box-shadow: none;
+}
+.spatial-app .send-button:disabled {
+  background: #e6e2f3;
+  color: #867fa0;
+  opacity: 1;
+}
+.spatial-app .stop-agent {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--spatial-soft);
+  border: 0;
+}
+.spatial-app .agent-blocker {
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.spatial-app .agent-counter {
+  position: absolute;
+  right: 60px;
+  bottom: 17px;
+  font-size: 10px;
+  pointer-events: none;
+}
+.spatial-app .agent-drop-overlay {
+  inset: 0;
+  background: #f1eefbf0;
+}
+.spatial-app .attachment-picker {
+  display: contents;
+}
+.attachment-tools-anchor {
+  grid-area: tools;
+  position: relative;
+  justify-self: start;
+}
+.spatial-app .attachment-add {
+  width: 33px;
+  height: 33px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  border-radius: 50%;
+}
+.spatial-app .attachment-add:hover {
+  background: var(--spatial-soft);
+  color: var(--accent);
+}
+.attachment-selection {
+  grid-area: assets;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-height: 75px;
+  overflow: auto;
+  padding: 0 2px 7px;
+}
+.spatial-app .attachment-chip {
+  background: #f8f9fd;
+  border: 1px solid var(--line);
+  color: var(--text-secondary);
+  min-height: 28px;
+  max-width: min(260px, 100%);
+  border-radius: 8px;
+  padding: 4px 8px;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-tools {
+  transform-origin: left bottom;
+  position: absolute;
+  z-index: 70;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: min(330px, calc(100vw - 110px));
+  max-height: min(360px, 52dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 10px 30px #53678624;
+}
+.attachment-tool {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 12px;
+}
+.attachment-tool:hover,
+.attachment-tool[aria-pressed='true'] {
+  background: var(--spatial-soft);
+  color: var(--accent);
+}
+.attachment-tools .attachment-upload-help {
+  display: block;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--line);
+}
+.attachment-tools .attachment-format-error {
+  padding: 7px 10px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.attachment-saved-list {
+  border-top: 1px solid var(--line);
+  padding-top: 5px;
+  margin-top: 5px;
+}
+.attachment-saved-list p {
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.attachment-saved-list .attachment-tool span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.attachment-tool small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+.spatial-app .settings-view {
+  background: transparent;
+}
+.modal {
+  background: #fff;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 20px;
+  box-shadow: 0 20px 60px #53678626;
+}
+.modal::backdrop {
+  background: #28344b35;
+  backdrop-filter: blur(4px);
+}
+.button.secondary,
+.icon-button.bordered {
+  border-color: var(--line);
+  color: var(--text-secondary);
+}
+.button.secondary:hover:not(:disabled) {
+  background: #f3f2fb;
+}
+input,
+textarea,
+select {
+  color: var(--ink);
+  border-color: var(--line);
+}
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px #635bc318;
+}
+::-webkit-scrollbar-thumb {
+  background: #c7cfde;
+}
+@media (max-width: 1200px) {
+  .workspace-brand {
+    display: none;
+  }
+  .spatial-app .project-workspace {
+    padding: 12px 15px 14px;
+    gap: 10px;
+  }
+  .spatial-app .sidebar {
+    width: 190px;
+    flex-basis: 190px;
+  }
+  .spatial-app .graph-toolbar {
+    padding: 6px 10px;
+    gap: 8px;
+  }
+  .spatial-app .view-tabs > button {
+    padding: 0 10px;
+  }
+  .spatial-app .workspace-detail-open {
+    grid-template-columns: minmax(0, 1fr) 304px;
+    gap: 10px;
+  }
+  .spatial-app .inspector-title h2 {
+    font-size: 17px;
+  }
+  .spatial-app .detail-tabs {
+    padding: 3px 10px;
+  }
+  .spatial-app .detail-tabs button {
+    padding: 8px;
+  }
+  .spatial-app .title-row h1 {
+    font-size: 23px;
+  }
+}
+@media (max-height: 800px) {
+  .spatial-app .workspace-header {
+    padding-top: 0;
+  }
+  .spatial-app .title-row {
+    margin-top: 7px;
+  }
+  .spatial-app .title-row p {
+    -webkit-line-clamp: 1;
+  }
+  .spatial-app .version-strip {
+    padding-top: 6px;
+  }
+  .spatial-app .agent-input textarea {
+    min-height: 43px;
+  }
+  .spatial-app .goal-marker {
+    padding: 8px 12px;
+  }
+}
+@media (max-width: 760px) {
+  .sidebar-rail {
+    width: 52px;
+    flex-basis: 52px;
+    padding: 12px 4px;
+  }
+  .spatial-app .project-workspace {
+    padding: 10px;
+  }
+  .spatial-app .view-tabs {
+    margin: 0;
+    max-width: 100%;
+  }
+  .spatial-app .view-tabs > button {
+    padding: 0 9px;
+  }
+  .spatial-app .graph-toolbar {
+    flex-wrap: nowrap;
+  }
+  .spatial-app .workspace-detail-open {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(240px, 1fr) minmax(160px, 250px) auto;
+    grid-template-areas: 'planning' 'detail' 'composer';
+    overflow-y: auto;
+  }
+  .spatial-app .workspace-detail-open > .inspector {
+    position: static;
+    width: 100%;
+    max-height: 250px;
+    min-height: 160px;
+    border: 1px solid #fff;
+  }
+  .spatial-app .workspace-detail-open.question-active {
+    grid-template-rows: minmax(240px, 1fr) minmax(160px, 250px) auto;
+  }
+  .spatial-app .title-row {
+    align-items: flex-start;
+  }
+  .spatial-app .header-actions .button {
+    font-size: 0;
+    padding: 0;
+    width: 35px;
+  }
+  .spatial-app .version-strip > .target-progress {
+    margin-left: 0;
+  }
+  .spatial-app .agent-review {
+    max-height: 120px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spatial-app *,
+  .spatial-app *::before,
+  .spatial-app *::after,
+  .modal {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Reading is an explicit, instant layout choice. The bounded review yields
+   before the question and composer, which stay outside its one scroll owner. */
+.spatial-app .agent-dock.is-reading .agent-review {
+  max-height: min(38dvh, 340px);
+}
+.spatial-app .agent-dock.has-question.is-reading .agent-review {
+  max-height: min(26dvh, 220px);
+}
+@media (min-width: 761px) {
+  .spatial-app .workspace-body:has(.agent-dock.is-reading) {
+    grid-template-rows: minmax(100px, 1fr) minmax(0, auto);
+  }
+}
+/* Live graph notices belong above the workspace, never over input or Stop.
+   A long burst keeps one keyed notice; the stack itself is viewport-bounded. */
+.spatial-app .notification-stack {
+  top: 16px;
+  bottom: auto;
+  max-height: min(32dvh, 240px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

@@ -7,7 +7,7 @@ const tabs = workspaceViews;
 </script>
 <template>
   <div class="graph-toolbar">
-    <div class="view-tabs" role="tablist">
+    <div class="view-tabs" role="tablist" aria-label="项目视图">
       <button
         v-for="item in tabs"
         :key="item.id"

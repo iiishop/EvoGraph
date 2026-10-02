@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Plus, GitBranch, HardDrive, PanelLeftClose, PanelLeftOpen, X } from 'lucide-vue-next';
+import {
+  Plus,
+  GitBranch,
+  HardDrive,
+  PanelLeftClose,
+  PanelLeftOpen,
+  FolderOpen,
+  ArchiveRestore,
+  Settings2,
+  X,
+} from 'lucide-vue-next';
 import ProjectItem from './ProjectItem.vue';
 import SidebarNavItem from './SidebarNavItem.vue';
 import { useWorkspace } from '../../composables/useWorkspace';
@@ -8,7 +18,7 @@ import { navigation } from '../../lib/navigation';
 
 const { state, selectProject, setPage } = useWorkspace();
 const query = ref('');
-const collapsed = ref(localStorage.getItem('evograph.sidebar') === 'collapsed');
+const collapsed = ref(localStorage.getItem('evograph.sidebar') !== 'open');
 
 // 「我最近在哪个项目」由本机打开顺序回答，不动后端接口
 function readRecent(): string[] {
@@ -61,19 +71,52 @@ onMounted(() => {
   document.documentElement.dataset.sidebar = collapsed.value ? 'collapsed' : 'open';
 });
 
-defineEmits<{ create: [] }>();
+defineEmits<{ create: []; recover: [] }>();
 </script>
 <template>
-  <button
-    v-if="collapsed"
-    type="button"
-    class="sidebar-reopen"
-    aria-label="展开侧边栏"
-    title="展开侧边栏"
-    @click="collapsed = false"
-  >
-    <PanelLeftOpen :size="16" aria-hidden="true" />
-  </button>
+  <nav v-if="collapsed" class="sidebar-rail" aria-label="工作空间导航">
+    <button
+      class="rail-brand"
+      type="button"
+      aria-label="展开侧边栏"
+      title="展开侧边栏"
+      @click="collapsed = false"
+    >
+      <GitBranch :size="23" aria-hidden="true" />
+    </button>
+    <button
+      type="button"
+      :class="{ active: state.page === 'projects' }"
+      aria-label="选择项目"
+      title="选择项目"
+      @click="
+        setPage('projects');
+        collapsed = false;
+      "
+    >
+      <FolderOpen :size="21" aria-hidden="true" />
+    </button>
+    <button type="button" aria-label="展开项目列表" title="展开项目列表" @click="collapsed = false">
+      <PanelLeftOpen :size="20" aria-hidden="true" />
+    </button>
+    <div class="rail-bottom">
+      <button type="button" aria-label="已删除项目" title="已删除项目" @click="$emit('recover')">
+        <ArchiveRestore :size="20" aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="新建项目" title="新建项目" @click="$emit('create')">
+        <Plus :size="23" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        :class="{ active: state.page === 'settings' }"
+        aria-label="设置"
+        title="设置"
+        @click="setPage('settings')"
+      >
+        <Settings2 :size="22" aria-hidden="true" />
+      </button>
+    </div>
+  </nav>
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-mark"><GitBranch :size="20" aria-hidden="true" /></span
@@ -144,6 +187,9 @@ defineEmits<{ create: [] }>();
     </div>
     <button class="add-project" @click="$emit('create')">
       <Plus :size="15" aria-hidden="true" /> 新建项目
+    </button>
+    <button class="recover-projects" type="button" @click="$emit('recover')">
+      <ArchiveRestore :size="15" aria-hidden="true" /> 已删除项目
     </button>
     <div class="sidebar-bottom">
       <div class="sidebar-footer">

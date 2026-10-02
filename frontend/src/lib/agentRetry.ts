@@ -1,5 +1,10 @@
 import type { DraftRequest, FailedDraft } from '../composables/useAgentDrafts';
 import type { Project } from '../types';
+import {
+  trimComposerDocument,
+  normalizeComposerDocument,
+  renderComposerDocument,
+} from './composerDocument';
 
 type RetryPlan =
   | { kind: 'ready'; request: DraftRequest }
@@ -36,8 +41,12 @@ export function planAgentRetry(
       differentQuestion: true,
     };
   }
+  const document = failure.composerDocument
+    ? trimComposerDocument(failure.composerDocument)
+    : undefined;
   const request: DraftRequest = {
-    text: failure.text.trim(),
+    text: document ? renderComposerDocument(document) : failure.text.trim(),
+    ...(document ? { composerDocument: document } : {}),
     questionId: question?.id,
     verificationMilestone: question
       ? (question.verification_milestone ?? undefined)
@@ -52,7 +61,24 @@ export function planAgentRetry(
       message: `原回答关联的验收里程碑 ${request.verificationMilestone} 已不存在，未发送。原请求仍保留，请先确认当前要处理的里程碑。`,
     };
   }
-  if (failure.questionId && !question) {
+  if (failure.questionId && !question && document) {
+    const prefix = [
+      '上次回答后的处理未完成。请基于当前已保存的项目状态继续剩余工作，保留已经提交的修改，不要重放或重复已完成的操作。',
+      '原问题（恢复上下文）：',
+      JSON.stringify({
+        id: failure.questionId,
+        prompt: failure.question?.prompt ?? '原问题内容未保留，请结合项目对话记录理解。',
+        context: failure.question?.context ?? '',
+      }),
+      '原回答：',
+      '',
+    ].join('\n');
+    request.composerDocument = normalizeComposerDocument({
+      version: 1,
+      parts: [{ type: 'text', text: prefix }, ...document.parts],
+    });
+    request.text = renderComposerDocument(request.composerDocument);
+  } else if (failure.questionId && !question) {
     request.text = [
       '上次回答后的处理未完成。请基于当前已保存的项目状态继续剩余工作，保留已经提交的修改，不要重放或重复已完成的操作。',
       '原问题与回答（恢复上下文）：',

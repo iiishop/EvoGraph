@@ -3,20 +3,21 @@ import { computed, nextTick, watch, shallowRef, onBeforeUnmount } from 'vue';
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
-import { GitBranch, Maximize } from 'lucide-vue-next';
+import { Maximize } from 'lucide-vue-next';
 import MilestoneNode from './MilestoneNode.vue';
+import EmptyPlanningHandoff from '../projects/EmptyPlanningHandoff.vue';
+import { activateMilestoneKey } from '../../lib/milestoneInteraction';
 import GraphEdge from './GraphEdge.vue';
 import { layout, edgeId, type LayoutResult } from '../../composables/useGraphLayout';
-import { useWorkspace } from '../../composables/useWorkspace';
+import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
 import { fitMilestoneBounds, graphBounds, keepMilestoneVisible } from '../../lib/milestoneViewport';
-import BaselineMilestoneStatus from './BaselineMilestoneStatus.vue';
-import GoalMarker from './GoalMarker.vue';
 
 import type { Project } from '../../types';
-const props = defineProps<{ project: Project }>();
+const props = defineProps<{ project: Project; followBoundary?: WorkspaceFollowBoundary }>();
+defineEmits<{ compose: [] }>();
 const allMilestones = computed(() => [
   ...(props.project.source_milestones ?? []),
   ...props.project.milestones,
@@ -26,6 +27,13 @@ const { dimensions, setViewport, getViewport } = useVueFlow(flowId);
 const { state, selectNode, perform } = useWorkspace();
 const agent = useAgent();
 const follows = computed(() => agent.state.follow[props.project.id] !== false);
+const currentFollow = computed(
+  () =>
+    !props.followBoundary ||
+    agent.state.navigationTick > props.followBoundary.navigationTick ||
+    agent.state.pulse > props.followBoundary.pulse ||
+    props.followBoundary.resume > 0,
+);
 const computedLayout = shallowRef<LayoutResult>({
   direction: 'RIGHT',
   positions: new Map(),
@@ -91,13 +99,17 @@ const nodes = computed(() =>
     .map((m) => ({
       id: m.id,
       type: 'milestone',
+      ariaLabel: `${m.title}，按 Enter 或空格查看详情`,
       position: displayPositions.value.get(m.id)!,
       selected: state.selectedId === m.id,
       data: {
         milestone: m,
         vertical: computedLayout.value.direction === 'DOWN',
         ready: props.project.readiness[m.id]?.safe_to_execute,
-        agentFocused: agent.state.projectId === props.project.id && agent.state.focusId === m.id,
+        agentFocused:
+          currentFollow.value &&
+          agent.state.projectId === props.project.id &&
+          agent.state.focusId === m.id,
         agentActive: agent.state.running,
         updateTick:
           agent.state.projectId === props.project.id ? (agent.state.updates[m.id] ?? 0) : 0,
@@ -114,7 +126,10 @@ const edges = computed(() =>
       targetHandle: 'in',
       type: 'prerequisite',
       markerEnd: { type: MarkerType.ArrowClosed, color: edgeKind(m.dependency_types?.[dep]).color },
-      style: { stroke: edgeKind(m.dependency_types?.[dep]).color, strokeWidth: 1.7 },
+      style: {
+        stroke: edgeKind(m.dependency_types?.[dep]).color,
+        strokeWidth: state.selectedId === dep || state.selectedId === m.id ? 2.5 : 1.7,
+      },
       data: {
         kind: m.dependency_types?.[dep] ?? 'implementation',
         routeKind: allMilestones.value.some((n) => n.position) ? 'waypoints' : 'spline',
@@ -136,21 +151,33 @@ let pendingApplication = 0;
 const size = computed(() => ({ width: dimensions.value.width, height: dimensions.value.height }));
 const overview = computed(() => fitMilestoneBounds(graphBounds(boxes.value), size.value));
 const minZoom = computed(() => Math.min(0.25, (overview.value?.zoom ?? 0.02) / 2));
-const duration = (milliseconds: number) =>
-  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-    ? 0
-    : milliseconds;
+const motionPreference =
+  typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+const duration = (milliseconds: number) => (motionPreference?.matches ? 0 : milliseconds);
+function motionChanged(event: MediaQueryListEvent) {
+  if (!event.matches) return;
+  // Stop at the presentation value. Enabling reduced motion must not finish
+  // travelling to an old target, even when its promise resolves later.
+  stopCamera();
+  readableFocus = false;
+}
+motionPreference?.addEventListener?.('change', motionChanged);
 
 function applyCamera(milliseconds = 0, sequence = cameraSequence) {
   if (disposed || cameraMode === 'manual' || sequence !== cameraSequence) return;
   const current = getViewport();
   const focused = boxes.value.find((box) => box.id === focusedId);
+  // A question or expanded composer can temporarily reduce readable focus.
+  // Keep the explicit Locate/Follow target when space returns; a real gesture
+  // switches to manual mode above and continues to own its zoom unchanged.
+  const readable = focused ? fitMilestoneBounds(focused, size.value, 0.95) : null;
+  const restoreReadable = readable && readable.zoom > current.zoom + 0.00001;
   const target =
     cameraMode === 'overview'
       ? overview.value
       : focused
-        ? readableFocus
-          ? fitMilestoneBounds(focused, size.value, 0.95)
+        ? readableFocus || restoreReadable
+          ? readable
           : keepMilestoneVisible(focused, size.value, current)
         : null;
   if (!target) return;
@@ -178,8 +205,9 @@ function applyCamera(milliseconds = 0, sequence = cameraSequence) {
     });
 }
 function scheduleCamera(milliseconds = 0) {
-  const sequence = ++cameraSequence;
-  cancelAnimationFrame(frame);
+  // New intent owns the camera immediately, including the measurement frames.
+  stopCamera();
+  const sequence = cameraSequence;
   if (disposed || cameraMode === 'manual') return;
   // Inspector/composer updates and Vue Flow measurement settle before the
   // camera uses the actual remaining viewport, not the previous frame's size.
@@ -199,21 +227,32 @@ function manual() {
 function stopCamera() {
   cameraSequence++;
   cancelAnimationFrame(frame);
+  frame = 0;
   if (pendingApplication) {
     pendingApplication = 0;
     // A zero-duration transform interrupts Vue Flow's in-flight D3 transition
     // without replacing the user's current pan/zoom position.
-    void setViewport(getViewport(), { duration: 0 });
+    void setViewport(getViewport(), { duration: 0 }).catch(() => {});
   }
 }
 function fit() {
   agent.freeView(props.project.id);
   cameraMode = 'overview';
   readableFocus = false;
-  scheduleCamera(250);
+  scheduleCamera();
 }
 function initialized() {
   scheduleCamera();
+}
+function activateNodeKey(event: KeyboardEvent) {
+  activateMilestoneKey(
+    event,
+    allMilestones.value.map((milestone) => milestone.id),
+    (id) => {
+      selectNode(id);
+      locate(id);
+    },
+  );
 }
 function locate(id: string) {
   if (!allMilestones.value.some((milestone) => milestone.id === id)) return false;
@@ -221,16 +260,16 @@ function locate(id: string) {
   cameraMode = 'selected';
   focusedId = id;
   readableFocus = true;
-  scheduleCamera(220);
+  scheduleCamera();
   return true;
 }
 function follow() {
-  if (!follows.value || agent.state.projectId !== props.project.id) return;
+  if (!currentFollow.value || !follows.value || agent.state.projectId !== props.project.id) return;
   if (!allMilestones.value.some((milestone) => milestone.id === agent.state.focusId)) return;
   cameraMode = 'agent';
   focusedId = agent.state.focusId;
   readableFocus = true;
-  scheduleCamera(450);
+  scheduleCamera(200);
 }
 function moved({ event }: { event: unknown }) {
   if (event) manual();
@@ -276,10 +315,9 @@ watch(
 );
 onBeforeUnmount(() => {
   disposed = true;
-  cameraSequence++;
-  pendingApplication = 0;
+  stopCamera();
   layoutGeneration++;
-  cancelAnimationFrame(frame);
+  motionPreference?.removeEventListener?.('change', motionChanged);
 });
 if (follows.value && agent.state.projectId === props.project.id) follow();
 else if (state.selectedId) locate(state.selectedId);
@@ -297,9 +335,7 @@ defineExpose({ fit, reset, locate });
 </script>
 <template>
   <div class="milestone-stage">
-    <BaselineMilestoneStatus :project="project" />
-    <div class="graph-canvas">
-      <GoalMarker :project="project" />
+    <div class="graph-canvas" @keydown.capture="activateNodeKey">
       <VueFlow
         v-if="nodes.length"
         :id="flowId"
@@ -317,7 +353,7 @@ defineExpose({ fit, reset, locate });
         @node-click="({ node }) => selectNode(node.id)"
         @pane-click="selectNode(null)"
         @node-drag-stop="dragged"
-        ><Background :gap="20" :size="1" pattern-color="#d6dfdd" /><Controls
+        ><Background :gap="24" :size="1" pattern-color="#cdd5e4" /><Controls
           :show-interactive="false"
           position="bottom-left"
           @zoom-in="manual"
@@ -334,11 +370,12 @@ defineExpose({ fit, reset, locate });
         ><template #node-milestone="nodeProps"><MilestoneNode v-bind="nodeProps" /></template>
         <template #edge-prerequisite="edgeProps"><GraphEdge v-bind="edgeProps" /></template>
       </VueFlow>
-      <div v-else class="empty-state">
-        <span class="empty-icon"><GitBranch :size="32" /></span>
-        <h3>下一步演化，从一个目标开始</h3>
-        <p>在下方描述你的目标，让 Agent 帮你形成可执行的里程碑。</p>
-      </div>
+      <EmptyPlanningHandoff
+        v-else
+        :description="project.description"
+        :provider-available="Boolean(state.settings?.provider)"
+        @compose="$emit('compose')"
+      />
       <div v-if="nodes.length" class="edge-legend">
         <span v-for="kind in edgeKinds" :key="kind.label"
           ><i :style="{ background: kind.color }"></i>{{ kind.label }}</span

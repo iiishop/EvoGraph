@@ -1,0 +1,357 @@
+/* Project identity and view navigation share one compact surface. Project
+   metadata is a disclosure, never another permanent row above the canvas. */
+.spatial-app .workspace-chrome {
+  position: relative;
+  z-index: 25;
+  flex-shrink: 0;
+  min-width: 0;
+  border: 1px solid #ffffffed;
+  border-radius: 17px;
+  background: #ffffffbd;
+  box-shadow: var(--spatial-shadow);
+}
+.spatial-app .workspace-header.compact-projectbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 62px;
+  gap: 18px;
+  padding: 10px 15px;
+  background: transparent;
+}
+.projectbar-identity {
+  flex: 1;
+  min-width: 0;
+}
+.projectbar-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.projectbar-title h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.3px;
+}
+.projectbar-demo {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.projectbar-goal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.projectbar-goal-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--accent);
+}
+.projectbar-goal-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.projectbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.project-overview-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #ffffffb0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: 11px;
+}
+.project-overview-trigger[aria-expanded='true'] {
+  color: var(--accent);
+  background: var(--spatial-soft);
+}
+.project-overview-trigger > .expanded {
+  transform: rotate(180deg);
+}
+.projectbar-attention,
+.projectbar-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warning);
+  font-size: 10px;
+}
+.projectbar-busy {
+  color: var(--text-secondary);
+}
+.spatial-app .projectbar-connect {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 11px;
+  border-radius: 9px;
+}
+.spatial-app .projectbar-settings {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.spatial-app .workspace-chrome > .graph-toolbar {
+  min-height: 45px;
+  height: 45px;
+  padding: 4px 12px;
+  gap: 12px;
+  border: 0;
+  border-top: 1px solid #d7dfeb80;
+  border-radius: 0 0 17px 17px;
+  background: transparent;
+  box-shadow: none;
+}
+.spatial-app .workspace-chrome .view-tabs {
+  margin: 0;
+  height: 35px;
+  padding: 2px;
+  background: #e8ebf18c;
+}
+.spatial-app .workspace-chrome .view-tabs > button {
+  min-height: 30px;
+  font-size: 11px;
+  padding: 0 11px;
+}
+.project-overview {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 8px;
+  z-index: 40;
+  width: min(550px, calc(100% - 16px));
+  max-height: min(72dvh, 570px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fff;
+  box-shadow:
+    0 16px 48px #293b5b26,
+    0 3px 9px #293b5b0d;
+  color: var(--ink);
+}
+.project-overview[aria-hidden='true'] {
+  pointer-events: none;
+}
+.project-overview-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.project-overview-heading h2 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.project-overview-section {
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid #e7ebf2;
+}
+.project-overview-section h3 {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.project-overview-intro h3 {
+  font-size: 15px;
+}
+.project-overview-section p {
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin-top: 5px;
+}
+.project-overview-local,
+.project-overview-caption {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.project-overview-local {
+  display: inline-block;
+  margin-top: 7px;
+}
+.project-overview-caption {
+  margin-left: 5px;
+}
+.project-overview-acceptance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 11px;
+}
+.project-overview-progress-label {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.project-overview-progress-label strong {
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.project-overview-acceptance.achieved strong {
+  color: var(--positive);
+}
+.project-overview-acceptance .progress-track {
+  flex-shrink: 0;
+  width: 90px;
+}
+.project-overview-section .project-overview-footnote {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.project-overview-versions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.35fr;
+  gap: 8px;
+  margin: 13px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f3f5f9;
+}
+.project-overview-versions dt {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.project-overview-versions dd {
+  margin: 5px 0 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.project-overview-path {
+  color: var(--text-secondary);
+  user-select: text;
+}
+.project-overview-repository > .button {
+  margin-top: 10px;
+}
+.project-overview .source-analysis-note {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8f5ed;
+  color: #76561f;
+  font-size: 11px;
+}
+.spatial-app .project-overview .baseline-milestone-status {
+  margin-top: 12px;
+  background: #f7f9fc;
+  border-radius: 9px;
+  font-size: 11px;
+}
+.project-overview-source-summary {
+  color: var(--text-secondary);
+}
+.project-overview-enter-active,
+.project-overview-leave-active {
+  transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.project-overview-leave-active {
+  transition-duration: 125ms;
+}
+.project-overview-enter-from,
+.project-overview-leave-to {
+  opacity: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .project-overview-trigger:hover {
+    border-color: #c3bddf;
+    background: #f3f1fb;
+  }
+}
+@media (max-width: 760px) {
+  .spatial-app .workspace-header.compact-projectbar {
+    gap: 8px;
+    padding: 10px;
+  }
+  .projectbar-title h1 {
+    font-size: 16px;
+  }
+  .projectbar-attention > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .projectbar-demo {
+    display: none;
+  }
+  .projectbar-actions {
+    gap: 5px;
+  }
+  .project-overview-trigger {
+    padding: 0 8px;
+    gap: 4px;
+  }
+  .spatial-app .workspace-chrome > .graph-toolbar {
+    gap: 6px;
+    padding: 4px 7px;
+  }
+  .spatial-app .workspace-chrome .view-tabs > button {
+    padding: 0 9px;
+  }
+}
+@media (max-width: 540px) {
+  .spatial-app .workspace-header.compact-projectbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .projectbar-identity {
+    flex-basis: 100%;
+  }
+  .projectbar-actions {
+    width: 100%;
+  }
+  .projectbar-settings {
+    margin-left: auto;
+  }
+  .project-overview {
+    right: 5px;
+    width: calc(100% - 10px);
+    max-height: min(62dvh, 500px);
+    padding: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-overview-enter-active,
+  .project-overview-leave-active {
+    transition: none;
+  }
+  .project-overview-enter-from,
+  .project-overview-leave-to {
+    transform: none;
+  }
+}

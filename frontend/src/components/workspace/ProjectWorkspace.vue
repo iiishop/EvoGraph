@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useAgent } from '../../composables/useAgent';
 import WorkspaceHeader from './WorkspaceHeader.vue';
 import GraphToolbar from '../graph/GraphToolbar.vue';
@@ -8,14 +8,14 @@ import MilestoneFinder from '../graph/MilestoneFinder.vue';
 import MilestoneInspector from '../graph/MilestoneInspector.vue';
 import SourceInspector from '../graph/SourceInspector.vue';
 import { workspaceViews } from '../../lib/workspaceViews';
-import { useEntrance } from '../../composables/useEntrance';
 import AgentDock from '../agent/AgentDock.vue';
-import { useWorkspace } from '../../composables/useWorkspace';
+import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/useWorkspace';
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
 const agent = useAgent();
 function followPage() {
   if (
+    mounted &&
     agent.state.projectId === props.project.id &&
     agent.state.follow[props.project.id] !== false &&
     workspaceViews.some((v) => v.id === agent.state.view)
@@ -23,13 +23,63 @@ function followPage() {
     tab.value = agent.state.view;
 }
 function resume() {
+  if (!mounted) return;
+  followBoundary.value.resume++;
   agent.resumeFollow(props.project.id);
   followPage();
 }
 watch(() => agent.state.navigationTick, followPage);
 defineEmits<{ edit: [] }>();
-const { selected, selectNode } = useWorkspace();
+const { state, selected, selectNode, bindWorkspaceTab } = useWorkspace();
+const tabSession = computed(() => bindWorkspaceTab(props.project));
+const followBoundary = ref<WorkspaceFollowBoundary>({ navigationTick: 0, pulse: 0, resume: 0 });
+watch(
+  () => tabSession.value.key,
+  () => {
+    // An accepted incarnation/remount owns only live events after this point.
+    followBoundary.value = {
+      navigationTick: agent.state.navigationTick,
+      pulse: agent.state.pulse,
+      resume: 0,
+    };
+  },
+  { immediate: true, flush: 'sync' },
+);
+const tab = computed({
+  get: () => tabSession.value.tab.value,
+  set: (value) => {
+    if (mounted && workspaceViews.some((view) => view.id === value))
+      tabSession.value.tab.value = value;
+  },
+});
+let mounted = true;
+// Child events captured before replacement must not act on a restored/recreated project.
+const viewActions = computed(() => {
+  const key = tabSession.value.key;
+  const projectId = props.project.id;
+  const incarnation = props.project.created_at;
+  const current = () =>
+    mounted &&
+    state.page === 'projects' &&
+    state.project?.id === projectId &&
+    state.project.created_at === incarnation &&
+    tabSession.value.key === key;
+  return {
+    select: (value: string) => {
+      if (!current()) return;
+      tab.value = value;
+      agent.freeView(props.project.id);
+    },
+    resume: () => {
+      if (current()) resume();
+    },
+    locate: (id: string) => {
+      if (current()) void locate(id);
+    },
+  };
+});
 const planningContent = ref<HTMLElement>();
+const composer = ref<InstanceType<typeof AgentDock>>();
 const finderOpen = ref(false);
 function openFinder() {
   agent.freeView(props.project.id);
@@ -39,40 +89,61 @@ const milestones = computed(() => [
   ...(props.project.source_milestones ?? []),
   ...props.project.milestones,
 ]);
+let locateSequence = 0;
+onBeforeUnmount(() => {
+  mounted = false;
+  locateSequence++;
+});
 async function locate(id: string) {
-  if (!milestones.value.some((item) => item.id === id)) return;
+  if (!mounted || !milestones.value.some((item) => item.id === id)) return;
+  const sequence = ++locateSequence;
+  const projectId = props.project.id;
+  const tabKey = tabSession.value.key;
   finderOpen.value = false;
+  tab.value = 'graph';
   selectNode(id);
   agent.freeView(props.project.id);
   await nextTick();
+  if (
+    sequence !== locateSequence ||
+    tabSession.value.key !== tabKey ||
+    props.project.id !== projectId ||
+    state.project?.id !== projectId ||
+    state.selectedId !== id ||
+    tab.value !== 'graph'
+  )
+    return;
   if (planningContent.value) planningContent.value.scrollTop = 0;
   graph.value?.locate(id);
 }
-const root = ref<HTMLElement>();
-useEntrance(root);
 const activeView = computed(() => workspaceViews.find((v) => v.id === tab.value)!);
-const tab = ref('graph'),
-  graph = ref<InstanceType<typeof MilestoneGraph>>();
+const graph = ref<InstanceType<typeof MilestoneGraph>>();
 watch(tab, (value) => {
   if (value !== 'graph') finderOpen.value = false;
 });
 </script>
 <template>
-  <main ref="root" class="project-workspace">
-    <WorkspaceHeader :project="project" @edit="$emit('edit')" />
-    <section class="workspace-body" :class="{ 'architecture-active': tab === 'architecture' }">
+  <main class="project-workspace">
+    <div class="workspace-chrome">
+      <WorkspaceHeader :project="project" @edit="$emit('edit')" />
+      <GraphToolbar
+        :tab="tab"
+        :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
+        @tab="viewActions.select"
+        @find="openFinder"
+        @fit="graph?.fit()"
+        @reset="graph?.reset()"
+      />
+    </div>
+    <section
+      class="workspace-body"
+      :class="{
+        'architecture-active': tab === 'architecture',
+        'workspace-detail-open': selected && tab === 'graph',
+        'question-active': Boolean(project.question),
+      }"
+    >
       <div class="planning-region">
-        <GraphToolbar
-          :tab="tab"
-          :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
-          @tab="
-            tab = $event;
-            agent.freeView(project.id);
-          "
-          @find="openFinder"
-          @fit="graph?.fit()"
-          @reset="graph?.reset()"
-        />
         <div
           ref="planningContent"
           class="planning-content"
@@ -80,29 +151,36 @@ watch(tab, (value) => {
         >
           <component
             :is="activeView.component"
-            :key="project.id + tab"
+            :key="`${project.id}:${tabSession.key}:${tab}`"
             ref="graph"
             :project="project"
-          />
-          <component
-            :is="selected?.origin === 'source' ? SourceInspector : MilestoneInspector"
-            v-if="selected && tab === 'graph'"
-            :key="selected.id"
-            :milestone="selected"
-            :project="project"
+            v-bind="tab === 'graph' || tab === 'architecture' ? { followBoundary } : {}"
+            @compose="composer?.focus()"
           />
         </div>
       </div>
-      <AgentDock
+      <component
+        :is="selected?.origin === 'source' ? SourceInspector : MilestoneInspector"
+        v-if="selected && tab === 'graph'"
+        :key="selected.id"
+        :milestone="selected"
         :project="project"
+        @locate="viewActions.locate"
+      />
+      <AgentDock
+        ref="composer"
+        :project="project"
+        :review-owner="tabSession.key"
+        :view="tab"
         :compact="tab === 'architecture' || (tab === 'graph' && Boolean(selected))"
-        @resume="resume"
+        @resume="viewActions.resume"
+        @locate="viewActions.locate"
       />
     </section>
     <MilestoneFinder
       v-if="finderOpen && tab === 'graph'"
       :milestones="milestones"
-      @select="locate"
+      @select="viewActions.locate"
       @close="finderOpen = false"
     />
   </main>
@@ -110,7 +188,7 @@ watch(tab, (value) => {
 
 <style scoped>
 .workspace-body {
-  overflow-y: auto;
+  overflow: visible;
 }
 /* A fixed graph-canvas minimum must not overflow a shorter flex viewport. */
 .workspace-body .planning-content :deep(.milestone-stage > .graph-canvas) {
@@ -119,8 +197,7 @@ watch(tab, (value) => {
 /* On narrow windows the detail remains in flow so it cannot cover the node
    that was just located. Both the canvas and existing inspector stay usable. */
 @media (max-width: 760px) {
-  .planning-content.graph-detail-open {
-    flex-direction: column;
+  .workspace-detail-open {
     overflow-y: auto;
   }
   .graph-detail-open :deep(.milestone-stage) {
@@ -133,7 +210,7 @@ watch(tab, (value) => {
   .graph-detail-open :deep(.milestone-stage > .graph-canvas > .vue-flow) {
     min-height: 220px;
   }
-  .graph-detail-open > :deep(.inspector) {
+  .workspace-detail-open > :deep(.inspector) {
     position: static;
     width: 100%;
     flex: 1 1 220px;

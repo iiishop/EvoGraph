@@ -21,6 +21,7 @@ const imports = {
   vue: pathToFileURL(require.resolve('vue')).href,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../lib/acceptance': acceptanceUrl,
+  '../../lib/turnSummary': moduleUrl(transpile(read('lib/turnSummary.ts'))),
   '../../composables/useWorkspace': moduleUrl(
     'export const useWorkspace = () => ({ state: { busy: false }, selectNode() {} });',
   ),
@@ -34,6 +35,7 @@ for (const name of [
   '../design/DiagramView.vue',
   '../design/UmlView.vue',
   './TaskWorkflow.vue',
+  '../agent/AgentTurnSummary.vue',
 ]) {
   imports[name] = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 }
@@ -49,6 +51,9 @@ async function component(path) {
 }
 const GoalMarker = await component('graph/GoalMarker');
 const MilestoneInspector = await component('graph/MilestoneInspector');
+imports['../graph/BaselineMilestoneStatus.vue'] = moduleUrl(
+  'export default { inheritAttrs: false, render() { return null; } };',
+);
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const render = (view, props) => renderToString(createSSRApp(view, props));
 const behavior = (id, scope) => ({
@@ -195,7 +200,7 @@ test('inspector distinguishes lasting requirements from mandatory stage checks',
   assert.match(html, /S1 acceptance statement/);
   assert.match(html, /t1 · v1/);
   assert.match(html, /s1 · v1/);
-  for (const control of ['关闭节点详情', '交付规划', '执行与验收', '记录', '展开完整说明']) {
+  for (const control of ['关闭节点详情', '交付约定', '执行与证据', '变更记录', '展开完整说明']) {
     assert.ok(html.includes(control), `Missing existing control: ${control}`);
   }
 });

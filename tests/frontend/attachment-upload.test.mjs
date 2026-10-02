@@ -1,3 +1,8 @@
+import {
+  composerDocumentUrl,
+  composerEditorStubUrl,
+  messageContentStubUrl,
+} from './helpers/composer-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -12,9 +17,14 @@ const url = (code) => `data:text/javascript;base64,${Buffer.from(code).toString(
 const source = (path) =>
   readFileSync(new URL(`../../frontend/src/${path}`, import.meta.url), 'utf8');
 const compile = (code) =>
-  ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  ts
+    .transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    })
+    .outputText.replace(
+      /(['"])(?:\.\.\/lib\/|\.\/|\.\.\/\.\.\/lib\/)composerDocument\1/g,
+      JSON.stringify(composerDocumentUrl),
+    );
 const vue = pathToFileURL(require.resolve('vue')).href;
 const uploadUrl = url(compile(source('lib/attachmentUpload.ts')));
 const { uploadAttachmentBatch } = await import(uploadUrl);
@@ -145,6 +155,15 @@ class HostElement {
   click() {
     this.clicked = true;
   }
+  focus() {
+    globalThis.document.activeElement = this;
+  }
+  contains(node) {
+    return all(this).includes(node);
+  }
+  querySelector(selector) {
+    return all(this).find((node) => node.tag === 'button' && !node.disabled);
+  }
 }
 const renderer = createRenderer({
   createElement: (tag) => new HostElement(tag),
@@ -206,6 +225,10 @@ async function harness(options = {}) {
     `export const notices = []; export const useNotifications = () => ({ push: message => notices.push(message) }); // ${id}`,
   );
   const imports = {
+    [composerDocumentUrl]: composerDocumentUrl,
+    '../../lib/composerDocument': composerDocumentUrl,
+    './ComposerEditor.vue': composerEditorStubUrl,
+    './MessageContent.vue': messageContentStubUrl,
     vue,
     'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
     '../../composables/useAttachments': attachmentsUrl,
@@ -221,13 +244,31 @@ async function harness(options = {}) {
     return `from ${JSON.stringify(imports[name])}`;
   });
   const Picker = (await import(url(code))).default;
+  const receiptSource = parse(source('components/attachments/AttachmentReceipt.vue')).descriptor;
+  const receiptCode = compile(
+    compileScript(receiptSource, { id: 'attachment-receipt', inlineTemplate: true }).content,
+  ).replace(/from (['"])([^'"]+)\1/g, (_, q, name) => `from ${JSON.stringify(imports[name])}`);
+  const Receipt = (await import(url(receiptCode))).default;
   const { agentDrafts } = await import(draftsUrl),
     { workspace } = await import(workspaceUrl),
     { api } = await import(apiUrl),
     { useAttachments } = await import(attachmentsUrl);
   const { notices } = await import(noticeUrl);
   if (options.formats) api.formats = options.formats;
-  const originalReader = globalThis.FileReader;
+  const originalReader = globalThis.FileReader,
+    originalDocument = globalThis.document,
+    originalNode = globalThis.Node;
+  const domListeners = {};
+  globalThis.Node = HostElement;
+  globalThis.document = {
+    activeElement: null,
+    addEventListener: (name, fn) => {
+      domListeners[name] = fn;
+    },
+    removeEventListener: (name) => {
+      delete domListeners[name];
+    },
+  };
   const readEnv = { read: (file) => file.text() };
   globalThis.FileReader = class {
     readAsDataURL(file) {
@@ -242,6 +283,7 @@ async function harness(options = {}) {
         );
     }
   };
+  const contextKey = ref('graph');
   const projectId = ref('A'),
     shown = ref(true),
     picker = ref();
@@ -251,15 +293,22 @@ async function harness(options = {}) {
       if (!shown.value) return null;
       const current = projectId.value;
       const draft = agentDrafts.bind(() => current);
-      return h(Picker, {
-        ref: picker,
-        key: current,
-        project: projects[current],
-        modelValue: draft.attachmentIds.value,
-        'onUpdate:modelValue': (ids) => {
-          draft.attachmentIds.value = ids;
-        },
-      });
+      return h('section', {}, [
+        h(Picker, {
+          ref: picker,
+          key: current,
+          project: projects[current],
+          contextKey: contextKey.value,
+          modelValue: draft.attachmentIds.value,
+          'onUpdate:modelValue': (ids) => {
+            draft.attachmentIds.value = ids;
+          },
+        }),
+        h(Receipt, {
+          transfer: draft.attachmentTransfer.value,
+          selectedIds: draft.attachmentIds.value,
+        }),
+      ]);
     },
   });
   const root = new HostElement();
@@ -280,6 +329,24 @@ async function harness(options = {}) {
     notices,
     readEnv,
     fileInput: () => all(root).find((node) => node.tag === 'input'),
+    contextKey,
+    domListeners,
+    tools: () => all(root).find((node) => node.role === 'dialog'),
+    addButton: () => all(root).find((node) => node.class === 'attachment-add'),
+    openTools: async () => {
+      await all(root)
+        .find((node) => node.class === 'attachment-add')
+        .onClick();
+      await tick();
+    },
+    openSaved: async () => {
+      all(root)
+        .find((node) => node.tag === 'button' && textOf(node).includes('引用项目资料'))
+        .onClick();
+      await tick();
+    },
+    savedChoices: () =>
+      all(root).filter((node) => node.tag === 'button' && node['aria-pressed'] !== undefined),
     chips: () =>
       all(root).filter(
         (node) => node.tag === 'button' && String(node.class ?? '').includes('attachment-chip'),
@@ -293,6 +360,10 @@ async function harness(options = {}) {
       app.unmount();
       if (originalReader === undefined) delete globalThis.FileReader;
       else globalThis.FileReader = originalReader;
+      if (originalDocument === undefined) delete globalThis.document;
+      else globalThis.document = originalDocument;
+      if (originalNode === undefined) delete globalThis.Node;
+      else globalThis.Node = originalNode;
     },
   };
 }
@@ -300,12 +371,17 @@ async function harness(options = {}) {
 test('seven files remain saved and visible while only six contents are referenced, with honest pre-upload copy', async () => {
   const h = await harness();
   try {
+    assert.doesNotMatch(textOf(h.root), /上传成功后都会保存到项目/);
+    await h.openTools();
     assert.match(textOf(h.root), /上传成功后都会保存到项目/);
     assert.match(textOf(h.root), /最多引用 6 份资料内容/);
     await h.picker.value.acceptFiles(files(7));
     await tick();
     assert.equal(h.api.calls.filter(([action]) => action === 'attachments.upload').length, 7);
-    assert.equal(h.chips().length, 7);
+    assert.equal(h.chips().length, 6);
+    await h.openSaved();
+    assert.equal(h.savedChoices().length, 7);
+    assert.equal(h.savedChoices().at(-1).disabled, true);
     assert.deepEqual(h.draft('A').attachmentIds.value, ['A-1', 'A-2', 'A-3', 'A-4', 'A-5', 'A-6']);
     assert.match(textOf(h.root), /已保存\/复用 7 份资料/);
     assert.match(textOf(h.root), /已引用 6 份，1 份未引用/);
@@ -563,7 +639,7 @@ test('format reads are recoverable before upload without clearing existing refer
   }
 });
 
-test('partial outcomes have actionable recovery guidance and status layout stays bounded', async () => {
+test('partial outcomes retain actionable recovery guidance above the quiet input', async () => {
   const h = await harness();
   try {
     h.api.save = async () => {
@@ -574,12 +650,9 @@ test('partial outcomes have actionable recovery guidance and status layout stays
     assert.match(textOf(h.root), /请先检查项目资料/);
     assert.match(textOf(h.root), /重新选择未确认或尚未尝试的文件/);
     assert.match(textOf(h.root), /重复文件会复用已有资料/);
-    const picker = source('components/attachments/AttachmentPicker.vue');
-    assert.match(picker, /max-height: min\(180px, 24vh\)/);
-    assert.match(picker, /max-height: 112px/);
-    assert.ok(
-      picker.indexOf('class="attachment-upload-help"') < picker.indexOf('class="attachment-add"'),
-    );
+    assert.equal(h.tools(), undefined);
+    assert.equal(h.chips().length, 0);
+    assert.ok(all(h.root).some((node) => node['aria-label'] === '资料上传状态'));
   } finally {
     h.dispose();
   }
@@ -679,6 +752,56 @@ test('navigation during delayed formats retains the original project upload inte
     assert.deepEqual(h.draft('A').attachmentIds.value, ['newer-A-choice', 'A-1']);
     assert.deepEqual(h.draft('B').attachmentIds.value, ['B-choice']);
     assert.equal(h.draft('A').pending.value, false);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('tools open with disclosure, Escape restores focus, and outside/navigation close stale menus', async () => {
+  const h = await harness();
+  try {
+    assert.equal(h.tools(), undefined);
+    await h.openTools();
+    assert.equal(h.addButton()['aria-expanded'], true);
+    assert.equal(globalThis.document.activeElement.tag, 'button');
+    assert.match(textOf(h.tools()), /上传成功后都会保存到项目/);
+    const anchor = all(h.root).find((node) => node.class === 'attachment-tools-anchor');
+    await anchor.onKeydown({ key: 'Escape', stopPropagation() {}, preventDefault() {} });
+    await tick();
+    assert.equal(h.tools(), undefined);
+    assert.equal(globalThis.document.activeElement, h.addButton());
+    await h.openTools();
+    h.domListeners.pointerdown({ target: new HostElement('outside') });
+    await tick();
+    assert.equal(h.tools(), undefined);
+    await h.openTools();
+    h.contextKey.value = 'architecture';
+    await tick();
+    assert.equal(h.tools(), undefined);
+    assert.deepEqual(h.draft('A').attachmentIds.value, []);
+    assert.equal(h.api.calls.filter(([action]) => action === 'attachments.upload').length, 0);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('only selected assets occupy the input and saved assets remain selectable through tools', async () => {
+  const h = await harness();
+  try {
+    h.projects.A.attachments = [asset('one'), asset('two')];
+    await tick();
+    assert.equal(h.chips().length, 0);
+    await h.openTools();
+    await h.openSaved();
+    assert.equal(h.savedChoices().length, 2);
+    h.savedChoices()[1].onClick();
+    await tick();
+    assert.equal(h.chips().length, 1);
+    assert.deepEqual(h.draft('A').attachmentIds.value, ['two']);
+    h.chips()[0].onClick();
+    await tick();
+    assert.equal(h.chips().length, 0);
+    assert.equal(h.projects.A.attachments.length, 2);
   } finally {
     h.dispose();
   }

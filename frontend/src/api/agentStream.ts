@@ -1,9 +1,10 @@
-import type { AgentEvent } from '../types';
+import type { AgentEvent, ComposerDocument } from '../types';
 
 export async function agentStream(
   params: {
     project_id: string;
     content: string;
+    composer_document?: ComposerDocument;
     question_id?: string;
     attachment_ids?: string[];
     verification_milestone?: string;
@@ -12,6 +13,9 @@ export async function agentStream(
   signal: AbortSignal,
   cancellationTimeoutMs = 5000,
 ) {
+  // Opt in on the original request in both transports. Old servers may ignore
+  // this field and return full views; never resend a turn to negotiate.
+  const request = { ...params, snapshot_mode: 'compact-v1' as const };
   if (window.pywebview?.api) {
     const api = window.pywebview.api;
     const requestId = crypto.randomUUID();
@@ -48,7 +52,7 @@ export async function agentStream(
       };
       window.addEventListener('evograph:agent', listener);
       signal.addEventListener('abort', abort, { once: true });
-      started = api.start_agent(requestId, params);
+      started = api.start_agent(requestId, request);
       started.catch((error) => {
         cleanup();
         reject(error);
@@ -60,7 +64,7 @@ export async function agentStream(
   const response = await fetch('/api/agent/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify(request),
     signal,
   });
   if (!response.ok || !response.body) throw new Error(`Agent 连接失败（${response.status}）`);

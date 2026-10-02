@@ -125,29 +125,30 @@
   padding: 3px 6px;
   white-space: nowrap;
 }
-.node-update-flash {
-  position: absolute;
-  inset: -1px;
-  border-radius: 8px;
-  pointer-events: none;
-  animation: node-updated 1.8s ease-out both;
-  z-index: 2;
+.milestone-node .node-top {
+  gap: 8px;
 }
-@keyframes node-updated {
-  0%,
-  35% {
-    background: #3bcc9638;
-    box-shadow: 0 0 0 6px #34c79130;
-  }
-  15%,
-  55% {
-    background: #3bcc9608;
-    box-shadow: 0 0 0 2px #34c79110;
-  }
-  100% {
-    background: transparent;
-    box-shadow: none;
-  }
+.milestone-node .node-id {
+  min-width: 0;
+}
+.node-id-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Stable turn feedback: repeated events update data without restarting a flash. */
+.node-update-marker {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border: 1px solid #c8d9e6;
+  border-radius: 4px;
+  color: #395b73;
+  background: #eef4f8;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .follow-agent {
   position: absolute;
@@ -211,9 +212,6 @@
   background: #fff0eb;
 }
 @media (prefers-reduced-motion: reduce) {
-  .node-update-flash {
-    animation-duration: 0.01ms;
-  }
   .agent-live-status .live-dot {
     animation: none;
   }

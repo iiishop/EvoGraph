@@ -4,7 +4,7 @@ from ..infrastructure.repository import root_path
 from .uml_lifecycle import class_model_state
 
 
-def project_view(project, db):
+def project_view(project, db, *, include_history=True):
     data = project.model_dump()
     data["class_model_state"] = class_model_state(project)
     data["acceptance"] = acceptance(project)
@@ -29,8 +29,11 @@ def project_view(project, db):
     data["verified_behaviors"] = [
         b.id for b in project.behaviors if current_evidence(project, b.id)
     ]
-    data["messages"] = db.messages(project.id)
-    data["events"] = db.events(project.id)
+    if include_history:
+        data["messages"] = db.messages(project.id)
+        data["events"] = db.events(project.id)
+    else:
+        data["snapshot_mode"] = "compact-v1"
     return data
 
 
@@ -51,18 +54,44 @@ class ProjectService:
             for p in self.db.list_projects()
         ]
 
+    def list_archived(self):
+        """Recoverable records only; updated_at is not a deletion timestamp."""
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "repository": p.repository,
+                "is_demo": p.is_demo,
+                "milestone_count": len(p.milestones),
+                "acceptance": acceptance(p),
+                "updated_at": p.updated_at,
+            }
+            for p in self.db.list_projects(include_archived=True)
+            if p.archived
+        ]
+
     def create(self, name: str, description: str = "", repository: str = "", request_id: str = ""):
+        return self.create_with_outcome(name, description, repository, request_id).project
+
+    def create_with_outcome(
+        self, name: str, description: str = "", repository: str = "", request_id: str = ""
+    ):
         if not name.strip() or len(name) > 100:
             raise ValueError("项目名称必须为 1–100 字符")
-        if repository:
-            repository = str(root_path(repository))
-        return self.db.create(
+
+        def prepare(project):
+            if project.repository:
+                project.repository = str(root_path(project.repository))
+
+        return self.db.create_with_outcome(
             Project(
                 name=name.strip(),
                 description=description[:4000],
                 repository=repository,
                 creation_key=request_id,
-            )
+            ),
+            prepare=prepare,
         )
 
     def update(self, project_id: str, name: str, description: str, repository: str):
@@ -82,8 +111,8 @@ class ProjectService:
         p.name, p.description, p.repository = name.strip(), description[:4000], repository
         return self.db.save(p, "project_updated")
 
-    def get(self, project_id):
-        return project_view(self.db.get(project_id), self.db)
+    def get(self, project_id, *, include_history=True):
+        return project_view(self.db.get(project_id), self.db, include_history=include_history)
 
     def delete(self, project_id: str):
         project = self.db.get(project_id)
@@ -96,12 +125,25 @@ class ProjectService:
         return {"id": project.id, "deleted": True}
 
     def restore(self, project_id: str):
+        # Keep the legacy route's Project response unchanged.
+        return self._restore(project_id)[0]
+
+    def restore_archived(self, project_id: str):
+        project, restored = self._restore(project_id)
+        return {
+            "project": {**project.model_dump(), "acceptance": acceptance(project)},
+            "restored": restored,
+        }
+
+    def _restore(self, project_id: str):
         project = self.db.get(project_id)
+        if not project.archived:
+            return project, False
         for existing in self.db.list_projects():
             if project.repository and existing.repository == project.repository:
                 raise ValueError("此仓库已有活跃项目")
         project.archived = False
-        return self.db.save(project, "project_restored")
+        return self.db.save(project, "project_restored"), True
 
     def demo(self, planning):
         existing = next((p for p in self.db.list_projects() if p.is_demo), None)

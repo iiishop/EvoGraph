@@ -1,14 +1,21 @@
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal
 
-from ..domain.models import Project, now, uid
+from ..domain.models import Model, Project, now, uid
 
 
 class ConflictError(ValueError):
     pass
+
+
+class ProjectCreationResult(Model):
+    outcome: Literal["created", "reused_request", "existing_repository"]
+    project: Project
 
 
 class Database:
@@ -24,10 +31,15 @@ class Database:
                 INSERT OR IGNORE INTO schema_version VALUES(1);
                 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS message_documents(message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, document TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, created_at);
                 CREATE INDEX IF NOT EXISTS events_project ON events(project_id, created_at);
+                CREATE INDEX IF NOT EXISTS events_turn_result ON events(
+                    project_id,
+                    json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, '$.turn_id')
+                ) WHERE kind='agent_turn_finished';
             """)
 
     @contextmanager
@@ -60,13 +72,34 @@ class Database:
         return Project.model_validate_json(row[0])
 
     def create(self, project: Project) -> Project:
+        return self.create_with_outcome(project).project
+
+    def create_with_outcome(
+        self, project: Project, *, prepare: Callable[[Project], None] | None = None
+    ) -> ProjectCreationResult:
+        """Resolve identity and repository ownership in the committing transaction."""
         with self.connect() as db:
             # Serialize the uniqueness check across windows/processes, not just UI clicks.
             db.execute("BEGIN IMMEDIATE")
             existing = [
                 Project.model_validate_json(row[0])
-                for row in db.execute("SELECT payload FROM projects")
+                for row in db.execute("SELECT payload FROM projects ORDER BY rowid")
             ]
+            # A retry belongs to its original request, even when its draft now
+            # names another occupied repository. Archived identities stay
+            # archived: recovery must neither resurrect nor duplicate them.
+            for other in existing:
+                if project.creation_key and project.creation_key == other.creation_key:
+                    return ProjectCreationResult(outcome="reused_request", project=other)
+            for other in existing:
+                if project.id == other.id or (
+                    project.is_demo and other.is_demo and not other.archived
+                ):
+                    return ProjectCreationResult(outcome="reused_request", project=other)
+            # Service validation may depend on a directory that disappeared
+            # after the original commit. Only a new identity needs preparing.
+            if prepare:
+                prepare(project)
             for other in existing:
                 same_repository = (
                     project.repository
@@ -74,19 +107,15 @@ class Database:
                     and os.path.normcase(os.path.realpath(project.repository))
                     == os.path.normcase(os.path.realpath(other.repository))
                 )
-                same_request = project.creation_key and project.creation_key == other.creation_key
-                if not other.archived and (
-                    same_repository
-                    or same_request
-                    or project.id == other.id
-                    or (project.is_demo and other.is_demo)
-                ):
-                    return other
+                if not other.archived and same_repository:
+                    return ProjectCreationResult(outcome="existing_repository", project=other)
             db.execute(
                 "INSERT INTO projects VALUES(?,?,?)",
                 (project.id, project.revision, project.model_dump_json()),
             )
-        return project
+        # The context manager has committed before a caller can observe this
+        # result. No post-commit read is required to confirm the saved record.
+        return ProjectCreationResult(outcome="created", project=project)
 
     def save(self, project: Project, kind: str, detail: str = "") -> Project:
         old_revision = project.revision
@@ -126,18 +155,59 @@ class Database:
             )
         return project
 
-    def message(self, project_id: str, role: str, content: str):
+    def message(
+        self, project_id: str, role: str, content: str, composer_document: dict | None = None
+    ):
+        message_id = uid()
+        created_at = now()
         with self.connect() as db:
             db.execute(
-                "INSERT INTO messages VALUES(?,?,?,?,?)", (uid(), project_id, role, content, now())
+                "INSERT INTO messages VALUES(?,?,?,?,?)",
+                (message_id, project_id, role, content, created_at),
             )
+            if composer_document:
+                # A separate table keeps old clients' five-column inserts valid.
+                # Content and its document commit together, never partially.
+                db.execute(
+                    "INSERT INTO message_documents VALUES(?,?)",
+                    (message_id, json.dumps(composer_document, ensure_ascii=False)),
+                )
+
+        return {
+            "id": message_id,
+            "project_id": project_id,
+            "role": role,
+            "content": content,
+            "created_at": created_at,
+            "composer_document": composer_document or None,
+        }
+
+    def turn_result_detail(self, project_id: str, turn_id: str) -> str | None:
+        # Exact indexed lookup includes old receipts outside the activity window.
+        # The CASE also keeps pre-JSON legacy events safe during index migration.
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT detail FROM events WHERE project_id=? AND kind='agent_turn_finished' "
+                "AND json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, "
+                "'$.turn_id')=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (project_id, turn_id),
+            ).fetchone()
+        return row[0] if row else None
 
     def messages(self, project_id: str):
         with self.connect() as db:
             return [
-                dict(r)
+                {
+                    **dict(r),
+                    "composer_document": json.loads(r["composer_document"])
+                    if r["composer_document"]
+                    else None,
+                }
                 for r in db.execute(
-                    "SELECT * FROM messages WHERE project_id=? ORDER BY created_at", (project_id,)
+                    "SELECT m.*, d.document AS composer_document FROM messages m "
+                    "LEFT JOIN message_documents d ON d.message_id=m.id "
+                    "WHERE m.project_id=? ORDER BY m.created_at, m.rowid",
+                    (project_id,),
                 )
             ]
 

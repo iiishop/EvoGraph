@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -7,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..application.api import Application
+from ..domain.composer import ComposerDocument
 from .assets import configure_asset_types
 
 
@@ -22,6 +24,8 @@ class AgentRequest(BaseModel):
     question_id: str | None = None
     attachment_ids: list[str] = Field(default_factory=list, max_length=6)
     verification_milestone: str | None = None
+    composer_document: ComposerDocument | None = None
+    snapshot_mode: Literal["full", "compact-v1"] = "full"
 
 
 def create_app(application: Application, dist: Path | None = None):

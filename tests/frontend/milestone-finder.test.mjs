@@ -289,7 +289,7 @@ test('live title and scope edits update matching without losing a still-valid ac
 test('narrow graph details stay in flow and reduced-motion dialogs retain the existing motion safeguard', () => {
   const workspace = source('components/workspace/ProjectWorkspace.vue');
   assert.match(workspace, /@media \(max-width: 760px\)/);
-  assert.match(workspace, /\.graph-detail-open > :deep\(\.inspector\)\s*\{\s*position: static/);
+  assert.match(workspace, /\.workspace-detail-open > :deep\(\.inspector\)\s*\{\s*position: static/);
   assert.match(
     workspace,
     /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/,
@@ -309,8 +309,9 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
   globalThis.HTMLElement = HostElement;
   globalThis.document = Object.assign(new Document(), { activeElement: null });
   const workspaceUrl = url(`import { reactive, computed } from ${JSON.stringify(vue)};
-    export const data = reactive({ selectedId: null, milestones: [] });
-    export const useWorkspace = () => ({ selected: computed(() => data.milestones.find(item => item.id === data.selectedId)), selectNode: id => { data.selectedId = id; } });`);
+    export const data = reactive({ page: 'projects', selectedId: null, milestones: [], project: null });
+    const tab = reactive({ value: 'graph' });
+    export const useWorkspace = () => ({ bindWorkspaceTab: () => ({ key: 'P1', tab: computed({ get: () => tab.value, set: value => { tab.value = value; } }) }), state: data, selected: computed(() => data.milestones.find(item => item.id === data.selectedId)), selectNode: id => { data.selectedId = id; } });`);
   const viewsUrl = url(`import { h } from ${JSON.stringify(vue)};
     export const calls = []; export const graph = { inheritAttrs: false, setup(_, { expose }) { expose({ locate: id => calls.push(id) }); return () => h('graph'); } };
     export const workspaceViews = [{ id: 'graph', component: graph }]; export default graph;`);
@@ -324,7 +325,9 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
     '../../composables/useEntrance': url('export const useEntrance = () => {};'),
     '../../lib/workspaceViews': viewsUrl,
     './WorkspaceHeader.vue': stub,
-    '../agent/AgentDock.vue': stub,
+    '../agent/AgentDock.vue': url(
+      `import { h } from ${JSON.stringify(vue)}; export default { inheritAttrs: false, render() { return h('agent-dock'); } };`,
+    ),
     '../graph/MilestoneGraph.vue': viewsUrl,
     '../graph/MilestoneFinder.vue': component('components/graph/MilestoneFinder.vue'),
     '../graph/GraphToolbar.vue': url(
@@ -346,6 +349,7 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
     source_milestones: data.milestones.filter((item) => item.origin === 'source'),
     milestones: data.milestones.filter((item) => item.origin !== 'source'),
   };
+  data.project = project;
   const app = renderer.createApp(Workspace, { project }),
     root = new HostElement();
   app.mount(root);
@@ -366,6 +370,20 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
       await tick();
       assert.equal(data.selectedId, 'SRC_AUTH');
       assert.equal(all(root).find((node) => node.tag === 'source-inspector')?.id, 'SRC_AUTH');
+      const inspector = all(root).find((node) => node.tag === 'source-inspector');
+      const dock = all(root).find((node) => node.tag === 'agent-dock');
+      assert.equal(
+        inspector.parent,
+        dock.parent,
+        'inspector and stable composer share the workspace grid',
+      );
+      assert.match(String(inspector.parent.class), /workspace-body/);
+      assert.match(String(inspector.parent.class), /workspace-detail-open/);
+      assert.notEqual(
+        inspector.parent,
+        all(root).find((node) => node.tag === 'graph').parent,
+        'inspector is outside the measured graph viewport',
+      );
       assert.equal(
         all(root).some((node) => node.tag === 'plan-inspector'),
         false,

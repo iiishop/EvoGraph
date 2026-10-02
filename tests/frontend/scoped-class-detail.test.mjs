@@ -1,3 +1,4 @@
+import { browseImports } from './helpers/architecture-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -20,10 +21,12 @@ const vueUrl = pathToFileURL(require.resolve('vue')).href;
 const apiUrl = moduleUrl(
   'export const calls = []; export const command = async (...args) => { calls.push(args); return { image: "data:image/svg+xml;base64,PHN2Zy8+" }; };',
 );
+const sourceModelUrl = moduleUrl(transpile(source('lib/sourceClassModel.ts')));
 const scopedUrl = moduleUrl(
   transpile(source('composables/useScopedClassDetail.ts'))
     .replace("from 'vue'", `from ${JSON.stringify(vueUrl)}`)
-    .replace("from '../api/client'", `from ${JSON.stringify(apiUrl)}`),
+    .replace("from '../api/client'", `from ${JSON.stringify(apiUrl)}`)
+    .replace("from '../lib/sourceClassModel'", `from ${JSON.stringify(sourceModelUrl)}`),
 );
 const { useScopedClassDetail, classDetailGuidance, matchingScopedDesigns } = await import(
   scopedUrl
@@ -297,13 +300,16 @@ const agentUrl = moduleUrl(
 );
 const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 const imports = {
+  ...browseImports,
   vue: vueUrl,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../api/client': apiUrl,
+  '../../lib/sourceClassModel': sourceModelUrl,
   '../../composables/useAgent': agentUrl,
   '../../composables/useScopedClassDetail': scopedUrl,
   '../../lib/architectureRoles': moduleUrl(transpile(source('lib/architectureRoles.ts'))),
   './DiagramView.vue': stub,
+  './ArchitectureBrowser.vue': stub,
   './ArchitectureQuality.vue': stub,
   './ComponentPassport.vue': stub,
   './DiagramImage.vue': stub,
@@ -321,6 +327,7 @@ async function component(path) {
   const url = moduleUrl(compiled);
   return { url, view: (await import(url)).default };
 }
+imports['./SourceClassCards.vue'] = (await component('design/SourceClassCards')).url;
 const UmlView = await component('design/UmlView');
 imports['./UmlView.vue'] = UmlView.url;
 const ArchitecturePanel = (await component('design/ArchitecturePanel')).view;
