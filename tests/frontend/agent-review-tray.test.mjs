@@ -731,6 +731,202 @@ test('availability, project change and dock collapse close only invalid readers 
   }
 });
 
+// Model real old/new DOM scroll heights; no layout engine is available in JSDOM.
+function scrollableHistory(view) {
+  const reader = view.surface().querySelector('.review-history');
+  Object.defineProperties(reader, {
+    clientHeight: { configurable: true, get: () => 180 },
+    scrollHeight: {
+      configurable: true,
+      get: () => reader.querySelectorAll('article').length * 200 + reader.textContent.length,
+    },
+  });
+  return reader;
+}
+const savedReply = (id) => ({
+  id,
+  role: 'assistant',
+  content: `Saved reply ${id}`,
+  created_at: '2026-10-02T10:00:00Z',
+});
+const replaceSnapshot = (view, changes = {}) => {
+  view.props.project = { ...JSON.parse(JSON.stringify(view.props.project)), ...changes };
+};
+
+test('same-project compact and terminal full snapshots keep the reader, old DOM, scroll and focus', async () => {
+  const view = await mount({ owner: 1, running: true });
+  try {
+    await click(view.tiles()[0], true);
+    const opening = tileMotion();
+    opening.progress = 0.4;
+    const reader = scrollableHistory(view);
+    const articles = [...reader.querySelectorAll('article')];
+    reader.scrollTop = 145;
+    const composer = view.root.querySelector('.composer');
+    composer.focus();
+    const savedMessages = view.props.project.messages;
+    // Production compact-v1 reconciliation preserves the same messages array.
+    view.props.project = { ...view.props.project, revision: 2 };
+    await flush();
+    assert.equal(view.props.project.messages, savedMessages);
+    assert.equal(visible(view), true);
+    assert.equal(reader.scrollTop, 145);
+    assert.equal(opening.cancelled, false);
+    for (const changes of [
+      { messages: [...view.props.project.messages, savedReply('4')] },
+      { revision: 3 }, // Accepted terminal full snapshot, new object and messages array.
+    ]) {
+      replaceSnapshot(view, changes);
+      await flush();
+      assert.equal(visible(view), true);
+      assert.equal(view.tiles()[0].getAttribute('aria-expanded'), 'true');
+      assert.equal(view.surface().querySelector('.review-history'), reader);
+      assert.equal(reader.scrollTop, 145);
+      assert.deepEqual([...reader.querySelectorAll('article')].slice(0, 3), articles);
+      assert.equal(document.activeElement, composer);
+      assert.equal(opening.cancelled, false, 'data refresh does not cancel the entrance');
+    }
+    view.props.running = false;
+    view.props.summary = { ...summary(), turn_id: 'T2', status: 'completed' };
+    await flush();
+    assert.equal(visible(view), true, 'terminal receipt availability cannot close the reply');
+    assert.equal(reader.scrollTop, 145);
+    assert.equal(document.activeElement, composer);
+    await finish();
+    assert.equal(visible(view), true);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('appending and replacing saved replies preserve older reading position and only follow an existing bottom', async () => {
+  const view = await mount();
+  try {
+    await click(view.tiles()[0]);
+    const reader = scrollableHistory(view);
+    for (const replace of [false, true]) {
+      for (const atBottom of [false, true]) {
+        reader.scrollTop = atBottom ? reader.scrollHeight - reader.clientHeight - 1 : 124;
+        const beforeHeight = reader.scrollHeight;
+        const id = `${replace}-${atBottom}`;
+        if (replace)
+          replaceSnapshot(view, { messages: [...view.props.project.messages, savedReply(id)] });
+        else view.props.project.messages.push(savedReply(id));
+        await flush();
+        assert.ok(reader.scrollHeight > beforeHeight, 'the simulated DOM actually grew');
+        assert.equal(visible(view), true);
+        assert.equal(reader.scrollTop, atBottom ? reader.scrollHeight - reader.clientHeight : 124);
+        assert.equal(document.activeElement, close(view), 'background data does not change focus');
+      }
+    }
+    reader.scrollTop = reader.scrollHeight - reader.clientHeight;
+    view.props.project.messages.at(-1).content += '\n\nPersisted content grew in place';
+    await flush();
+    assert.equal(reader.scrollTop, reader.scrollHeight - reader.clientHeight);
+    reader.scrollTop = 97;
+    view.props.project.messages.at(-1).content += '\n\nAnother saved paragraph';
+    await flush();
+    assert.equal(reader.scrollTop, 97);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('unrelated receipt and snapshot updates preserve either open reader without restoring focus', async () => {
+  const view = await mount({ owner: 7 });
+  try {
+    for (const index of [0, 1]) {
+      await click(view.tiles()[index]);
+      const reader = index
+        ? view.surface().querySelector('.review-receipt')
+        : scrollableHistory(view);
+      reader.scrollTop = 83;
+      const stop = view.root.querySelector('.stop');
+      stop.focus();
+      view.props.summary = { ...summary(), turn_id: 'new-receipt', status: 'failed' };
+      replaceSnapshot(view, { revision: 42 });
+      await flush();
+      assert.equal(visible(view), true);
+      assert.equal(view.tiles()[index].getAttribute('aria-expanded'), 'true');
+      assert.equal(reader.scrollTop, 83);
+      assert.equal(document.activeElement, stop);
+      await click(close(view));
+    }
+  } finally {
+    view.dispose();
+  }
+});
+
+test('explicit close wins over background saved replies during and after the closing transition', async () => {
+  const view = await mount();
+  try {
+    await click(view.tiles()[0]);
+    const reader = scrollableHistory(view);
+    reader.scrollTop = reader.scrollHeight - reader.clientHeight;
+    const top = reader.scrollTop;
+    await click(close(view), true);
+    const closing = tileMotion();
+    closing.progress = 0.4;
+    const composer = view.root.querySelector('.composer');
+    composer.focus();
+    replaceSnapshot(view, { messages: [...view.props.project.messages, savedReply('closed')] });
+    await flush();
+    assert.equal(closing.cancelled, false, 'snapshot does not interrupt closing');
+    assert.equal(view.tiles()[0].getAttribute('aria-expanded'), 'false');
+    assert.equal(reader.scrollTop, top, 'hidden reading position does not follow');
+    await finish();
+    replaceSnapshot(view, {
+      messages: [...view.props.project.messages, savedReply('closed-again')],
+    });
+    await flush();
+    assert.equal(visible(view), false);
+    assert.equal(reader.scrollTop, top);
+    assert.equal(document.activeElement, composer);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('reduced motion preserves an open bottom-following reader across immutable message snapshots', async () => {
+  const view = await mount();
+  try {
+    media.matches = true;
+    await click(view.tiles()[0], true);
+    const reader = scrollableHistory(view);
+    reader.scrollTop = reader.scrollHeight - reader.clientHeight;
+    replaceSnapshot(view, { messages: [...view.props.project.messages, savedReply('reduced')] });
+    await flush();
+    assert.equal(visible(view), true);
+    assert.equal(reader.scrollTop, reader.scrollHeight - reader.clientHeight);
+    assert.equal(animations.length, 0);
+    assert.equal(document.activeElement, close(view));
+  } finally {
+    view.dispose();
+  }
+});
+
+test('queued bottom following cannot leak into another project or a recreated reader owner', async () => {
+  const view = await mount({ owner: 1 });
+  try {
+    for (const identity of [{ id: 'P2' }, { created_at: '2026-10-02T12:00:00Z' }, { owner: 2 }]) {
+      await click(view.tiles()[0]);
+      const reader = scrollableHistory(view);
+      reader.scrollTop = reader.scrollHeight - reader.clientHeight;
+      view.props.project.messages.push(savedReply(`before-${JSON.stringify(identity)}`));
+      // Let the pre-flush watcher capture its old identity, but switch identity
+      // before its nextTick continuation can restore scroll.
+      await nextTick();
+      if ('owner' in identity) view.props.owner = identity.owner;
+      else replaceSnapshot(view, identity);
+      await flush();
+      assert.equal(visible(view), false);
+      assert.equal(reader.scrollTop, 0);
+    }
+  } finally {
+    view.dispose();
+  }
+});
+
 test('no-reply and receipt-only cases are factual; neither trigger exists when data is absent', async () => {
   const view = await mount({
     project: {

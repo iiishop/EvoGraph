@@ -24,6 +24,7 @@ const replyTrigger = ref<HTMLButtonElement>();
 const receiptTrigger = ref<HTMLButtonElement>();
 const layer = ref<HTMLElement>();
 const surface = ref<HTMLElement>();
+const history = ref<HTMLElement>();
 const surfaceFill = ref<HTMLElement>();
 const surfaceContent = ref<HTMLElement>();
 const surfaceHeading = ref<HTMLElement>();
@@ -326,13 +327,29 @@ function reset() {
 function reduceMotion(event: MediaQueryListEvent) {
   if (event.matches) settleNow();
 }
+watch([() => props.project.id, () => props.project.created_at, () => props.owner], () => {
+  reset();
+  for (const reader of surface.value?.querySelectorAll<HTMLElement>('.review-reader') ?? [])
+    reader.scrollTop = 0;
+});
+// A persisted snapshot replaces the Project object even when its identity is
+// unchanged. Only actual identity changes above own the reader's open/scroll state.
 watch(
-  () => [props.project.id, props.project.created_at, props.owner],
-  () => {
-    reset();
-    for (const reader of surface.value?.querySelectorAll<HTMLElement>('.review-reader') ?? [])
-      reader.scrollTop = 0;
+  () => props.project.messages,
+  async () => {
+    const reader = history.value;
+    if (active.value !== 'reply' || !reader) return;
+    // The default pre-flush sees the old DOM, before appended/replaced messages
+    // grow it. Reading older content must not follow the latest saved reply.
+    const top = reader.scrollTop;
+    const following = reader.scrollHeight - reader.clientHeight - top <= 2;
+    const token = sequence;
+    await nextTick();
+    if (!mounted || token !== sequence || active.value !== 'reply' || history.value !== reader)
+      return;
+    reader.scrollTop = following ? Math.max(0, reader.scrollHeight - reader.clientHeight) : top;
   },
+  { deep: true },
 );
 watch(() => props.project.question?.id, reset, { flush: 'sync' });
 watch(
@@ -486,6 +503,7 @@ onUnmounted(() => {
           </header>
           <div
             v-show="shown === 'reply'"
+            ref="history"
             class="review-reader review-history"
             tabindex="0"
             :aria-label="`${project.name}的对话记录`"
