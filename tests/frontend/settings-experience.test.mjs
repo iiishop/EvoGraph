@@ -1,3 +1,4 @@
+import { surfaceMotionUrl } from './helpers/surface-motion-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -294,6 +295,8 @@ const commandUrl = url(
   `export function command(action, params) { return globalThis.${harnessKey}.command(action, params); }`,
 );
 const imports = {
+    '../../composables/useSurfaceMotion': surfaceMotionUrl,
+    './composables/useSurfaceMotion': surfaceMotionUrl,
   vue: import.meta.resolve('vue'),
   'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
   '../../api/client': commandUrl,

@@ -8,6 +8,7 @@ caller passes ``--no-build``.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -74,29 +75,111 @@ def npm_command() -> list[str] | None:
     return [npm, "run", "build"]
 
 
+def _dependency_issues(project_root: Path) -> list[str]:
+    """Check installed packages, including an old but present node_modules tree.
+
+    uv only manages Python dependencies. Compare package metadata rather than
+    directory timestamps, which cannot establish that npm dependencies match a
+    newly checked-out lockfile. Missing optional packages are normal across OSes.
+    """
+    manifest_path = project_root / "package.json"
+    if not manifest_path.is_file():
+        return []  # Let npm explain a missing project manifest.
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    required = {
+        f"node_modules/{name}"
+        for group in ("dependencies", "devDependencies")
+        for name in manifest.get(group, {})
+    }
+    lock_path = project_root / "package-lock.json"
+    locked = {}
+    if lock_path.is_file():
+        locked = json.loads(lock_path.read_text(encoding="utf-8")).get("packages", {})
+    installed_lock_path = project_root / "node_modules/.package-lock.json"
+    installed_lock = {}
+    if installed_lock_path.is_file():
+        installed_lock = json.loads(installed_lock_path.read_text(encoding="utf-8")).get(
+            "packages", {}
+        )
+
+    issues = []
+    locked_manifest = locked.get("")
+    if locked_manifest is not None and any(
+        manifest.get(group, {}) != locked_manifest.get(group, {})
+        for group in ("dependencies", "devDependencies")
+    ):
+        issues.append("package.json（与 package-lock.json 不一致，请先同步依赖清单和锁文件）")
+    for name in sorted(required | locked.keys()):
+        if not name.startswith("node_modules/") or ".." in Path(name).parts:
+            continue
+        expected = locked.get(name, {})
+        if expected.get("link"):
+            continue
+        installed_path = project_root / name / "package.json"
+        if not installed_path.is_file():
+            if name in required or not expected.get("optional"):
+                issues.append(f"{name.removeprefix('node_modules/')}（缺失）")
+            continue
+        installed = json.loads(installed_path.read_text(encoding="utf-8"))
+        recorded = installed_lock.get(name, {})
+        version = expected.get("version")
+        if (version and installed.get("version") != version) or any(
+            expected.get(field) and recorded.get(field) and recorded[field] != expected[field]
+            for field in ("version", "integrity")
+        ):
+            issues.append(f"{name.removeprefix('node_modules/')}（与 package-lock.json 不一致）")
+    return issues
+
+
+def _build_output(output: str | bytes | None) -> str:
+    # TimeoutExpired can contain bytes even when subprocess.run uses text=True.
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    return (output or "").strip() or "（npm 未输出诊断信息）"
+
+
 def rebuild(project_root: Path) -> tuple[bool, str]:
     """Run the frontend build. Returns ``(ok, message)``; never raises."""
     command = npm_command()
     if command is None:
         return False, "未找到 npm，跳过前端构建（沿用现有 dist）"
+    install_command = "npm ci" if (project_root / "package-lock.json").is_file() else "npm install"
+    try:
+        issues = _dependency_issues(project_root)
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        return (
+            False,
+            f"前端依赖检查失败：{error}\n请在 {project_root} 运行 {install_command} 后重试",
+        )
+    if issues:
+        details = "\n".join(issues)
+        return False, (
+            f"前端依赖缺失或已过期：\n{details}\n"
+            f"uv 不会安装 npm 依赖。请在 {project_root} 运行 {install_command} 后重试"
+        )
     started = time.monotonic()
     try:
         completed = subprocess.run(
             command,
             cwd=project_root,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=BUILD_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired:
-        return False, f"前端构建超时（{BUILD_TIMEOUT_SECONDS}s），沿用现有 dist"
+    except subprocess.TimeoutExpired as error:
+        return False, (
+            f"前端构建超时（{BUILD_TIMEOUT_SECONDS}s），沿用现有 dist：\n"
+            f"{_build_output(error.output)}"
+        )
     except OSError as error:
         return False, f"前端构建无法启动：{error}"
     elapsed = time.monotonic() - started
     if completed.returncode != 0:
-        output = (completed.stderr or completed.stdout or "").strip().splitlines()
-        tail = "\n".join(output[-15:])
-        return False, f"前端构建失败（npm 退出码 {completed.returncode}）：\n{tail}"
+        return False, (
+            f"前端构建失败（npm 退出码 {completed.returncode}）：\n"
+            f"{_build_output(completed.stdout)}"
+        )
     return True, f"前端构建完成（{elapsed:.1f}s）"

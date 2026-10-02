@@ -1,3 +1,4 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -229,6 +230,7 @@ async function harness(options = {}) {
     '../../lib/composerDocument': composerDocumentUrl,
     './ComposerEditor.vue': composerEditorStubUrl,
     './MessageContent.vue': messageContentStubUrl,
+    './MarkdownContent': markdownContentUrl,
     vue,
     'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
     '../../composables/useAttachments': attachmentsUrl,

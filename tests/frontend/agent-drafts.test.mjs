@@ -1,3 +1,5 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
+import { surfaceMotionUrl } from './helpers/surface-motion-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -258,10 +260,13 @@ async function harness() {
     export const command = async (action, params) => { api.calls.push([action, params]); return action === 'projects.get' ? api.load(params.project_id) : { items: api.catalog }; }; // ${id}`);
   const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
   const imports = {
+    '../../composables/useSurfaceMotion': surfaceMotionUrl,
+    './composables/useSurfaceMotion': surfaceMotionUrl,
     [composerDocumentUrl]: composerDocumentUrl,
     '../../lib/composerDocument': composerDocumentUrl,
     './ComposerEditor.vue': composerEditorStubUrl,
     './MessageContent.vue': messageContentStubUrl,
+    './MarkdownContent': markdownContentUrl,
     vue: vueUrl,
     'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
     '../../composables/useAgentDrafts': draftsUrl,

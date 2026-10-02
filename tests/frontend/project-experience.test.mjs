@@ -1,3 +1,4 @@
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -34,6 +35,7 @@ const imports = {
   '../../lib/composerDocument': composerDocumentUrl,
   './ComposerEditor.vue': composerEditorStubUrl,
   './MessageContent.vue': messageContentStubUrl,
+  './MarkdownContent': markdownContentUrl,
   '../../lib/turnSummary': turnSummaryUrl,
   '../../lib/agentRetry': moduleUrl(
     transpile(
@@ -326,7 +328,7 @@ test('pending reply preview stays truthful and keeps every saved message in its 
   assert.match(preview, /尚无新回复.*查看已保存的对话/);
   assert.doesNotMatch(preview, /旧回复|最新回复：规划已更新|还有一个问题/);
   const reader = context.teleports?.body || '';
-  assert.match(reader, /aria-label="项目对话记录"/);
+  assert.match(reader, /aria-label="示例项目的对话记录"/);
   for (const content of ['旧回复', '继续调整', '最新回复：规划已更新', '还有一个问题']) {
     assert.ok(reader.includes(content));
   }

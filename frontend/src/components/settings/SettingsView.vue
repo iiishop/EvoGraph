@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, provide, ref } from 'vue';
+import { computed, provide, ref, watch } from 'vue';
 import { ArrowLeft, ChevronRight } from 'lucide-vue-next';
 import { command } from '../../api/client';
 import { queuedSettingsCommand, settingsCommandKey } from '../../composables/useSettingsForms';
 import { useWorkspace } from '../../composables/useWorkspace';
+import { useSurfaceMotion } from '../../composables/useSurfaceMotion';
 import ProviderForm from './ProviderForm.vue';
 import ResearchForm from './ResearchForm.vue';
 const { setPage, reserveSettingsOperation } = useWorkspace();
 const category = ref<'model' | 'tools'>('model');
+const categorySurface = ref<HTMLElement>();
+const categoryMotion = useSurfaceMotion();
+watch(category, () => categoryMotion.reveal(categorySurface.value), { flush: 'post' });
 const title = computed(() => (category.value === 'model' ? '模型服务' : '搜索与工具'));
 provide(settingsCommandKey, queuedSettingsCommand(command, reserveSettingsOperation));
 </script>
@@ -49,7 +53,7 @@ provide(settingsCommandKey, queuedSettingsCommand(command, reserveSettingsOperat
           分类切换保留本次草稿。<br />离开设置后，未保存的草稿将清除。<br /><br />更多设置将在对应分类中开放。
         </p>
       </nav>
-      <div class="settings-page">
+      <div ref="categorySurface" class="settings-page">
         <header class="settings-page-head">
           <p class="settings-eyebrow">WORKSPACE SETTINGS</p>
           <h1>{{ title }}</h1>

@@ -1,3 +1,4 @@
+import { surfaceMotionUrl } from './helpers/surface-motion-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -163,6 +164,8 @@ async function harness(realViews = false) {
     } }) }));`);
   const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
   const imports = {
+    '../../composables/useSurfaceMotion': surfaceMotionUrl,
+    './composables/useSurfaceMotion': surfaceMotionUrl,
     vue,
     'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
     '../../composables/useAgent': agentUrl,

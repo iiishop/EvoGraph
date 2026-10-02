@@ -1,3 +1,4 @@
+import { surfaceMotionUrl } from './helpers/surface-motion-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -289,7 +290,10 @@ test('live title and scope edits update matching without losing a still-valid ac
 test('narrow graph details stay in flow and reduced-motion dialogs retain the existing motion safeguard', () => {
   const workspace = source('components/workspace/ProjectWorkspace.vue');
   assert.match(workspace, /@media \(max-width: 760px\)/);
-  assert.match(workspace, /\.workspace-detail-open > :deep\(\.inspector\)\s*\{\s*position: static/);
+  assert.match(
+    workspace,
+    /\.workspace-detail-open \.inspector-surface > :deep\(\.inspector\)\s*\{\s*position: static/,
+  );
   assert.match(
     workspace,
     /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/,
@@ -320,6 +324,7 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
   );
   const stub = url('export default { inheritAttrs: false, render() { return null; } };');
   Object.assign(imports, {
+    '../../composables/useSurfaceMotion': surfaceMotionUrl,
     '../../composables/useWorkspace': workspaceUrl,
     '../../composables/useAgent': agentUrl,
     '../../composables/useEntrance': url('export const useEntrance = () => {};'),
@@ -373,12 +378,12 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
       const inspector = all(root).find((node) => node.tag === 'source-inspector');
       const dock = all(root).find((node) => node.tag === 'agent-dock');
       assert.equal(
-        inspector.parent,
+        inspector.parent.parent,
         dock.parent,
         'inspector and stable composer share the workspace grid',
       );
-      assert.match(String(inspector.parent.class), /workspace-body/);
-      assert.match(String(inspector.parent.class), /workspace-detail-open/);
+      assert.match(String(inspector.parent.parent.class), /workspace-body/);
+      assert.match(String(inspector.parent.parent.class), /workspace-detail-open/);
       assert.notEqual(
         inspector.parent,
         all(root).find((node) => node.tag === 'graph').parent,

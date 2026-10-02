@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
@@ -159,6 +160,30 @@ HTMLElement.prototype.getBoundingClientRect = function () {
   if (this.classList.contains('review-tile-slot')) return rect(tileSlot(this));
   if (this.classList.contains('review-tile'))
     return rect(this.classList.contains('is-expanded') ? geometry.row : tileSlot(this));
+  if (this.matches('.review-surface-fill, .review-surface-heading')) {
+    operations.push('visual-read');
+    const base = this.closest('.agent-review-surface').getBoundingClientRect().toJSON();
+    const effect = effects.get(this);
+    if (!effect) return rect(base);
+    const convert = (value) =>
+      value.includes('scale')
+        ? transformed(base, value)
+        : {
+            ...base,
+            left: base.left + Number(value.match(/translate\(([-\d.e]+)px/)[1]),
+            top: base.top + Number(value.match(/, ([-\d.e]+)px/)[1]),
+          };
+    const start = convert(effect.keyframes[0].transform);
+    const end = convert(effect.keyframes[1].transform);
+    return rect(
+      Object.fromEntries(
+        ['left', 'top', 'width', 'height'].map((key) => [
+          key,
+          start[key] + (end[key] - start[key]) * effect.progress,
+        ]),
+      ),
+    );
+  }
   if (this.matches('.review-tile-fill, .review-tile-copy')) {
     operations.push('visual-read');
     const button = this.closest('.review-tile');
@@ -238,10 +263,12 @@ const receipt = await component('AgentTurnSummary', {
 });
 const message = await component('MessageContent', {
   vue,
+  './MarkdownContent': markdownContentUrl,
   '../../lib/composerDocument': composerModule,
 });
 const { value: Tray } = await component('AgentReviewTray', {
   vue,
+  './MarkdownContent': markdownContentUrl,
   'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
   './AgentTurnSummary.vue': receipt.moduleUrl,
   './MessageContent.vue': message.moduleUrl,
@@ -275,6 +302,7 @@ const summary = () => ({
 });
 const project = () => ({
   id: 'P1',
+  name: 'Project A',
   milestones: [
     { id: 'A', title: 'A' },
     { id: 'B', title: 'B' },
@@ -341,9 +369,9 @@ async function click(element, pointer = false) {
 }
 const visible = (view) => view.layer().style.display !== 'none';
 const tileMotion = () =>
-  animations.filter((animation) => animation.element.matches('.review-tile-fill')).at(-1);
+  animations.filter((animation) => animation.element.matches('.review-surface-fill')).at(-1);
 const readerMotion = () =>
-  animations.filter((animation) => animation.element.matches('.agent-review-surface')).at(-1);
+  animations.filter((animation) => animation.element.matches('.review-surface-content')).at(-1);
 const finish = async () => {
   tileMotion().finish();
   await flush();
@@ -453,42 +481,63 @@ test('full saved history and factual expanded receipt remain mounted through swi
   }
 });
 
-test('pointer morph uses selected half bounds, only transform/opacity, and never crosses dock controls', async () => {
+test('pointer card grows from selected half into floating reader with unscaled content', async () => {
   const view = await mount();
   try {
     await click(view.tiles()[1], true);
     const entry = tileMotion();
-    assert.equal(entry.options.duration, 220);
-    assert.ok(entry.options.duration <= 250);
+    const base = boxFrom(view.surface());
+    assert.equal(entry.options.duration, 280);
+    assert.equal(entry.options.easing, 'cubic-bezier(0.77, 0, 0.175, 1)');
     assert.deepEqual(Object.keys(entry.keyframes[0]).sort(), ['opacity', 'transform']);
-    assert.equal(transformed(geometry.row, entry.keyframes[0].transform).left, 504);
-    assert.deepEqual(Object.keys(readerMotion().keyframes[0]), ['opacity']);
-    assert.ok(animations.every((animation) => animation.options.duration <= 250));
-    for (const progress of [0, 0.5, 1]) {
+    assertRectNear(transformed(base, entry.keyframes[0].transform), {
+      left: 504,
+      top: 566,
+      width: 396,
+      height: 52,
+    });
+    assertRectNear(transformed(base, entry.keyframes[1].transform), base);
+    assert.deepEqual(Object.keys(readerMotion().keyframes[0]).sort(), ['clipPath', 'opacity']);
+    assert.ok(animations.every((animation) => animation.options.duration < 300));
+    assert.ok(
+      animations
+        .filter(
+          (animation) => !animation.element.matches('.review-surface-fill, .review-tile-fill'),
+        )
+        .every((animation) =>
+          animation.keyframes.every((frame) => !String(frame.transform).includes('scale')),
+        ),
+      'text never scales',
+    );
+    for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
       entry.progress = progress;
-      const fillRect = entry.element.getBoundingClientRect();
-      assert.equal(fillRect.top, geometry.row.top);
-      assert.equal(fillRect.height, 52);
-      assert.ok(
-        fillRect.left >= geometry.row.left &&
-          fillRect.right <= geometry.row.left + geometry.row.width,
-      );
+      const value = entry.element.getBoundingClientRect();
+      assert.ok(value.width >= 396 && value.width <= 800);
+      assert.ok(value.height >= 52 - 0.001 && value.height <= 360 + 0.001);
+      assert.ok(value.bottom <= geometry.row.top + geometry.row.height + 0.001);
     }
     assertAboveDock(view, entry);
     await finish();
     await click(close(view), true);
-    assert.equal(view.tiles()[1].getAttribute('aria-expanded'), 'false');
-    assert.equal(view.surface().getAttribute('aria-hidden'), 'true');
     assert.equal(document.activeElement, view.tiles()[1]);
     const exit = tileMotion();
-    assert.equal(exit.options.duration, 180);
-    assertAboveDock(view, exit);
+    assert.equal(exit.options.duration, 230);
+    assertRectNear(transformed(base, exit.keyframes[1].transform), {
+      left: 504,
+      top: 566,
+      width: 396,
+      height: 52,
+    });
     await finish();
     assert.equal(visible(view), false);
   } finally {
     view.dispose();
   }
 });
+const boxFrom = (element) => {
+  const { left, top, width, height } = element.getBoundingClientRect();
+  return { left, top, width, height };
+};
 
 test('rapid open/close/reopen and switching start from the current visual before cancellation', async () => {
   const view = await mount();
@@ -503,7 +552,7 @@ test('rapid open/close/reopen and switching start from the current visual before
     assert.ok(operations.indexOf('visual-read') < operations.indexOf('cancel'));
     assert.equal(entry.cancelled, true);
     const exit = tileMotion();
-    const base = geometry.row;
+    const base = boxFrom(view.surface());
     assertRectNear(transformed(base, exit.keyframes[0].transform), {
       left: current.left,
       top: current.top,
@@ -886,6 +935,132 @@ test('resize with no reading space never pulls existing focus away from a backgr
     await flush();
     assert.equal(visible(view), false);
     assert.equal(document.activeElement, composer);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('unchanged observer/scroll notifications cannot cancel a live visible morph', async () => {
+  const view = await mount();
+  try {
+    await click(view.tiles()[0], true);
+    const entry = tileMotion();
+    entry.progress = 0.4;
+    for (const observer of observers) observer.callback();
+    document.dispatchEvent(new Event('scroll'));
+    runFrames();
+    await flush();
+    assert.equal(entry.cancelled, false);
+    assert.equal(entry.progress, 0.4);
+    await finish();
+    assert.equal(visible(view), true);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('project-specific reader contains only each project’s persisted Markdown history across switching and remount', async () => {
+  const a = {
+    ...project(),
+    messages: [
+      { id: 'request', project_id: 'P1', role: 'user', content: 'A request', created_at: '' },
+      {
+        id: 'reply',
+        project_id: 'P1',
+        role: 'assistant',
+        content: '# A result\n\n- A detail',
+        created_at: '',
+      },
+    ],
+  };
+  const b = {
+    ...project(),
+    id: 'P2',
+    name: 'Project B',
+    messages: [
+      { id: 'request', project_id: 'P2', role: 'user', content: 'B request', created_at: '' },
+      {
+        id: 'reply',
+        project_id: 'P2',
+        role: 'assistant',
+        content: '## B result\n\n**B detail**',
+        created_at: '',
+      },
+    ],
+  };
+  const view = await mount({ project: a, summary: null });
+  try {
+    for (const [current, foreign] of [
+      [a, b],
+      [b, a],
+      [a, b],
+    ]) {
+      view.props.project = current;
+      await flush();
+      await click(view.tiles()[0]);
+      const reader = view.surface().querySelector('.review-history');
+      assert.match(reader.textContent, new RegExp(current.id === 'P1' ? 'A result' : 'B result'));
+      assert.doesNotMatch(
+        reader.textContent,
+        new RegExp(foreign.id === 'P1' ? 'A result' : 'B result'),
+      );
+      assert.equal(reader.querySelectorAll('article').length, 2);
+      assert.equal(reader.querySelectorAll('h1,h2').length, 1);
+      assert.match(view.surface().textContent, new RegExp(`${current.name} · 2 条`));
+      await click(close(view));
+    }
+  } finally {
+    view.dispose();
+  }
+  // Settings destroys the workspace/dock; a remount uses canonical project data.
+  const reopened = await mount({ project: a, summary: null });
+  try {
+    await click(reopened.tiles()[0]);
+    assert.match(reopened.surface().querySelector('h1').textContent, /A result/);
+    assert.doesNotMatch(reopened.surface().textContent, /B result/);
+  } finally {
+    reopened.dispose();
+  }
+});
+
+test('long project names remain bounded so the close control keeps its own space', async () => {
+  const view = await mount({ project: { ...project(), name: 'long-project-'.repeat(8) } });
+  try {
+    await click(view.tiles()[0]);
+    const heading = view.surface().querySelector('.review-surface-heading');
+    const label = heading.querySelector('span');
+    assert.equal(parseFloat(getComputedStyle(heading.firstElementChild).minWidth), 0);
+    assert.equal(getComputedStyle(label).maxWidth, '100%');
+    assert.equal(getComputedStyle(label).overflow, 'hidden');
+    assert.equal(getComputedStyle(label).textOverflow, 'ellipsis');
+    assert.equal(getComputedStyle(close(view)).flexShrink, '0');
+    assert.match(label.textContent, /long-project-/);
+    await click(close(view));
+    assert.equal(visible(view), false);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('compact reply preview uses parsed text without changing saved Markdown or code punctuation', async () => {
+  const content =
+    '## Result\n\n**Done** with `a_b **literal**` and <https://example.com/a_b?q=x#part>\n\n| Item | State |\n| --- | --- |\n| A | Ready |';
+  const view = await mount({
+    project: { ...project(), messages: [{ id: 'md', role: 'assistant', content, created_at: '' }] },
+  });
+  try {
+    const preview = view.tiles()[0].querySelector('.review-tile-preview').textContent;
+    assert.equal(
+      preview,
+      '已保存 · Result Done with a_b **literal** and https://example.com/a_b?q=x#part Item State A Ready',
+    );
+    assert.equal(view.props.project.messages[0].content, content);
+    await click(view.tiles()[0]);
+    assert.equal(view.surface().querySelector('h2').textContent, 'Result');
+    assert.equal(
+      view.surface().querySelector('strong + .message-content code').textContent,
+      'a_b **literal**',
+    );
   } finally {
     view.dispose();
   }

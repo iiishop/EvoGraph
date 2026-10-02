@@ -7,6 +7,7 @@ import MilestoneGraph from '../graph/MilestoneGraph.vue';
 import MilestoneFinder from '../graph/MilestoneFinder.vue';
 import MilestoneInspector from '../graph/MilestoneInspector.vue';
 import SourceInspector from '../graph/SourceInspector.vue';
+import { useSurfaceMotion } from '../../composables/useSurfaceMotion';
 import { workspaceViews } from '../../lib/workspaceViews';
 import AgentDock from '../agent/AgentDock.vue';
 import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/useWorkspace';
@@ -78,6 +79,19 @@ const viewActions = computed(() => {
     },
   };
 });
+const viewMotion = useSurfaceMotion();
+const inspectorMotion = useSurfaceMotion('right');
+const inspectorSurface = ref<HTMLElement>();
+watch(
+  () => selected.value?.id,
+  (id, previous) => {
+    if (id && previous && id !== previous) inspectorMotion.finish(inspectorSurface.value);
+  },
+  { flush: 'post' },
+);
+const inspectorLeaving = ref(false);
+const inspectorOpen = computed(() => Boolean(selected.value && tab.value === 'graph'));
+watch(tab, () => viewMotion.reveal(planningContent.value), { flush: 'post' });
 const planningContent = ref<HTMLElement>();
 const composer = ref<InstanceType<typeof AgentDock>>();
 const finderOpen = ref(false);
@@ -139,7 +153,7 @@ watch(tab, (value) => {
       class="workspace-body"
       :class="{
         'architecture-active': tab === 'architecture',
-        'workspace-detail-open': selected && tab === 'graph',
+        'workspace-detail-open': inspectorOpen || inspectorLeaving,
         'question-active': Boolean(project.question),
       }"
     >
@@ -159,14 +173,28 @@ watch(tab, (value) => {
           />
         </div>
       </div>
-      <component
-        :is="selected?.origin === 'source' ? SourceInspector : MilestoneInspector"
-        v-if="selected && tab === 'graph'"
-        :key="selected.id"
-        :milestone="selected"
-        :project="project"
-        @locate="viewActions.locate"
-      />
+      <!-- One surface owns open/close motion. A node change only replaces its
+           inner inspector, so frequent selections never animate reading text. -->
+      <Transition
+        :css="false"
+        @enter="inspectorMotion.enter"
+        @leave="inspectorMotion.leave"
+        @enter-cancelled="inspectorMotion.cancel"
+        @leave-cancelled="inspectorMotion.cancel"
+        @before-enter="inspectorLeaving = false"
+        @before-leave="inspectorLeaving = true"
+        @after-leave="inspectorLeaving = false"
+      >
+        <div v-if="selected && tab === 'graph'" ref="inspectorSurface" class="inspector-surface">
+          <component
+            :is="selected.origin === 'source' ? SourceInspector : MilestoneInspector"
+            :key="selected.id"
+            :milestone="selected"
+            :project="project"
+            @locate="viewActions.locate"
+          />
+        </div>
+      </Transition>
       <AgentDock
         ref="composer"
         :project="project"
@@ -187,6 +215,18 @@ watch(tab, (value) => {
 </template>
 
 <style scoped>
+.inspector-surface {
+  grid-area: detail;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.inspector-surface > :deep(.inspector) {
+  position: static;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
 .workspace-body {
   overflow: visible;
 }
@@ -210,7 +250,11 @@ watch(tab, (value) => {
   .graph-detail-open :deep(.milestone-stage > .graph-canvas > .vue-flow) {
     min-height: 220px;
   }
-  .workspace-detail-open > :deep(.inspector) {
+  .inspector-surface {
+    max-height: min(38vh, 300px);
+    min-height: 160px;
+  }
+  .workspace-detail-open .inspector-surface > :deep(.inspector) {
     position: static;
     width: 100%;
     flex: 1 1 220px;
