@@ -525,3 +525,389 @@ test('same-project selection rejects an older revision but accepts a newly creat
   assert.equal(browsing.viewState(workspace.state.project).query, '');
   assert.notEqual(browsing.viewState(workspace.state.project).key, previousKey);
 });
+
+test('compact stream merges only planning state and canonical messages deduplicate by saved ID', async () => {
+  const { workspace } = await harness();
+  const message = {
+    id: 'saved-user',
+    content: '#original @label',
+    composer_document: { version: 1, parts: [{ type: 'text', text: '#original @label' }] },
+  };
+  workspace.applyProject({ ...project('A', 10), messages: [message], events: [{ id: 'receipt' }] });
+  workspace.applyProject({
+    ...project('A', 11),
+    snapshot_mode: 'compact-v1',
+    question: { id: 'Q1' },
+  });
+  assert.equal(workspace.state.project.revision, 11);
+  assert.deepEqual(workspace.state.project.messages, [message]);
+  assert.deepEqual(workspace.state.project.events, [{ id: 'receipt' }]);
+  const narration = {
+    id: 'saved-assistant',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'full narration'.repeat(2000),
+  };
+  workspace.appendMessage('A', narration);
+  workspace.appendMessage('A', narration);
+  workspace.appendMessage('B', { id: 'other', content: 'not A' });
+  assert.deepEqual(workspace.state.project.messages, [message, narration]);
+  workspace.applyProject({
+    ...project('A', 12),
+    messages: [message, narration],
+    events: [{ id: 'terminal' }],
+  });
+  assert.equal(workspace.state.project.messages.length, 2);
+  assert.deepEqual(workspace.state.project.events, [{ id: 'terminal' }]);
+});
+
+test('same-project selection reads and errors cannot replace newer equal-revision stream history', async () => {
+  for (const failed of [false, true]) {
+    const { workspace, handlers } = await harness();
+    workspace.applyProject({ ...project('A', 10), messages: [], events: [] });
+    const pending = deferred();
+    handlers['projects.get'] = () => pending.promise;
+    const selecting = workspace.selectProject('A');
+    workspace.appendMessage('A', {
+      id: 'canonical',
+      project_id: 'A',
+      role: 'assistant',
+      content: 'new at same revision',
+    });
+    if (failed) pending.reject(new Error('obsolete failure'));
+    else pending.resolve({ ...project('A', 10), messages: [], events: [] });
+    await selecting;
+    assert.equal(workspace.state.project.messages[0].id, 'canonical');
+    assert.equal(workspace.state.error, '');
+  }
+});
+
+test('same-project selection refuses an older revision even without an intervening stream event', async () => {
+  const { workspace, handlers } = await harness();
+  workspace.applyProject({ ...project('A', 20), messages: [{ id: 'new' }], events: [] });
+  handlers['projects.get'] = () => ({ ...project('A', 19), messages: [], events: [] });
+  await workspace.selectProject('A');
+  assert.equal(workspace.state.project.revision, 20);
+  assert.equal(workspace.state.project.messages[0].id, 'new');
+});
+
+test('same-revision saved-message event also invalidates background refresh', async () => {
+  const { workspace, handlers } = await harness();
+  workspace.applyProject({ ...project('A', 20), messages: [], events: [] });
+  const read = deferred();
+  handlers['projects.get'] = () => read.promise;
+  const refreshing = workspace.refresh();
+  await tick();
+  workspace.appendMessage('A', {
+    id: 'latest',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'canonical',
+  });
+  read.resolve({ ...project('A', 20), messages: [], events: [] });
+  await refreshing;
+  assert.equal(workspace.state.project.messages[0].id, 'latest');
+});
+
+test('canonical append rejects mismatched record identity and malformed saved-message shapes', async () => {
+  const { workspace } = await harness();
+  workspace.applyProject({ ...project('A', 20), messages: [], events: [] });
+  const message = { id: 'saved', project_id: 'A', role: 'assistant', content: 'exact text' };
+  for (const change of [
+    { project_id: 'B' },
+    { project_id: undefined },
+    { id: '' },
+    { id: 4 },
+    { content: null },
+    { role: 'system' },
+  ])
+    workspace.appendMessage('A', { ...message, ...change });
+  assert.equal(workspace.state.project.messages.length, 0);
+  workspace.appendMessage('A', message);
+  assert.deepEqual(workspace.state.project.messages, [message]);
+});
+
+test('offscreen stream completion invalidates the held selection and rereads canonical final history', async () => {
+  const { workspace, handlers, records, env, saved, drafts, browsing } = await harness();
+  const snapshot = (revision) => ({
+    ...project('A', revision),
+    created_at: 'atlas-incarnation',
+    milestones: [revision - 2, revision - 1, revision].map((id) => ({ id: `M${id}` })),
+    messages: [{ id: `TOOLS-${revision}`, content: `saved at ${revision}` }],
+    events: [],
+  });
+  records.set('A', snapshot(12));
+  await workspace.selectProject('A');
+  drafts.bind(() => 'A').content.value = 'keep unsent Atlas draft';
+  browsing.viewState(workspace.state.project).query = 'Atlas query';
+  await workspace.selectProject('B');
+  const oldRead = deferred(),
+    freshRead = deferred();
+  let reads = 0;
+  handlers['projects.get'] = ({ project_id }) => {
+    assert.equal(project_id, 'A');
+    return ++reads === 1 ? oldRead.promise : freshRead.promise;
+  };
+  env.calls.length = 0;
+  const selecting = workspace.selectProject('A');
+  for (let revision = 13; revision <= 64; revision++) {
+    const { messages, events, ...planning } = snapshot(revision);
+    workspace.applyProject({ ...planning, snapshot_mode: 'compact-v1' });
+  }
+  const finalMessage = {
+    id: 'FINAL-18',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'final narration',
+  };
+  workspace.appendMessage('A', finalMessage);
+  const final = {
+    ...snapshot(64),
+    messages: [finalMessage],
+    events: [{ id: 'completed-receipt' }],
+  };
+  records.set('A', final);
+  workspace.applyProject(final);
+  await workspace.refresh(); // Native terminal refresh occurs before the held selection returns.
+  assert.equal(workspace.state.project.id, 'B');
+  oldRead.resolve(snapshot(12));
+  await tick();
+  assert.equal(reads, 2);
+  assert.equal(workspace.state.project.id, 'B', 'stale intermediate data is never rendered');
+  freshRead.resolve(structuredClone(final));
+  await selecting;
+  assert.equal(workspace.state.project.id, 'A');
+  assert.equal(workspace.state.project.revision, 64);
+  assert.deepEqual(
+    workspace.state.project.milestones.map(({ id }) => id),
+    ['M62', 'M63', 'M64'],
+  );
+  assert.deepEqual(workspace.state.project.messages, [finalMessage]);
+  assert.deepEqual(workspace.state.project.events, [{ id: 'completed-receipt' }]);
+  assert.equal(drafts.bind(() => 'A').content.value, 'keep unsent Atlas draft');
+  assert.equal(browsing.viewState(workspace.state.project).query, 'Atlas query');
+  assert.equal(saved.get('evograph.project'), 'A');
+  assert.ok(
+    env.calls.every(([action]) =>
+      ['projects.get', 'projects.list', 'settings.get'].includes(action),
+    ),
+  );
+});
+
+test('offscreen equal-revision canonical messages invalidate stale selection success and failure', async () => {
+  for (const failed of [false, true]) {
+    const { workspace, handlers, env } = await harness();
+    await workspace.selectProject('B');
+    const oldRead = deferred();
+    const message = {
+      id: 'canonical',
+      project_id: 'A',
+      role: 'assistant',
+      content: 'saved without a revision change',
+    };
+    const final = { ...project('A', 20), messages: [message], events: [{ id: 'receipt' }] };
+    let reads = 0;
+    handlers['projects.get'] = () => (++reads === 1 ? oldRead.promise : structuredClone(final));
+    env.calls.length = 0;
+    const selecting = workspace.selectProject('A');
+    workspace.appendMessage('A', message);
+    if (failed) oldRead.reject(new Error('obsolete read failure'));
+    else oldRead.resolve({ ...project('A', 20), messages: [], events: [] });
+    await selecting;
+    assert.equal(reads, 2);
+    assert.deepEqual(workspace.state.project.messages, [message]);
+    assert.equal(workspace.state.error, '');
+    assert.deepEqual(
+      env.calls.map(([action]) => action),
+      ['projects.get', 'projects.get'],
+    );
+  }
+});
+
+test('activity racing a selection retry requires another owned read, never stale canonical history', async () => {
+  const { workspace, handlers, env } = await harness();
+  await workspace.selectProject('B');
+  const reads = [deferred(), deferred(), deferred()];
+  let count = 0;
+  handlers['projects.get'] = () => reads[count++].promise;
+  env.calls.length = 0;
+  const selecting = workspace.selectProject('A');
+  workspace.applyProject({ ...project('A', 10), snapshot_mode: 'compact-v1' });
+  reads[0].resolve({ ...project('A', 9), messages: [], events: [] });
+  await tick();
+  const message = {
+    id: 'latest',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'saved during retry',
+  };
+  workspace.appendMessage('A', message);
+  reads[1].resolve({ ...project('A', 10), messages: [], events: [] });
+  await tick();
+  assert.equal(workspace.state.project.id, 'B');
+  assert.equal(count, 3);
+  reads[2].resolve({ ...project('A', 10), messages: [message], events: [{ id: 'final' }] });
+  await selecting;
+  assert.deepEqual(workspace.state.project.messages, [message]);
+  assert.deepEqual(workspace.state.project.events, [{ id: 'final' }]);
+  assert.deepEqual(
+    env.calls.map(([action]) => action),
+    ['projects.get', 'projects.get', 'projects.get'],
+  );
+});
+
+test('new project or Settings navigation cancels an offscreen read or its retry without reactivation', async () => {
+  for (const stage of ['initial', 'retry']) {
+    for (const destination of ['C', 'settings', 'settings-round-trip']) {
+      const { workspace, handlers, saved, browsing } = await harness();
+      await workspace.selectProject('B');
+      const first = deferred(),
+        second = deferred();
+      let reads = 0;
+      handlers['projects.get'] = ({ project_id }) =>
+        project_id === 'C' ? project('C', 3) : (++reads === 1 ? first : second).promise;
+      const selecting = workspace.selectProject('A');
+      workspace.applyProject({ ...project('A', 10), snapshot_mode: 'compact-v1' });
+      if (stage === 'retry') {
+        first.resolve(project('A', 9));
+        await tick();
+        assert.equal(reads, 2);
+      }
+      if (destination === 'C') await workspace.selectProject('C');
+      else {
+        workspace.setPage('settings');
+        if (destination === 'settings-round-trip') workspace.setPage('projects');
+      }
+      const winner = workspace.state.project;
+      const browser = browsing.viewState(winner);
+      browser.query = 'new intent';
+      if (stage === 'initial') first.resolve(project('A', 9));
+      else second.resolve(project('A', 10));
+      await selecting;
+      assert.equal(reads, stage === 'initial' ? 1 : 2);
+      assert.equal(workspace.state.project, winner);
+      assert.equal(browsing.viewState(winner).query, 'new intent');
+      assert.equal(saved.get('evograph.project'), destination === 'C' ? 'C' : 'B');
+      assert.equal(workspace.state.page, destination === 'settings' ? 'settings' : 'projects');
+      assert.equal(workspace.state.error, '');
+    }
+  }
+});
+
+test('offscreen selection retry preserves confirmed settings and surfaces only its current failure', async () => {
+  const { workspace, handlers } = await harness();
+  await workspace.selectProject('B');
+  const oldRead = deferred();
+  let reads = 0;
+  handlers['projects.get'] = () => {
+    if (++reads === 1) return oldRead.promise;
+    throw new Error('current reread unavailable');
+  };
+  const selecting = workspace.selectProject('A');
+  workspace.applyProject({ ...project('A', 10), snapshot_mode: 'compact-v1' });
+  const release = workspace.reserveSettingsOperation();
+  const confirmed = { provider: { config: { model: 'confirmed' } } };
+  workspace.applySettings(confirmed);
+  oldRead.reject(new Error('obsolete read failure'));
+  await selecting;
+  assert.equal(reads, 2);
+  assert.equal(workspace.state.project.id, 'B');
+  assert.match(workspace.state.error, /current reread unavailable/);
+  assert.deepEqual(workspace.state.settings, confirmed);
+  assert.equal(workspace.state.busy, true);
+  release();
+});
+
+test('continuous offscreen activity has bounded reads and an honest retryable error', async () => {
+  const { workspace, handlers, env } = await harness();
+  await workspace.selectProject('B');
+  let reads = 0;
+  handlers['projects.get'] = () => {
+    reads++;
+    assert.ok(reads <= 4, 'selection retries must not become an unbounded read loop');
+    workspace.applyProject({ ...project('A', reads + 1), snapshot_mode: 'compact-v1' });
+    return { ...project('A', reads), messages: [], events: [] };
+  };
+  env.calls.length = 0;
+  await workspace.selectProject('A');
+  assert.equal(reads, 4);
+  assert.equal(workspace.state.project.id, 'B');
+  assert.match(workspace.state.error, /更新.*重试/);
+  assert.ok(env.calls.every(([action]) => action === 'projects.get'));
+  handlers['projects.get'] = () => ({ ...project('A', 5), messages: [], events: [] });
+  await workspace.selectProject('A');
+  assert.equal(workspace.state.project.id, 'A');
+  assert.equal(workspace.state.error, '');
+});
+
+test('unrelated or malformed offscreen stream events do not cause selection rereads', async () => {
+  const { workspace, handlers } = await harness();
+  await workspace.selectProject('B');
+  const pending = deferred();
+  let reads = 0;
+  handlers['projects.get'] = () => {
+    reads++;
+    return pending.promise;
+  };
+  const selecting = workspace.selectProject('A');
+  workspace.applyProject({ ...project('C', 20), snapshot_mode: 'compact-v1' });
+  for (const revision of [NaN, undefined, -1, '20'])
+    workspace.applyProject({ ...project('A'), revision, snapshot_mode: 'compact-v1' });
+  const valid = { id: 'saved', project_id: 'A', role: 'assistant', content: 'exact text' };
+  workspace.appendMessage('C', { ...valid, project_id: 'C' });
+  workspace.appendMessage('C', valid);
+  for (const change of [
+    { project_id: 'B' },
+    { project_id: undefined },
+    { id: '' },
+    { id: 4 },
+    { content: null },
+    { role: 'system' },
+  ])
+    workspace.appendMessage('A', { ...valid, ...change });
+  pending.resolve({ ...project('A', 20), messages: [], events: [] });
+  await selecting;
+  assert.equal(reads, 1);
+  assert.equal(workspace.state.project.id, 'A');
+});
+
+test('delete and restore retire the pending retry even when the project ID and timestamp are reused', async () => {
+  const { workspace, handlers, records, drafts, saved } = await harness();
+  records.set('A', { ...project('A', 10), created_at: 'same', messages: [], events: [] });
+  await workspace.selectProject('B');
+  const first = deferred(),
+    retry = deferred();
+  let reads = 0;
+  handlers['projects.get'] = ({ project_id }) =>
+    project_id === 'A'
+      ? (++reads === 1 ? first : retry).promise
+      : structuredClone(records.get(project_id));
+  const selecting = workspace.selectProject('A');
+  workspace.applyProject({ ...project('A', 11), created_at: 'same', snapshot_mode: 'compact-v1' });
+  first.resolve({ ...project('A', 10), created_at: 'same', messages: [], events: [] });
+  await tick();
+  assert.equal(reads, 2);
+  await workspace.deleteProject({ id: 'A', name: 'A' });
+  handlers['projects.restore_archived'] = () => {
+    const restored = { ...project('A', 0), created_at: 'same', messages: [], events: [] };
+    records.set('A', restored);
+    return { project: restored, restored: true };
+  };
+  await workspace.restoreProject({ id: 'A', name: 'A' });
+  workspace.appendMessage('A', {
+    id: 'late-old',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'old incarnation',
+  });
+  retry.resolve({ ...project('A', 99), created_at: 'same', messages: [{ id: 'old' }], events: [] });
+  await selecting;
+  assert.equal(reads, 2);
+  assert.equal(workspace.state.project.id, 'B');
+  assert.equal(saved.get('evograph.project'), 'B');
+  delete handlers['projects.get'];
+  await workspace.selectProject('A');
+  assert.equal(workspace.state.project.revision, 0);
+  assert.deepEqual(workspace.state.project.messages, []);
+  assert.equal(drafts.bind(() => 'A').content.value, '');
+});

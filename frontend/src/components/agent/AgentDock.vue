@@ -33,9 +33,21 @@ const props = defineProps<{ project: Project; compact?: boolean; view?: string }
 defineEmits<{ resume: []; locate: [id: string] }>();
 const conversationOpen = ref(false);
 const dockCollapsed = ref(false);
+const review = ref<HTMLElement>();
+watch(
+  () => props.project.id,
+  () => {
+    conversationOpen.value = false;
+    if (review.value) review.value.scrollTop = 0;
+  },
+);
 const latestReply = computed(() =>
   props.project.messages.filter((item) => item.role === 'assistant').at(-1),
 );
+const replyPreview = computed(() => {
+  const text = latestReply.value?.content.replace(/\s+/g, ' ').trim() ?? '';
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+});
 const turnSummary = computed(() => latestTurnSummary(props.project));
 const agent = useAgent();
 const { state, setPage, setError, selectProject, applyProject } = useWorkspace();
@@ -232,6 +244,7 @@ async function deliver(attempt: DraftAttempt) {
       attempt.ids,
       attempt.request ? attempt.request.verificationMilestone : attempt.verificationMilestone,
       outgoingDocument,
+      attempt,
     );
   } catch (error) {
     setError(error instanceof Error ? error.message : '请求未完成');
@@ -408,6 +421,7 @@ function choose(option: string) {
     :class="{
       'is-drop-target': draggingFiles,
       'is-collapsed': dockCollapsed,
+      'is-reading': conversationOpen && !dockCollapsed,
       'has-question': answering,
     }"
     @paste.capture="onPaste"
@@ -452,6 +466,7 @@ function choose(option: string) {
     <div
       v-if="hasReview"
       v-show="!dockCollapsed"
+      ref="review"
       class="agent-review"
       aria-label="对话与本轮变更"
       tabindex="0"
@@ -464,7 +479,7 @@ function choose(option: string) {
       >
         <summary>
           <span>{{ latestReply ? '最近回复' : '对话记录' }}</span
-          ><span class="reply-preview">{{ latestReply?.content || '查看已发送的请求' }}</span>
+          ><span class="reply-preview">{{ replyPreview || '查看已发送的请求' }}</span>
         </summary>
         <div class="agent-conversation-scroll" aria-label="项目对话记录">
           <article v-for="item in project.messages" :key="item.id" :class="item.role">
@@ -591,8 +606,8 @@ function choose(option: string) {
 .agent-recovery p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 120px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 /* History yields space before the composer or the graph can leave the viewport. */
@@ -619,6 +634,9 @@ function choose(option: string) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 8px;
+}
+.agent-dock.is-reading .agent-review {
+  max-height: min(38dvh, 340px);
 }
 /* One review scroller, rather than nested transcript/receipt scroll traps. */
 .agent-review .agent-conversation-scroll,

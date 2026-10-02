@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -24,6 +25,7 @@ class AgentRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=6)
     verification_milestone: str | None = None
     composer_document: ComposerDocument | None = None
+    snapshot_mode: Literal["full", "compact-v1"] = "full"
 
 
 def create_app(application: Application, dist: Path | None = None):

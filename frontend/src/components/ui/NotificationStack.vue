@@ -7,7 +7,7 @@ const { items, dismiss } = useNotifications();
   <div
     class="notification-stack"
     aria-live="polite"
-    aria-relevant="additions"
+    aria-relevant="additions text"
     aria-label="更新通知"
   >
     <TransitionGroup name="notification"

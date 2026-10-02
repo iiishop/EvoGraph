@@ -333,6 +333,24 @@ export function createAgentDraftStore() {
       return attempt;
     },
     settle,
+    // Keep this owner even while its project is offscreen. Deletion/restore
+    // replaces the entry, so a late receipt cannot touch the new incarnation.
+    captureOwner: (projectId: string) => {
+      const draft = entry(projectId);
+      return () => Boolean(draft && entries.get(projectId) === draft);
+    },
+    confirmDelivered: (attempt: DraftAttempt) => {
+      const draft = entries.get(attempt.projectId);
+      if (draft !== attempt.entry) return;
+      const pending = draft.pending.delete(attempt.id);
+      const recovered = draft.failures.some((item) => item.id === attempt.id);
+      if (!pending && !recovered) return;
+      draft.failures = draft.failures.filter((item) => item.id !== attempt.id);
+      if (recovered && !draft.failures.length) draft.recoveryError = '';
+      // Retain every current composer edit, including restored text, and its
+      // question provenance. Untouched Send still passes through retry checks;
+      // removing that anchor could silently bind an old answer to a new question.
+    },
     discard,
     activate: (projectId: string) => {
       deleted.delete(projectId);

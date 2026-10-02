@@ -37,6 +37,7 @@ export function parseTurnSummary(detail: string): TurnSummary | null {
       !text(value.status) ||
       !['completed', 'waiting', 'stopped', 'failed'].includes(value.status) ||
       typeof value.changed !== 'boolean' ||
+      (value.history_warning !== undefined && !text(value.history_warning)) ||
       !revision(value.before_revision) ||
       !revision(value.after_revision) ||
       !record(value.changes)

@@ -440,3 +440,17 @@ test('node history filters persisted explicit node changes and never attributes 
     'dependency endpoint alone is a factual node connection',
   );
 });
+
+test('optional saved-history warning survives parsing and is visible in the receipt', async () => {
+  const saved = summary({
+    status: 'stopped',
+    history_warning: '部分 Agent 回复未能保存到对话记录',
+  });
+  assert.equal(parseTurnSummary(JSON.stringify(saved)).history_warning, saved.history_warning);
+  assert.ok(parseTurnSummary(JSON.stringify(summary())));
+  assert.equal(parseTurnSummary(JSON.stringify(summary({ history_warning: {} }))), null);
+  const html = await render(AgentTurnSummary, { summary: saved, milestones: [] });
+  assert.match(html, /已停止/);
+  assert.match(html, /对话未完整保存/);
+  assert.match(html, /部分 Agent 回复未能保存到对话记录/);
+});

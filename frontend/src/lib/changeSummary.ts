@@ -1,6 +1,10 @@
-import type { Project } from '../types';
+import type { Project, ProjectSnapshot } from '../types';
 
-export function changeSummary(before: Project | null, after: Project, label = '图已更新'): string {
+export function changeSummary(
+  before: Project | null,
+  after: ProjectSnapshot,
+  label = '图已更新',
+): string {
   // The selected project can change while another project's agent keeps
   // working. Without its own prior snapshot, only the event label is factual.
   if (!before || before.id !== after.id) return truncate(`「${after.name}」${label}`);

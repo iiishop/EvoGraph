@@ -79,10 +79,14 @@ function version(value: number | null, prefix: string): string {
       <span class="turn-summary-title">本轮变更</span>
       <span class="turn-summary-status">{{ turnSummaryStatus(summary) }}</span>
       <span class="turn-summary-preview">{{ turnSummaryHeadline(summary) }}</span>
+      <span v-if="summary.history_warning" class="turn-history-warning">对话未完整保存</span>
       <span class="turn-summary-disclosure" aria-hidden="true">详情</span>
     </summary>
     <div class="turn-summary-scroll" aria-label="本轮已保存的规划变更" tabindex="0">
       <p class="turn-summary-notice">{{ turnSummaryNotice(summary) }}</p>
+      <p v-if="summary.history_warning" class="turn-summary-notice" role="status">
+        {{ summary.history_warning }}
+      </p>
       <template v-if="turnSummaryHasChanges(summary)">
         <section v-if="milestoneGroups.some((group) => group.items.length)">
           <h3>里程碑</h3>
@@ -196,6 +200,11 @@ function version(value: number | null, prefix: string): string {
 </template>
 
 <style scoped>
+.turn-history-warning {
+  color: var(--warning);
+  font-size: 11px;
+}
+
 .turn-node-link {
   display: inline;
   border: 0;

@@ -77,6 +77,7 @@ export interface Baseline {
 }
 export interface Message {
   id: string;
+  project_id?: string;
   role: string;
   content: string;
   created_at: string;
@@ -176,6 +177,7 @@ export interface TurnSummary {
   version: 1;
   turn_id: string;
   status: 'completed' | 'waiting' | 'stopped' | 'failed';
+  history_warning?: string;
   changed: boolean;
   before_revision: number;
   after_revision: number;
@@ -276,7 +278,15 @@ export interface PendingQuestion {
   context: string;
   options: string[];
 }
+// Only explicitly negotiated stream frames may omit history. Commands and
+// admission/terminal frames continue to carry complete project views.
+export type CompactProjectSnapshot = Omit<Project, 'messages' | 'events'> & {
+  snapshot_mode: 'compact-v1';
+};
+export type ProjectSnapshot = Project | CompactProjectSnapshot;
 export interface AgentEvent {
+  snapshot_mode?: 'full' | 'compact-v1';
+  saved_message?: Message;
   cancelled?: boolean;
   turn_id?: string;
   summary?: TurnSummary;
@@ -284,7 +294,7 @@ export interface AgentEvent {
   diagram_id?: string;
   diagram_kind?: string;
   type: string;
-  project?: Project;
+  project?: ProjectSnapshot;
   project_id?: string;
   node_id?: string;
   node_ids?: string[];

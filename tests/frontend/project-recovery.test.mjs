@@ -845,3 +845,109 @@ test('already-active recovery keeps browser identity, filters and camera across 
   assert.equal(workflows.entry('D', 'M1'), workflow);
   assert.equal(workflow.report, 'live report');
 });
+
+test('canonical stream history supersedes a no-op recovery refresh without releasing recovery ownership', async () => {
+  const { workspace, records, handlers, browse, drafts, workflows } = await harness();
+  const active = { ...project('A', 7), milestones: [{ id: 'M1' }], messages: [], events: [] };
+  records.set('A', active);
+  workspace.applyProject(active);
+  const browser = browse.viewState(workspace.state.project);
+  Object.assign(browser, {
+    query: 'keep query',
+    focusedId: 'service',
+    viewport: { x: 17, y: 23, zoom: 1.2 },
+  });
+  const before = JSON.parse(JSON.stringify(browser));
+  drafts.bind(() => 'A').content.value = 'keep typed composer';
+  const workflow = workflows.entry('A', 'M1');
+  workflow.report = 'keep workflow report';
+  const read = deferred();
+  handlers['projects.get'] = () => read.promise;
+  const restoring = workspace.restoreProject(project('A'));
+  await tick();
+  assert.equal(workspace.state.recoveryRestored.restored, false);
+  assert.equal(workspace.state.busy, true);
+  const narration = {
+    id: 'canonical',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'received while recovery refresh was pending',
+  };
+  workspace.appendMessage('A', narration);
+  const { messages: _messages, events: _events, ...planning } = active;
+  workspace.applyProject({ ...planning, revision: 8, snapshot_mode: 'compact-v1' });
+  workspace.setBusy(false);
+  assert.equal(workspace.reserveSettingsOperation(), null);
+  assert.equal(workspace.state.busy, true);
+  read.resolve(active);
+  assert.equal(await restoring, true);
+  assert.equal(workspace.state.busy, false);
+  assert.equal(workspace.state.project.revision, 8);
+  assert.deepEqual(workspace.state.project.messages, [narration]);
+  assert.equal('snapshot_mode' in workspace.state.project, false);
+  assert.equal(browse.viewState(workspace.state.project), browser);
+  assert.deepEqual(JSON.parse(JSON.stringify(browser)), before);
+  assert.equal(drafts.bind(() => 'A').content.value, 'keep typed composer');
+  assert.equal(workflows.entry('A', 'M1'), workflow);
+  assert.equal(workflow.report, 'keep workflow report');
+});
+
+test('compact snapshots and saved messages preserve settings ownership and confirmed settings', async () => {
+  const { workspace, handlers, env } = await harness();
+  workspace.applyProject({ ...project('A', 7), messages: [], events: [] });
+  const oldSettings = deferred();
+  handlers['settings.get'] = () => oldSettings.promise;
+  const refreshing = workspace.refresh();
+  const release = workspace.reserveSettingsOperation();
+  workspace.applySettings(settingsRecord('confirmed'));
+  workspace.appendMessage('A', {
+    id: 'canonical',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'saved',
+  });
+  workspace.applyProject({ ...project('A', 8), snapshot_mode: 'compact-v1' });
+  workspace.setBusy(false);
+  assert.equal(workspace.state.busy, true);
+  assert.equal(await workspace.restoreProject(project('D')), false);
+  assert.equal(env.calls.filter(([action]) => action === 'projects.restore_archived').length, 0);
+  oldSettings.resolve(settingsRecord('stale'));
+  await refreshing;
+  assert.equal(workspace.state.settings.provider.config.model, 'confirmed');
+  assert.equal(workspace.state.project.messages[0].id, 'canonical');
+  assert.equal(workspace.state.busy, true);
+  release();
+  assert.equal(workspace.state.busy, false);
+});
+
+test('confirmed restored incarnation rejects late stream frames before explicit reactivation', async () => {
+  const { workspace, records, handlers, browse, drafts, workflows } = await harness();
+  const old = { ...project('A', 7), milestones: [{ id: 'M1' }], messages: [], events: [] };
+  workspace.applyProject(old);
+  const browser = browse.viewState(workspace.state.project);
+  drafts.bind(() => 'A').content.value = 'deleted draft';
+  workflows.entry('A', 'M1').report = 'deleted report';
+  const read = deferred();
+  handlers['projects.list'] = () => read.promise;
+  handlers['projects.restore_archived'] = () => ({ project: project('A', 8), restored: true });
+  const restoring = workspace.restoreProject(project('A'));
+  await tick();
+  assert.equal(workspace.state.project, null);
+  workspace.appendMessage('A', {
+    id: 'late',
+    project_id: 'A',
+    role: 'assistant',
+    content: 'obsolete',
+  });
+  workspace.applyProject({ ...old, revision: 9, snapshot_mode: 'compact-v1' });
+  assert.equal(workspace.state.project, null);
+  assert.equal(browse.viewState(old), undefined);
+  assert.equal(drafts.bind(() => 'A').content.value, '');
+  read.resolve([...records.values()]);
+  assert.equal(await restoring, true);
+  records.set('A', { ...project('A', 8), messages: [], events: [] });
+  await workspace.selectProject('A');
+  assert.deepEqual(workspace.state.project.messages, []);
+  assert.notEqual(browse.viewState(workspace.state.project), browser);
+  assert.equal(workflows.entry('A', 'M1'), undefined);
+});

@@ -29,6 +29,10 @@ class Database:
                 CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, created_at);
                 CREATE INDEX IF NOT EXISTS events_project ON events(project_id, created_at);
+                CREATE INDEX IF NOT EXISTS events_turn_result ON events(
+                    project_id,
+                    json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, '$.turn_id')
+                ) WHERE kind='agent_turn_finished';
             """)
 
     @contextmanager
@@ -131,10 +135,11 @@ class Database:
         self, project_id: str, role: str, content: str, composer_document: dict | None = None
     ):
         message_id = uid()
+        created_at = now()
         with self.connect() as db:
             db.execute(
                 "INSERT INTO messages VALUES(?,?,?,?,?)",
-                (message_id, project_id, role, content, now()),
+                (message_id, project_id, role, content, created_at),
             )
             if composer_document:
                 # A separate table keeps old clients' five-column inserts valid.
@@ -143,6 +148,27 @@ class Database:
                     "INSERT INTO message_documents VALUES(?,?)",
                     (message_id, json.dumps(composer_document, ensure_ascii=False)),
                 )
+
+        return {
+            "id": message_id,
+            "project_id": project_id,
+            "role": role,
+            "content": content,
+            "created_at": created_at,
+            "composer_document": composer_document or None,
+        }
+
+    def turn_result_detail(self, project_id: str, turn_id: str) -> str | None:
+        # Exact indexed lookup includes old receipts outside the activity window.
+        # The CASE also keeps pre-JSON legacy events safe during index migration.
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT detail FROM events WHERE project_id=? AND kind='agent_turn_finished' "
+                "AND json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, "
+                "'$.turn_id')=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (project_id, turn_id),
+            ).fetchone()
+        return row[0] if row else None
 
     def messages(self, project_id: str):
         with self.connect() as db:
@@ -156,7 +182,7 @@ class Database:
                 for r in db.execute(
                     "SELECT m.*, d.document AS composer_document FROM messages m "
                     "LEFT JOIN message_documents d ON d.message_id=m.id "
-                    "WHERE m.project_id=? ORDER BY m.created_at",
+                    "WHERE m.project_id=? ORDER BY m.created_at, m.rowid",
                     (project_id,),
                 )
             ]

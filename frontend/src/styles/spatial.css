@@ -902,3 +902,26 @@ select:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* Reading is an explicit, instant layout choice. The bounded review yields
+   before the question and composer, which stay outside its one scroll owner. */
+.spatial-app .agent-dock.is-reading .agent-review {
+  max-height: min(38dvh, 340px);
+}
+.spatial-app .agent-dock.has-question.is-reading .agent-review {
+  max-height: min(26dvh, 220px);
+}
+@media (min-width: 761px) {
+  .spatial-app .workspace-body:has(.agent-dock.is-reading) {
+    grid-template-rows: minmax(100px, 1fr) minmax(0, auto);
+  }
+}
+/* Live graph notices belong above the workspace, never over input or Stop.
+   A long burst keeps one keyed notice; the stack itself is viewport-bounded. */
+.spatial-app .notification-stack {
+  top: 16px;
+  bottom: auto;
+  max-height: min(32dvh, 240px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

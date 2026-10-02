@@ -238,9 +238,9 @@ async function harness() {
   const id = ++harnessSequence;
   const draftsUrl = moduleUrl(`${draftCode}\n// harness ${id}`);
   const agentUrl = moduleUrl(`import { reactive } from ${JSON.stringify(vueUrl)};
-    export const env = { calls: [], send: async () => true };
+    export const env = { calls: [], submissions: [], send: async () => true };
     export const agent = { state: reactive({ running: false, projectId: '', label: '', follow: {}, navigationTick: 0 }),
-      send: (...args) => { env.calls.push(args); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
+      send: (...args) => { env.calls.push(args.slice(0, 6)); env.submissions.push(args[6]); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
     export const useAgent = () => agent; // ${id}`);
   const workspaceUrl = moduleUrl(`import { reactive, computed } from ${JSON.stringify(vueUrl)};
     const project = (id) => ({ id, name: id, repository: '', messages: [], milestones: [], source_milestones: [], attachments: [], question: null });
@@ -1265,6 +1265,81 @@ test('saved retry ignores stale token in a newer unsent draft', async () => {
     assert.equal(h.env.calls.length, 2);
     assert.equal(h.env.calls[1][1], 'valid older request');
     assert.deepEqual(binding.composerDocument.value, newer, 'Newer draft must remain unchanged');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('intentional conversation reading keeps the composer, question, Stop, and draft mounted', async () => {
+  const h = await harness();
+  try {
+    await h.input('An untouched #typed @draft');
+    h.workspace.state.project.messages = [
+      { id: 'history', role: 'assistant', content: 'long saved text\n'.repeat(1000) },
+    ];
+    await tick();
+    const input = h.find('textarea');
+    const form = h.find('form');
+    const dock = form.parent;
+    const conversation = () => all(h.root).find((node) => node.class === 'agent-conversation');
+    conversation().onToggle({ target: { open: true } });
+    await tick();
+    assert.match(dock.class, /is-reading/);
+    assert.equal(h.find('textarea'), input);
+    assert.equal(h.find('textarea').value, 'An untouched #typed @draft');
+    h.workspace.state.project.question = {
+      id: 'Q',
+      prompt: '真实选择',
+      category: 'decision',
+      options: ['甲', '乙'],
+    };
+    await tick();
+    assert.equal(h.find('question').parent, dock);
+    assert.match(dock.class, /has-question/);
+    h.agent.state.running = true;
+    h.agent.state.projectId = 'A';
+    await tick();
+    const stop = all(h.root).find((node) => node['aria-label'] === '停止当前请求');
+    assert.ok(stop);
+    assert.equal(h.find('form'), form);
+    assert.equal(h.find('textarea'), input);
+    conversation().onToggle({ target: { open: false } });
+    await tick();
+    assert.doesNotMatch(dock.class, /is-reading/);
+    assert.ok(all(h.root).includes(stop));
+    const sourceText = source('components/agent/AgentDock.vue');
+    assert.match(
+      sourceText,
+      /\.agent-review \.agent-conversation-scroll,[\s\S]*?max-height: none;\s*overflow: visible/,
+    );
+    assert.match(
+      sourceText,
+      /\.agent-dock\.is-reading \.agent-review\s*\{\s*max-height: min\(38dvh, 340px\)/,
+    );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('late delivery confirmation preserves old-answer provenance before untouched Send into Q2', async () => {
+  const h = await harness();
+  try {
+    const saved = await failedAnswer(h);
+    const attempt = h.env.submissions[0];
+    assert.equal(attempt.id, saved.id, 'Dock passes exact submission ownership to useAgent');
+    h.agentDrafts.confirmDelivered(attempt);
+    await tick();
+    assert.equal(h.button('重试这条请求'), undefined);
+    assert.equal(h.agentDrafts.bind(() => 'A').restoredFailure.value.id, saved.id);
+    h.workspace.state.project.question = recoveryQuestion({ id: 'Q2' });
+    h.api.load = async () => recoveryProject(recoveryQuestion({ id: 'Q2' }));
+    await tick();
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls.length, 1, 'confirmation cannot authorize sending Q1 answer as Q2');
+    assert.equal(h.find('textarea').value, ' \n路线 A \n ');
+    assert.deepEqual(h.find('attachments').selected, ['original-asset']);
+    assert.match(h.workspace.state.error, /不会复用旧回答/);
   } finally {
     h.dispose();
   }

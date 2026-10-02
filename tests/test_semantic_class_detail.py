@@ -201,7 +201,24 @@ struct Model : Base {
     assert members["limit"]["qualifiers"] == ["static", "constexpr"]
     assert members["limit"]["text"] == "static constexpr limit : int = …"
     assert model["relations"][0]["resolution"] == "selected"
-    assert "938" not in json.dumps(model) and "728" not in json.dumps(model)
+    # Opaque identities/digests can coincidentally contain a short numeric
+    # sentinel (for example relation_e728...). Keep every content/display
+    # field in this privacy check, including source paths and limitations.
+    content = json.loads(json.dumps(model))
+    content.pop("project_id")
+    content.pop("baseline_id")
+    content["source_fingerprints"] = list(content["source_fingerprints"])
+    for group in ("classes", "packages", "boundaries", "relations"):
+        for item in content[group]:
+            item.pop("id")
+            if group == "classes":
+                item.pop("package_ids")
+                for member in item["members"]:
+                    member.pop("id")
+            elif group == "relations":
+                item.pop("source")
+                item.pop("target")
+    assert "938" not in json.dumps(content) and "728" not in json.dumps(content)
 
 
 def test_vue_source_ranges_refer_to_original_file_and_script_language():

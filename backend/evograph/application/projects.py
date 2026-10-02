@@ -4,7 +4,7 @@ from ..infrastructure.repository import root_path
 from .uml_lifecycle import class_model_state
 
 
-def project_view(project, db):
+def project_view(project, db, *, include_history=True):
     data = project.model_dump()
     data["class_model_state"] = class_model_state(project)
     data["acceptance"] = acceptance(project)
@@ -29,8 +29,11 @@ def project_view(project, db):
     data["verified_behaviors"] = [
         b.id for b in project.behaviors if current_evidence(project, b.id)
     ]
-    data["messages"] = db.messages(project.id)
-    data["events"] = db.events(project.id)
+    if include_history:
+        data["messages"] = db.messages(project.id)
+        data["events"] = db.events(project.id)
+    else:
+        data["snapshot_mode"] = "compact-v1"
     return data
 
 
@@ -99,8 +102,8 @@ class ProjectService:
         p.name, p.description, p.repository = name.strip(), description[:4000], repository
         return self.db.save(p, "project_updated")
 
-    def get(self, project_id):
-        return project_view(self.db.get(project_id), self.db)
+    def get(self, project_id, *, include_history=True):
+        return project_view(self.db.get(project_id), self.db, include_history=include_history)
 
     def delete(self, project_id: str):
         project = self.db.get(project_id)

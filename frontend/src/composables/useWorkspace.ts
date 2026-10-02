@@ -1,6 +1,13 @@
 import { computed, reactive, shallowReadonly } from 'vue';
 import { command, readyTransport } from '../api/client';
-import type { ArchivedProjectSummary, Project, ProjectSummary, Settings } from '../types';
+import type {
+  ArchivedProjectSummary,
+  Message,
+  Project,
+  ProjectSnapshot,
+  ProjectSummary,
+  Settings,
+} from '../types';
 import type { PageId } from '../lib/navigation';
 import { useNotifications } from './useNotifications';
 import { agentDrafts } from './useAgentDrafts';
@@ -45,7 +52,14 @@ let navigationSequence = 0;
 let archivedSequence = 0;
 // Owned by the workspace, so dismissing the dialog cannot release a restore.
 let recoveryOperationOwner: symbol | null = null;
-let pendingSelection: { id: string; sequence: number } | null = null;
+// Only the outstanding selection needs offscreen freshness metadata. Do not
+// retain project snapshots or growing message histories for background tabs.
+let pendingSelection: { id: string; sequence: number; activity: number } | null = null;
+const maxSelectionReads = 4;
+
+function noteSelectionActivity(id: string) {
+  if (pendingSelection?.id === id) pendingSelection.activity++;
+}
 
 function reconcileWorkflowDrafts(project: Project) {
   architectureBrowse.reconcile(project);
@@ -59,36 +73,50 @@ async function loadProject(id: string, navigate = false) {
   const sequence = ++selectSequence;
   const navigation = navigationSequence;
   const snapshot = snapshotSequence;
-  // A later page intent or equal-revision live snapshot supersedes this read.
-  const current = () =>
-    sequence === selectSequence &&
-    navigation === navigationSequence &&
-    !(state.project?.id === id && snapshot !== snapshotSequence);
-  pendingSelection = { id, sequence };
+  const current = () => sequence === selectSequence && navigation === navigationSequence;
+  // Already-rendered live state still wins without a redundant read. Offscreen
+  // activity instead requires a fresh read to fulfill the user's selection.
+  const liveSnapshotWon = () => state.project?.id === id && snapshot !== snapshotSequence;
+  const selection = { id, sequence, activity: 0 };
+  pendingSelection = selection;
   if (navigate) {
     state.page = 'projects';
     state.selectedId = null;
   }
   state.error = '';
   try {
-    const project = await command<Project>('projects.get', { project_id: id });
-    if (!current()) return;
-    if (
-      state.project?.id === id &&
-      project.created_at === state.project.created_at &&
-      project.revision < state.project.revision
-    )
-      return;
-    architectureBrowse.activate(project);
-    agentDrafts.activate(id);
-    workflowDrafts.activate(id);
-    reconcileWorkflowDrafts(project);
-    state.project = project;
-    localStorage.setItem('evograph.project', id);
-  } catch (error) {
-    if (current()) state.error = String(error);
+    // Retry reads only, sequentially under the original navigation owner. A
+    // continuously active stream must not produce an unbounded request loop.
+    for (let attempt = 0; attempt < maxSelectionReads; attempt++) {
+      const activity = selection.activity;
+      try {
+        const project = await command<Project>('projects.get', { project_id: id });
+        if (!current() || liveSnapshotWon()) return;
+        if (activity !== selection.activity) continue;
+        if (
+          state.project?.id === id &&
+          project.created_at === state.project.created_at &&
+          project.revision < state.project.revision
+        )
+          return;
+        architectureBrowse.activate(project);
+        agentDrafts.activate(id);
+        workflowDrafts.activate(id);
+        reconcileWorkflowDrafts(project);
+        state.project = project;
+        localStorage.setItem('evograph.project', id);
+        return;
+      } catch (error) {
+        if (!current() || liveSnapshotWon()) return;
+        if (activity !== selection.activity) continue;
+        state.error = String(error);
+        return;
+      }
+    }
+    if (current() && !liveSnapshotWon())
+      state.error = '项目仍在更新，最新内容暂未读取完成。请重新打开项目重试。';
   } finally {
-    if (pendingSelection?.sequence === sequence) pendingSelection = null;
+    if (pendingSelection === selection) pendingSelection = null;
   }
 }
 
@@ -349,17 +377,49 @@ export function useWorkspace() {
     loadArchivedProjects,
     restoreProject,
     refreshAfterRestore,
+    // A verified terminal receipt may arrive after the stream's project and
+    // message frames were lost. Its pending selection must reread saved state.
+    invalidateProjectRead: noteSelectionActivity,
     // A confirmed settings write does not depend on a later project refresh.
     applySettings: (settings: Settings) => {
       settingsSequence++;
       state.settings = settings;
     },
-    applyProject: (project: Project) => {
-      if (state.project?.id === project.id && project.revision >= state.project.revision) {
+    applyProject: (snapshot: ProjectSnapshot) => {
+      if (!Number.isInteger(snapshot.revision) || snapshot.revision < 0) return;
+      if (state.project?.id !== snapshot.id) {
+        noteSelectionActivity(snapshot.id);
+        return;
+      }
+      if (state.project?.id === snapshot.id && snapshot.revision >= state.project.revision) {
+        // Omission is meaningful only with the negotiated discriminator. Keep
+        // saved messages/events intact until the next authoritative full view.
+        let project: Project;
+        if ('snapshot_mode' in snapshot && snapshot.snapshot_mode === 'compact-v1') {
+          const { snapshot_mode: _mode, ...planning } = snapshot;
+          project = { ...planning, messages: state.project.messages, events: state.project.events };
+        } else project = snapshot as Project;
         snapshotSequence++;
         reconcileWorkflowDrafts(project);
         state.project = project;
       }
+    },
+    appendMessage: (projectId: string, message: Message) => {
+      if (
+        message.project_id !== projectId ||
+        typeof message.id !== 'string' ||
+        !message.id.trim() ||
+        typeof message.content !== 'string' ||
+        !['user', 'assistant'].includes(message.role)
+      )
+        return;
+      if (state.project?.id !== projectId) {
+        noteSelectionActivity(projectId);
+        return;
+      }
+      if (state.project.messages.some((item) => item.id === message.id)) return;
+      snapshotSequence++;
+      state.project = { ...state.project, messages: [...state.project.messages, message] };
     },
     setError: (error: string) => {
       state.error = error;
