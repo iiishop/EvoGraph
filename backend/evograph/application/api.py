@@ -49,11 +49,13 @@ class Application:
         # A service method is registered once. HTTP and pywebview share this table.
         operations = {
             "projects.list": self.projects.list,
+            "projects.list_archived": self.projects.list_archived,
             "projects.create": self.projects.create,
             "projects.get": self.projects.get,
             "projects.update": self.projects.update,
             "projects.delete": self.projects.delete,
             "projects.restore": self.projects.restore,
+            "projects.restore_archived": self.projects.restore_archived,
             "projects.bootstrap": self.bootstrap,
             "projects.demo": self.demo,
             "settings.get": self.settings.get,
@@ -112,6 +114,7 @@ class Application:
         lock = None
         readonly = action in {
             "projects.list",
+            "projects.list_archived",
             "projects.get",
             "settings.get",
             "research.settings",

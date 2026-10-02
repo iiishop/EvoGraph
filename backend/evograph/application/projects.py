@@ -51,6 +51,23 @@ class ProjectService:
             for p in self.db.list_projects()
         ]
 
+    def list_archived(self):
+        """Recoverable records only; updated_at is not a deletion timestamp."""
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "repository": p.repository,
+                "is_demo": p.is_demo,
+                "milestone_count": len(p.milestones),
+                "acceptance": acceptance(p),
+                "updated_at": p.updated_at,
+            }
+            for p in self.db.list_projects(include_archived=True)
+            if p.archived
+        ]
+
     def create(self, name: str, description: str = "", repository: str = "", request_id: str = ""):
         if not name.strip() or len(name) > 100:
             raise ValueError("项目名称必须为 1–100 字符")
@@ -96,12 +113,25 @@ class ProjectService:
         return {"id": project.id, "deleted": True}
 
     def restore(self, project_id: str):
+        # Keep the legacy route's Project response unchanged.
+        return self._restore(project_id)[0]
+
+    def restore_archived(self, project_id: str):
+        project, restored = self._restore(project_id)
+        return {
+            "project": {**project.model_dump(), "acceptance": acceptance(project)},
+            "restored": restored,
+        }
+
+    def _restore(self, project_id: str):
         project = self.db.get(project_id)
+        if not project.archived:
+            return project, False
         for existing in self.db.list_projects():
             if project.repository and existing.repository == project.repository:
                 raise ValueError("此仓库已有活跃项目")
         project.archived = False
-        return self.db.save(project, "project_restored")
+        return self.db.save(project, "project_restored"), True
 
     def demo(self, planning):
         existing = next((p for p in self.db.list_projects() if p.is_demo), None)

@@ -293,6 +293,7 @@ async function harness() {
     '../graph/MilestoneFinder.vue',
     './components/sidebar/AppSidebar.vue',
     './components/projects/ProjectDialog.vue',
+    './components/projects/ProjectRecoveryDialog.vue',
     './components/ui/NotificationStack.vue',
   ])
     imports[name] = stub;

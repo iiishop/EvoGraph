@@ -35,6 +35,11 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const project = (id, version = 0) => ({
   id,
   name: id,
+  archived: false,
+  description: '',
+  repository: '',
+  is_demo: false,
+  acceptance: { passed: 0, total: 0, achieved: false },
   milestones: [],
   source_milestones: [],
   version,
@@ -97,10 +102,10 @@ async function harness(initialize = true) {
       records.delete(params.project_id);
       return { deleted: true };
     }
-    if (action === 'projects.restore') {
+    if (action === 'projects.restore_archived') {
       const restored = project(params.project_id);
       records.set(restored.id, restored);
-      return restored;
+      return { project: restored, restored: true };
     }
     if (action === 'projects.bootstrap') return undefined;
     throw new Error(`Unexpected action ${action}`);
@@ -323,11 +328,11 @@ test('undo restores the project without overriding a newer explicit selection', 
   const { workspace, handlers, records } = await harness();
   await workspace.deleteProject({ id: 'A', name: 'A' });
   const restored = deferred();
-  handlers['projects.restore'] = () => restored.promise;
+  handlers['projects.restore_archived'] = () => restored.promise;
   const undo = workspace.undoDelete();
   await workspace.selectProject('B');
   records.set('A', project('A'));
-  restored.resolve(project('A'));
+  restored.resolve({ project: project('A'), restored: true });
   await undo;
   assert.equal(workspace.state.project.id, 'B');
   assert.equal(workspace.state.deletedProject, null);

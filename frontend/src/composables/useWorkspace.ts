@@ -1,6 +1,6 @@
 import { computed, reactive, shallowReadonly } from 'vue';
 import { command, readyTransport } from '../api/client';
-import type { Project, ProjectSummary, Settings } from '../types';
+import type { ArchivedProjectSummary, Project, ProjectSummary, Settings } from '../types';
 import type { PageId } from '../lib/navigation';
 import { useNotifications } from './useNotifications';
 import { agentDrafts } from './useAgentDrafts';
@@ -15,7 +15,19 @@ const state = reactive({
   busy: false,
   error: '',
   notice: '',
-  deletedProject: null as { id: string; name: string } | null,
+  deletedProject: null as ProjectSummary | null,
+  archivedProjects: [] as ArchivedProjectSummary[],
+  recoveryLoading: false,
+  recoveryLoaded: false,
+  recoveryListError: '',
+  restoringId: null as string | null,
+  recoveryError: null as { id: string; message: string } | null,
+  recoveryRestored: null as {
+    id: string;
+    name: string;
+    restored: boolean;
+    refreshError: string;
+  } | null,
   page: 'projects' as PageId,
   selectedId: null as string | null,
 });
@@ -30,6 +42,9 @@ let settingsOperationOwner: symbol | null = null;
 // project revision. A background read started before one is no longer current.
 let snapshotSequence = 0;
 let navigationSequence = 0;
+let archivedSequence = 0;
+// Owned by the workspace, so dismissing the dialog cannot release a restore.
+let recoveryOperationOwner: symbol | null = null;
 let pendingSelection: { id: string; sequence: number } | null = null;
 
 function reconcileWorkflowDrafts(project: Project) {
@@ -162,6 +177,145 @@ async function perform<T>(
   }
 }
 
+async function loadArchivedProjects() {
+  const sequence = ++archivedSequence;
+  state.recoveryLoading = true;
+  state.recoveryListError = '';
+  try {
+    const projects = await command<ArchivedProjectSummary[]>('projects.list_archived');
+    if (sequence !== archivedSequence) return;
+    state.archivedProjects = [
+      ...new Map(projects.map((project) => [project.id, project])).values(),
+    ];
+    state.recoveryLoaded = true;
+  } catch (error) {
+    if (sequence === archivedSequence)
+      state.recoveryListError = error instanceof Error ? error.message : '无法读取已删除项目';
+  } finally {
+    if (sequence === archivedSequence) state.recoveryLoading = false;
+  }
+}
+
+async function refreshAfterRestore() {
+  const restored = state.recoveryRestored;
+  if (!restored) return;
+  try {
+    await refresh();
+    if (state.recoveryRestored === restored) restored.refreshError = '';
+  } catch {
+    if (state.recoveryRestored === restored)
+      restored.refreshError = `${restored.restored ? '项目已恢复' : '项目已在工作空间中'}，但工作空间刷新未完成。可以重试刷新，无需再次恢复。`;
+  }
+}
+
+type ProjectRestoreOutcome = { project: Project & { archived: boolean }; restored: boolean };
+
+async function restoreProject(project: ProjectSummary, navigate = false) {
+  if (state.busy || recoveryOperationOwner) return false;
+  const owner = Symbol('restore');
+  recoveryOperationOwner = owner;
+  const selection = selectSequence;
+  const navigation = navigationSequence;
+  state.busy = true;
+  state.restoringId = project.id;
+  state.recoveryError = null;
+  state.error = '';
+  let outcome: ProjectRestoreOutcome;
+  try {
+    outcome = await command<ProjectRestoreOutcome>('projects.restore_archived', {
+      project_id: project.id,
+    });
+    const acceptance = outcome?.project?.acceptance;
+    if (
+      typeof outcome?.restored !== 'boolean' ||
+      outcome.project?.id !== project.id ||
+      outcome.project.archived !== false ||
+      typeof outcome.project.name !== 'string' ||
+      typeof outcome.project.description !== 'string' ||
+      typeof outcome.project.repository !== 'string' ||
+      typeof outcome.project.is_demo !== 'boolean' ||
+      !Array.isArray(outcome.project.milestones) ||
+      !Number.isInteger(acceptance?.passed) ||
+      !Number.isInteger(acceptance?.total) ||
+      acceptance.passed < 0 ||
+      acceptance.total < acceptance.passed ||
+      typeof acceptance.achieved !== 'boolean'
+    )
+      throw new Error('恢复结果无法确认，请刷新已删除项目后重试');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '恢复未完成，请重试';
+    state.recoveryError = { id: project.id, message };
+    if (navigate) state.error = message;
+    if (recoveryOperationOwner === owner) {
+      recoveryOperationOwner = null;
+      state.restoringId = null;
+      state.busy = false;
+    }
+    return false;
+  }
+  const restored = outcome.project;
+  try {
+    // Commit the UI outcome before any fallible read. Old reads and draft attempts
+    // belong to the deleted incarnation and cannot resurrect it after this point.
+    snapshotSequence++;
+    archivedSequence++;
+    state.recoveryLoading = false;
+    state.archivedProjects = state.archivedProjects.filter((item) => item.id !== restored.id);
+    // A stale recovery row can refer to an already-active project with new
+    // unsent work. Only an authoritative archived→active transition starts a
+    // new incarnation. A successful no-op must retain that live ownership.
+    if (outcome.restored) {
+      architectureBrowse.discard(restored.id);
+      agentDrafts.discard(restored.id);
+      workflowDrafts.discard(restored.id);
+      if (pendingSelection?.id === restored.id) {
+        selectSequence++;
+        pendingSelection = null;
+      }
+      if (state.project?.id === restored.id) {
+        state.project = null;
+        state.selectedId = null;
+      }
+    }
+    // Archived rows may predate a rename, repository change or restored work.
+    // The confirmed response, never the stale row, supplies immediate metadata.
+    const summary = {
+      id: restored.id,
+      name: restored.name,
+      description: restored.description,
+      repository: restored.repository,
+      is_demo: restored.is_demo,
+      milestone_count: restored.milestones.length,
+      acceptance: restored.acceptance,
+    };
+    state.projects = [...state.projects.filter((item) => item.id !== restored.id), summary];
+    if (state.deletedProject?.id === restored.id) state.deletedProject = null;
+    state.notice = '';
+    state.recoveryRestored = {
+      id: restored.id,
+      name: restored.name,
+      restored: outcome.restored,
+      refreshError: '',
+    };
+    const confirmed = outcome.restored
+      ? `已恢复「${restored.name}」`
+      : `「${restored.name}」已在工作空间中`;
+    useNotifications().push(confirmed);
+    await refreshAfterRestore();
+    if (navigate && state.recoveryRestored?.refreshError)
+      state.notice = `${confirmed}，工作空间刷新未完成。可在已删除项目中重试刷新。`;
+    if (navigate && selection === selectSequence && navigation === navigationSequence)
+      await selectProject(restored.id);
+    return true;
+  } finally {
+    if (recoveryOperationOwner === owner) {
+      recoveryOperationOwner = null;
+      state.restoringId = null;
+      state.busy = false;
+    }
+  }
+}
+
 async function init() {
   const selection = selectSequence;
   state.loading = true;
@@ -192,6 +346,9 @@ export function useWorkspace() {
     refresh,
     perform,
     selectProject,
+    loadArchivedProjects,
+    restoreProject,
+    refreshAfterRestore,
     // A confirmed settings write does not depend on a later project refresh.
     applySettings: (settings: Settings) => {
       settingsSequence++;
@@ -208,8 +365,8 @@ export function useWorkspace() {
       state.error = error;
     },
     setBusy: (value: boolean) => {
-      // A settings request owns its busy lease even if its view has unmounted.
-      if (!settingsOperationOwner) state.busy = value;
+      // Workspace-owned requests retain their busy lease after view disposal.
+      if (!settingsOperationOwner && !recoveryOperationOwner) state.busy = value;
     },
     reserveSettingsOperation: () => {
       if (state.busy) return null;
@@ -231,23 +388,19 @@ export function useWorkspace() {
           if (!result.deleted) return;
           // Clear as soon as deletion is confirmed, even if refresh fails.
           discardProject(project.id);
-          state.deletedProject = { id: project.id, name: project.name };
+          snapshotSequence++;
+          archivedSequence++;
+          state.recoveryLoading = false;
+          state.recoveryLoaded = false;
+          state.recoveryRestored = null;
+          state.deletedProject = { ...project };
           state.notice = `已删除「${project.name}」，仓库文件保留`;
         },
       );
     },
     undoDelete: async () => {
       if (!state.deletedProject) return;
-      const selection = selectSequence;
-      const result = await perform<Project>(
-        'projects.restore',
-        { project_id: state.deletedProject.id },
-        '项目已恢复',
-      );
-      if (result) {
-        state.deletedProject = null;
-        if (selection === selectSequence) await selectProject(result.id);
-      }
+      await restoreProject(state.deletedProject, true);
     },
     selected: computed(
       () =>

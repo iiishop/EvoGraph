@@ -7,6 +7,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   FolderOpen,
+  ArchiveRestore,
   Settings2,
   X,
 } from 'lucide-vue-next';
@@ -70,7 +71,7 @@ onMounted(() => {
   document.documentElement.dataset.sidebar = collapsed.value ? 'collapsed' : 'open';
 });
 
-defineEmits<{ create: [] }>();
+defineEmits<{ create: []; recover: [] }>();
 </script>
 <template>
   <nav v-if="collapsed" class="sidebar-rail" aria-label="工作空间导航">
@@ -99,6 +100,9 @@ defineEmits<{ create: [] }>();
       <PanelLeftOpen :size="20" aria-hidden="true" />
     </button>
     <div class="rail-bottom">
+      <button type="button" aria-label="已删除项目" title="已删除项目" @click="$emit('recover')">
+        <ArchiveRestore :size="20" aria-hidden="true" />
+      </button>
       <button type="button" aria-label="新建项目" title="新建项目" @click="$emit('create')">
         <Plus :size="23" aria-hidden="true" />
       </button>
@@ -183,6 +187,9 @@ defineEmits<{ create: [] }>();
     </div>
     <button class="add-project" @click="$emit('create')">
       <Plus :size="15" aria-hidden="true" /> 新建项目
+    </button>
+    <button class="recover-projects" type="button" @click="$emit('recover')">
+      <ArchiveRestore :size="15" aria-hidden="true" /> 已删除项目
     </button>
     <div class="sidebar-bottom">
       <div class="sidebar-footer">

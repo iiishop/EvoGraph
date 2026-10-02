@@ -11,6 +11,10 @@ export interface ProjectSummary {
   milestone_count: number;
   acceptance: Acceptance;
 }
+export interface ArchivedProjectSummary extends ProjectSummary {
+  repository: string;
+  updated_at: string;
+}
 export interface Behavior {
   id: string;
   behavior_key: string;
