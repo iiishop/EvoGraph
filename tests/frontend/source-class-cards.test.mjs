@@ -1,3 +1,4 @@
+import { browseImports } from './helpers/architecture-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -52,6 +53,7 @@ const agentUrl = url(
 );
 const stub = url('export default { render() { return null; } };');
 const imports = {
+  ...browseImports,
   vue,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../api/client': apiUrl,
@@ -61,6 +63,7 @@ const imports = {
   '../../composables/useAgent': agentUrl,
   '../../lib/architectureRoles': url(transpile(source('lib/architectureRoles.ts'))),
   './DiagramView.vue': stub,
+  './ArchitectureBrowser.vue': stub,
   './ArchitectureQuality.vue': stub,
   './ComponentPassport.vue': stub,
 };

@@ -1,3 +1,4 @@
+import { browseImports } from './helpers/architecture-fixtures.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -299,6 +300,7 @@ const agentUrl = moduleUrl(
 );
 const stub = moduleUrl('export default { inheritAttrs: false, render() { return null; } };');
 const imports = {
+  ...browseImports,
   vue: vueUrl,
   'lucide-vue-next': pathToFileURL(require.resolve('lucide-vue-next')).href,
   '../../api/client': apiUrl,
@@ -307,6 +309,7 @@ const imports = {
   '../../composables/useScopedClassDetail': scopedUrl,
   '../../lib/architectureRoles': moduleUrl(transpile(source('lib/architectureRoles.ts'))),
   './DiagramView.vue': stub,
+  './ArchitectureBrowser.vue': stub,
   './ArchitectureQuality.vue': stub,
   './ComponentPassport.vue': stub,
   './DiagramImage.vue': stub,

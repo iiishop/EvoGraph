@@ -333,6 +333,9 @@ async function isolatedWorkspace(handler = async () => undefined) {
     './useWorkflowDrafts': url(
       'export const workflowDrafts = { retain() {}, discard() {}, activate() {}, reconcile() {} };',
     ),
+    './useArchitectureBrowse': url(
+      'export const architectureBrowse = { retain() {}, discard() {}, activate() {}, reconcile() {} };',
+    ),
   };
   const actualWorkspace = url(
     compile(source('composables/useWorkspace.ts')).replace(
@@ -558,6 +561,9 @@ test('confirmed workspace settings cannot be overwritten by an older in-flight r
     ),
     './useWorkflowDrafts': url(
       'export const workflowDrafts = { retain() {}, discard() {}, activate() {}, reconcile() {} };',
+    ),
+    './useArchitectureBrowse': url(
+      'export const architectureBrowse = { retain() {}, discard() {}, activate() {}, reconcile() {} };',
     ),
   };
   const actualWorkspace = url(

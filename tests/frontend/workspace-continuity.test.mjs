@@ -1,3 +1,4 @@
+import { browseStoreUrl } from './helpers/architecture-fixtures.mjs';
 import {
   composerDocumentUrl,
   composerEditorStubUrl,
@@ -66,6 +67,7 @@ async function harness(initialize = true) {
     '../api/client': apiUrl,
     './useAgentDrafts': draftsUrl,
     './useWorkflowDrafts': workflowUrl,
+    './useArchitectureBrowse': browseStoreUrl,
     './useNotifications': moduleUrl('export const useNotifications = () => ({ push() {} });'),
   };
   const code = compile('composables/useWorkspace.ts').replace(
@@ -78,6 +80,7 @@ async function harness(initialize = true) {
   const { useWorkspace } = await import(moduleUrl(code));
   const { agentDrafts } = await import(draftsUrl);
   const { workflowDrafts } = await import(workflowUrl);
+  const { architectureBrowse } = await import(browseStoreUrl);
   const { env } = await import(apiUrl);
   const records = new Map(['A', 'B', 'C'].map((id) => [id, project(id)]));
   const handlers = {};
@@ -113,6 +116,7 @@ async function harness(initialize = true) {
     workspace,
     drafts: agentDrafts,
     workflows: workflowDrafts,
+    browsing: architectureBrowse,
     records,
     handlers,
     env,
@@ -434,4 +438,85 @@ test('only accepted complete snapshots invalidate removed-node drafts and reintr
   records.set('A', withNodes(4, ['M2']));
   await workspace.selectProject('A');
   assert.equal(first.draft.value, undefined);
+});
+
+test('accepted workspace lifecycle retains architecture navigation across selections and discards it on deletion or list removal', async () => {
+  const { workspace, browsing, records } = await harness();
+  const a = browsing.viewState(workspace.state.project);
+  a.query = 'architecture browse state';
+  await workspace.selectProject('B');
+  assert.equal(browsing.viewState(workspace.state.project).query, '');
+  await workspace.selectProject('A');
+  assert.equal(browsing.viewState(workspace.state.project).query, 'architecture browse state');
+  await workspace.deleteProject({ id: 'A', name: 'A' });
+  assert.equal(browsing.viewState(project('A')), undefined);
+  await workspace.undoDelete();
+  assert.equal(browsing.viewState(workspace.state.project).query, '');
+  assert.notEqual(browsing.viewState(workspace.state.project).key, a.key);
+  browsing.viewState(workspace.state.project).query = 'restored';
+  await workspace.selectProject('B');
+  records.delete('A');
+  await workspace.refresh();
+  assert.equal(browsing.viewState(project('A')), undefined);
+});
+
+test('a delayed project selection cannot activate drafts or browsing after a Settings round-trip', async () => {
+  for (const returnToProjects of [false, true]) {
+    const { workspace, handlers, drafts, workflows, browsing, saved } = await harness();
+    drafts.bind(() => 'A').content.value = 'keep the current draft';
+    const a = browsing.viewState(workspace.state.project);
+    a.query = 'keep query';
+    const pending = deferred();
+    handlers['projects.get'] = () => pending.promise;
+    const selecting = workspace.selectProject('B');
+    workspace.setPage('settings');
+    if (returnToProjects) workspace.setPage('projects');
+    pending.resolve(project('B', 5));
+    await selecting;
+    assert.equal(workspace.state.page, returnToProjects ? 'projects' : 'settings');
+    assert.equal(workspace.state.project.id, 'A');
+    assert.equal(saved.get('evograph.project'), 'A');
+    assert.equal(drafts.bind(() => 'A').content.value, 'keep the current draft');
+    assert.equal(browsing.viewState(workspace.state.project).query, 'keep query');
+    assert.equal(workspace.state.error, '');
+  }
+});
+
+test('same-project delayed reads and errors cannot replace newer equal-revision history or browsing', async () => {
+  for (const failed of [false, true]) {
+    const { workspace, handlers, browsing } = await harness();
+    workspace.applyProject({ ...project('A', 10), messages: [], events: [] });
+    browsing.viewState(workspace.state.project).query = 'api';
+    const pending = deferred();
+    handlers['projects.get'] = () => pending.promise;
+    const selecting = workspace.selectProject('A');
+    workspace.applyProject({
+      ...project('A', 10),
+      messages: [{ id: 'new canonical history' }],
+      events: [{ id: 'new event' }],
+    });
+    if (failed) pending.reject(new Error('obsolete read failure'));
+    else pending.resolve({ ...project('A', 10), messages: [], events: [] });
+    await selecting;
+    assert.equal(workspace.state.project.messages[0].id, 'new canonical history');
+    assert.equal(workspace.state.project.events[0].id, 'new event');
+    assert.equal(browsing.viewState(workspace.state.project).query, 'api');
+    assert.equal(workspace.state.error, '');
+  }
+});
+
+test('same-project selection rejects an older revision but accepts a newly created incarnation', async () => {
+  const { workspace, handlers, browsing } = await harness();
+  workspace.applyProject({ ...project('A', 20), created_at: 'old', messages: [{ id: 'current' }] });
+  browsing.viewState(workspace.state.project).query = 'old incarnation';
+  handlers['projects.get'] = () => ({ ...project('A', 19), created_at: 'old', messages: [] });
+  await workspace.selectProject('A');
+  assert.equal(workspace.state.project.revision, 20);
+  assert.equal(workspace.state.project.messages[0].id, 'current');
+  const previousKey = browsing.viewState(workspace.state.project).key;
+  handlers['projects.get'] = () => ({ ...project('A', 0), created_at: 'new', messages: [] });
+  await workspace.selectProject('A');
+  assert.equal(workspace.state.project.created_at, 'new');
+  assert.equal(browsing.viewState(workspace.state.project).query, '');
+  assert.notEqual(browsing.viewState(workspace.state.project).key, previousKey);
 });

@@ -5,6 +5,7 @@ import type { PageId } from '../lib/navigation';
 import { useNotifications } from './useNotifications';
 import { agentDrafts } from './useAgentDrafts';
 import { workflowDrafts } from './useWorkflowDrafts';
+import { architectureBrowse } from './useArchitectureBrowse';
 
 const state = reactive({
   projects: [] as ProjectSummary[],
@@ -28,9 +29,11 @@ let settingsOperationOwner: symbol | null = null;
 // Live agent snapshots can advance messages/history without changing the
 // project revision. A background read started before one is no longer current.
 let snapshotSequence = 0;
+let navigationSequence = 0;
 let pendingSelection: { id: string; sequence: number } | null = null;
 
 function reconcileWorkflowDrafts(project: Project) {
+  architectureBrowse.reconcile(project);
   workflowDrafts.reconcile(
     project.id,
     [...project.milestones, ...(project.source_milestones ?? [])].map((node) => node.id),
@@ -39,6 +42,13 @@ function reconcileWorkflowDrafts(project: Project) {
 
 async function loadProject(id: string, navigate = false) {
   const sequence = ++selectSequence;
+  const navigation = navigationSequence;
+  const snapshot = snapshotSequence;
+  // A later page intent or equal-revision live snapshot supersedes this read.
+  const current = () =>
+    sequence === selectSequence &&
+    navigation === navigationSequence &&
+    !(state.project?.id === id && snapshot !== snapshotSequence);
   pendingSelection = { id, sequence };
   if (navigate) {
     state.page = 'projects';
@@ -47,20 +57,28 @@ async function loadProject(id: string, navigate = false) {
   state.error = '';
   try {
     const project = await command<Project>('projects.get', { project_id: id });
-    if (sequence !== selectSequence) return;
+    if (!current()) return;
+    if (
+      state.project?.id === id &&
+      project.created_at === state.project.created_at &&
+      project.revision < state.project.revision
+    )
+      return;
+    architectureBrowse.activate(project);
     agentDrafts.activate(id);
     workflowDrafts.activate(id);
     reconcileWorkflowDrafts(project);
     state.project = project;
     localStorage.setItem('evograph.project', id);
   } catch (error) {
-    if (sequence === selectSequence) state.error = String(error);
+    if (current()) state.error = String(error);
   } finally {
     if (pendingSelection?.sequence === sequence) pendingSelection = null;
   }
 }
 
 function discardProject(id: string) {
+  architectureBrowse.discard(id);
   agentDrafts.discard(id);
   workflowDrafts.discard(id);
   // Deleting the rendered A must not cancel an in-flight user selection of B.
@@ -95,6 +113,7 @@ async function refresh() {
     // A list fetched across a selection may predate that project (for example,
     // creation or restore). It is not authority to discard the newer draft.
     if (!current() || selecting || pendingSelection) return;
+    architectureBrowse.retain(state.projects.map((project) => project.id));
     agentDrafts.retain(state.projects.map((project) => project.id));
     workflowDrafts.retain(state.projects.map((project) => project.id));
     if (state.project && !state.projects.some((p) => p.id === state.project!.id)) {
@@ -162,6 +181,7 @@ async function init() {
 }
 
 async function selectProject(id: string) {
+  navigationSequence++;
   await loadProject(id, true);
 }
 
@@ -239,6 +259,7 @@ export function useWorkspace() {
       state.selectedId = id;
     },
     setPage: (page: PageId) => {
+      navigationSequence++;
       state.page = page;
     },
     dismiss: () => {

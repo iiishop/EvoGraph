@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { Search, Network, Maximize2, ArrowLeft, X, Layers, LoaderCircle } from 'lucide-vue-next';
+import { Network, Maximize2, ArrowLeft, X, Layers, LoaderCircle } from 'lucide-vue-next';
 import type { Project } from '../../types';
 import DiagramView from './DiagramView.vue';
+import ArchitectureBrowser from './ArchitectureBrowser.vue';
+import { useArchitectureBrowse } from '../../composables/useArchitectureBrowse';
+import { architectureVisibleIds } from '../../lib/architectureBrowse';
 import DiagramImage from './DiagramImage.vue';
 import ArchitectureQuality from './ArchitectureQuality.vue';
 import ComponentPassport from './ComponentPassport.vue';
@@ -18,11 +21,17 @@ import {
 } from '../../composables/useScopedClassDetail';
 const agent = useAgent();
 const props = defineProps<{ project: Project }>();
-const view = ref(props.project.architectures.length ? 'current' : 'source'),
-  query = ref(''),
-  focusedId = ref(''),
-  relation = ref('all'),
-  historyOpen = ref(false);
+const {
+  view,
+  query,
+  focusedId,
+  role,
+  relation,
+  key: browseKey,
+  viewport,
+  rememberViewport,
+} = useArchitectureBrowse(() => props.project);
+const historyOpen = ref(false);
 const graph = ref<InstanceType<typeof DiagramView>>();
 const workbench = ref<HTMLElement>();
 const stage = ref<HTMLElement>();
@@ -30,10 +39,12 @@ const scopePicker = ref<HTMLElement>();
 const stageHeight = ref(250);
 let sizeObserver: ResizeObserver | undefined;
 let sizeFrame = 0;
+let disposed = false;
 function measureStage() {
+  if (disposed) return;
   cancelAnimationFrame(sizeFrame);
   sizeFrame = requestAnimationFrame(() => {
-    if (!workbench.value || !stage.value || !stage.value.clientWidth) return;
+    if (disposed || !workbench.value || !stage.value || !stage.value.clientWidth) return;
     const top =
       stage.value.getBoundingClientRect().top -
       workbench.value.getBoundingClientRect().top +
@@ -42,6 +53,7 @@ function measureStage() {
   });
 }
 function observeWorkbench() {
+  if (disposed) return;
   sizeObserver?.disconnect();
   if (workbench.value) sizeObserver?.observe(workbench.value);
   if (scopePicker.value) sizeObserver?.observe(scopePicker.value);
@@ -52,6 +64,7 @@ onMounted(() => {
   observeWorkbench();
 });
 onBeforeUnmount(() => {
+  disposed = true;
   cancelAnimationFrame(sizeFrame);
   sizeObserver?.disconnect();
 });
@@ -60,7 +73,7 @@ const architecture = computed(() =>
     ? props.project.architectures.at(-1)
     : view.value === 'source'
       ? null
-      : props.project.architectures[Number(view.value)],
+      : props.project.architectures.find((item) => `revision:${item.number}` === view.value),
 );
 const diagram = computed(() =>
   view.value === 'source' ? props.project.source_diagram : architecture.value?.diagram,
@@ -77,6 +90,7 @@ const contextLabel = computed(() =>
 const contextKey = computed(() =>
   JSON.stringify([
     props.project.id,
+    props.project.created_at,
     view.value,
     architectureRevision.value,
     props.project.source_fingerprint,
@@ -153,15 +167,9 @@ const sources = computed(() =>
 watch(
   () => props.project.id,
   () => {
-    view.value = props.project.architectures.length ? 'current' : 'source';
     historyOpen.value = false;
   },
 );
-watch(contextKey, () => {
-  focusedId.value = '';
-  relation.value = 'all';
-  query.value = '';
-});
 watch(
   () => [agent.state.navigationTick, agent.state.follow[props.project.id]],
   () => {
@@ -184,7 +192,10 @@ watch(
           (item) => item.number === scoped.architecture_revision,
         );
         if (index < 0) return;
-        view.value = index === props.project.architectures.length - 1 ? 'current' : String(index);
+        view.value =
+          index === props.project.architectures.length - 1
+            ? 'current'
+            : `revision:${scoped.architecture_revision}`;
       }
       if (!selectScope(scoped.component_ids)) return;
       if (savedDesigns.value.some((item) => item.id === scoped.id)) {
@@ -203,9 +214,42 @@ function chooseView(value: string) {
   view.value = value;
 }
 function chooseComponent(id: string) {
+  if (id && !diagram.value?.nodes.some((node) => node.id === id)) return;
   agent.freeView(props.project.id);
+  if (focusedId.value === id && id) graph.value?.locate(id);
   focusedId.value = id;
+  if (!id) relation.value = 'all';
 }
+const visibleIds = computed(() =>
+  diagram.value
+    ? architectureVisibleIds(
+        diagram.value,
+        query.value,
+        role.value,
+        focusedId.value,
+        relation.value,
+      )
+    : new Set<string>(),
+);
+const hasFilters = computed(() =>
+  Boolean(
+    query.value.trim() || role.value !== 'all' || focusedId.value || relation.value !== 'all',
+  ),
+);
+async function showAll() {
+  agent.freeView(props.project.id);
+  query.value = '';
+  role.value = 'all';
+  focusedId.value = '';
+  relation.value = 'all';
+  const key = browseKey.value;
+  await nextTick();
+  if (key === browseKey.value) graph.value?.fit();
+}
+function browseManually() {
+  agent.freeView(props.project.id);
+}
+
 function changeScope(id: string) {
   agent.freeView(props.project.id);
   toggleScope(id);
@@ -261,9 +305,10 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         v-for="(a, i) in project.architectures"
         :key="a.number"
         :aria-pressed="
-          view === String(i) || (view === 'current' && i === project.architectures.length - 1)
+          view === `revision:${a.number}` ||
+          (view === 'current' && i === project.architectures.length - 1)
         "
-        @click="chooseView(String(i))"
+        @click="chooseView(`revision:${a.number}`)"
       >
         <strong>A{{ a.number }}</strong
         ><span>{{ a.summary }}</span
@@ -281,12 +326,24 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         </button>
       </p>
       <div v-show="!detailOpen" class="architecture-tools">
-        <label class="component-search"
-          ><Search :size="16" /><input
-            v-model="query"
-            aria-label="搜索架构组件"
-            placeholder="搜索组件与职责"
-        /></label>
+        <ArchitectureBrowser
+          :key="browseKey"
+          :nodes="diagram.nodes"
+          :query="query"
+          :role="role"
+          :focused-id="focusedId"
+          @update:query="
+            query = $event;
+            browseManually();
+          "
+          @select="chooseComponent"
+        />
+        <select v-model="role" aria-label="组件类型" @change="browseManually">
+          <option value="all">全部类型</option>
+          <option v-for="item in roles" :key="item" :value="item">
+            {{ architectureRole(item).label }}
+          </option>
+        </select>
         <select
           :value="focusedId"
           aria-label="选择架构组件"
@@ -297,13 +354,26 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
             {{ node.label }}
           </option>
         </select>
-        <select v-model="relation" :disabled="!focusedId" aria-label="关系范围">
+        <select
+          v-model="relation"
+          :disabled="!focusedId"
+          aria-label="关系范围"
+          @change="browseManually"
+        >
           <option value="all">全部关系</option>
           <option value="upstream">上游关系</option>
           <option value="downstream">下游关系</option>
         </select>
         <button class="icon-button" aria-label="适应架构画布" @click="graph?.fit()">
           <Maximize2 :size="17" />
+        </button>
+      </div>
+      <div v-show="!detailOpen" class="architecture-browse-status">
+        <span role="status"
+          >{{ visibleIds.size }}/{{ diagram.nodes.length }} 个组件高亮 · 其余组件及关系仍保留</span
+        >
+        <button class="text-button" @click="showAll">
+          {{ hasFilters ? '清除筛选 · 显示全部' : '显示全部组件' }}
         </button>
       </div>
       <div v-show="!detailOpen" class="architecture-legend">
@@ -414,11 +484,15 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
         :style="{ height: `${stageHeight}px` }"
       >
         <DiagramView
-          :key="view"
+          :key="browseKey"
           ref="graph"
           :diagram="diagram"
           :source="view === 'source'"
           :query="query"
+          :role="role"
+          :browse-key="browseKey"
+          :initial-viewport="viewport"
+          @viewport="rememberViewport"
           :focused-id="focusedId"
           :relation="relation"
           @select="chooseComponent"
@@ -429,7 +503,7 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
           :diagram="diagram"
           :project="project"
           :source="view === 'source'"
-          @close="focusedId = ''"
+          @close="chooseComponent('')"
           @select="chooseComponent"
         >
           <template #scope-action>
@@ -987,5 +1061,23 @@ defineExpose({ fit: () => graph.value?.fit(), reset: () => graph.value?.reset() 
   .class-detail-evidence {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.architecture-browse-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  padding: 0 18px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.architecture-browse-status .text-button {
+  font-size: 11px;
+}
+.architecture-browse-status .text-button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 </style>

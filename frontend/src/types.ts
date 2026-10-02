@@ -209,6 +209,7 @@ export interface TurnSummary {
   };
 }
 export interface Project extends ProjectSummary {
+  created_at: string;
   class_model_state: { current: boolean; reasons: string[] };
   uml_diagrams: UmlDiagram[];
   source_milestones: Milestone[];
