@@ -105,6 +105,9 @@ async function component(path) {
 const MilestoneInspector = await component('graph/MilestoneInspector');
 const SourceInspector = await component('graph/SourceInspector');
 const ProjectDialog = await component('projects/ProjectDialog');
+imports['../graph/BaselineMilestoneStatus.vue'] = moduleUrl(
+  'export default { inheritAttrs: false, render() { return null; } };',
+);
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const EvidencePanel = await component('workspace/EvidencePanel');
 const AgentDock = await component('agent/AgentDock');

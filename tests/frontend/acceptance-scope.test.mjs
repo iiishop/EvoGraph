@@ -51,6 +51,9 @@ async function component(path) {
 }
 const GoalMarker = await component('graph/GoalMarker');
 const MilestoneInspector = await component('graph/MilestoneInspector');
+imports['../graph/BaselineMilestoneStatus.vue'] = moduleUrl(
+  'export default { inheritAttrs: false, render() { return null; } };',
+);
 const WorkspaceHeader = await component('workspace/WorkspaceHeader');
 const render = (view, props) => renderToString(createSSRApp(view, props));
 const behavior = (id, scope) => ({

@@ -13,8 +13,6 @@ import { useAgent } from '../../composables/useAgent';
 import { edgeKind, edgeKinds } from '../../lib/edgeKinds';
 import { separateBoxes, routeAroundBoxes } from '../../lib/graphGeometry';
 import { fitMilestoneBounds, graphBounds, keepMilestoneVisible } from '../../lib/milestoneViewport';
-import BaselineMilestoneStatus from './BaselineMilestoneStatus.vue';
-import GoalMarker from './GoalMarker.vue';
 
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
@@ -317,9 +315,7 @@ defineExpose({ fit, reset, locate });
 </script>
 <template>
   <div class="milestone-stage">
-    <BaselineMilestoneStatus :project="project" />
     <div class="graph-canvas" @keydown.capture="activateNodeKey">
-      <GoalMarker :project="project" />
       <VueFlow
         v-if="nodes.length"
         :id="flowId"

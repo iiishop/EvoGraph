@@ -74,18 +74,20 @@ watch(tab, (value) => {
 </script>
 <template>
   <main ref="root" class="project-workspace">
-    <GraphToolbar
-      :tab="tab"
-      :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
-      @tab="
-        tab = $event;
-        agent.freeView(project.id);
-      "
-      @find="openFinder"
-      @fit="graph?.fit()"
-      @reset="graph?.reset()"
-    />
-    <WorkspaceHeader :project="project" @edit="$emit('edit')" />
+    <div class="workspace-chrome">
+      <WorkspaceHeader :project="project" @edit="$emit('edit')" />
+      <GraphToolbar
+        :tab="tab"
+        :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
+        @tab="
+          tab = $event;
+          agent.freeView(project.id);
+        "
+        @find="openFinder"
+        @fit="graph?.fit()"
+        @reset="graph?.reset()"
+      />
+    </div>
     <section
       class="workspace-body"
       :class="{
