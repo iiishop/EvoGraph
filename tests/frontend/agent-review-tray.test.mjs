@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { markdownContentUrl } from './helpers/markdown-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
@@ -238,10 +239,12 @@ const receipt = await component('AgentTurnSummary', {
 });
 const message = await component('MessageContent', {
   vue,
+  './MarkdownContent': markdownContentUrl,
   '../../lib/composerDocument': composerModule,
 });
 const { value: Tray } = await component('AgentReviewTray', {
   vue,
+  './MarkdownContent': markdownContentUrl,
   'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
   './AgentTurnSummary.vue': receipt.moduleUrl,
   './MessageContent.vue': message.moduleUrl,
@@ -275,6 +278,7 @@ const summary = () => ({
 });
 const project = () => ({
   id: 'P1',
+  name: 'Project A',
   milestones: [
     { id: 'A', title: 'A' },
     { id: 'B', title: 'B' },
@@ -886,6 +890,113 @@ test('resize with no reading space never pulls existing focus away from a backgr
     await flush();
     assert.equal(visible(view), false);
     assert.equal(document.activeElement, composer);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('project-specific reader contains only each project’s persisted Markdown history across switching and remount', async () => {
+  const a = {
+    ...project(),
+    messages: [
+      { id: 'request', project_id: 'P1', role: 'user', content: 'A request', created_at: '' },
+      {
+        id: 'reply',
+        project_id: 'P1',
+        role: 'assistant',
+        content: '# A result\n\n- A detail',
+        created_at: '',
+      },
+    ],
+  };
+  const b = {
+    ...project(),
+    id: 'P2',
+    name: 'Project B',
+    messages: [
+      { id: 'request', project_id: 'P2', role: 'user', content: 'B request', created_at: '' },
+      {
+        id: 'reply',
+        project_id: 'P2',
+        role: 'assistant',
+        content: '## B result\n\n**B detail**',
+        created_at: '',
+      },
+    ],
+  };
+  const view = await mount({ project: a, summary: null });
+  try {
+    for (const [current, foreign] of [
+      [a, b],
+      [b, a],
+      [a, b],
+    ]) {
+      view.props.project = current;
+      await flush();
+      await click(view.tiles()[0]);
+      const reader = view.surface().querySelector('.review-history');
+      assert.match(reader.textContent, new RegExp(current.id === 'P1' ? 'A result' : 'B result'));
+      assert.doesNotMatch(
+        reader.textContent,
+        new RegExp(foreign.id === 'P1' ? 'A result' : 'B result'),
+      );
+      assert.equal(reader.querySelectorAll('article').length, 2);
+      assert.equal(reader.querySelectorAll('h1,h2').length, 1);
+      assert.match(view.surface().textContent, new RegExp(`${current.name} · 2 条`));
+      await click(close(view));
+    }
+  } finally {
+    view.dispose();
+  }
+  // Settings destroys the workspace/dock; a remount uses canonical project data.
+  const reopened = await mount({ project: a, summary: null });
+  try {
+    await click(reopened.tiles()[0]);
+    assert.match(reopened.surface().querySelector('h1').textContent, /A result/);
+    assert.doesNotMatch(reopened.surface().textContent, /B result/);
+  } finally {
+    reopened.dispose();
+  }
+});
+
+test('long project names remain bounded so the close control keeps its own space', async () => {
+  const view = await mount({ project: { ...project(), name: 'long-project-'.repeat(8) } });
+  try {
+    await click(view.tiles()[0]);
+    const heading = view.surface().querySelector('.review-surface-heading');
+    const label = heading.querySelector('span');
+    assert.equal(parseFloat(getComputedStyle(heading.firstElementChild).minWidth), 0);
+    assert.equal(getComputedStyle(label).maxWidth, '100%');
+    assert.equal(getComputedStyle(label).overflow, 'hidden');
+    assert.equal(getComputedStyle(label).textOverflow, 'ellipsis');
+    assert.equal(getComputedStyle(close(view)).flexShrink, '0');
+    assert.match(label.textContent, /long-project-/);
+    await click(close(view));
+    assert.equal(visible(view), false);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('compact reply preview uses parsed text without changing saved Markdown or code punctuation', async () => {
+  const content =
+    '## Result\n\n**Done** with `a_b **literal**` and <https://example.com/a_b?q=x#part>\n\n| Item | State |\n| --- | --- |\n| A | Ready |';
+  const view = await mount({
+    project: { ...project(), messages: [{ id: 'md', role: 'assistant', content, created_at: '' }] },
+  });
+  try {
+    const preview = view.tiles()[0].querySelector('.review-tile-preview').textContent;
+    assert.equal(
+      preview,
+      '已保存 · Result Done with a_b **literal** and https://example.com/a_b?q=x#part Item State A Ready',
+    );
+    assert.equal(view.props.project.messages[0].content, content);
+    await click(view.tiles()[0]);
+    assert.equal(view.surface().querySelector('h2').textContent, 'Result');
+    assert.equal(
+      view.surface().querySelector('strong + .message-content code').textContent,
+      'a_b **literal**',
+    );
   } finally {
     view.dispose();
   }
