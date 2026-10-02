@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue';
+import { computed, onMounted, ref, watch, type Component } from 'vue';
 import { AlertCircle, CheckCircle2, X, Orbit } from 'lucide-vue-next';
 import AppSidebar from './components/sidebar/AppSidebar.vue';
 import ProjectDialog from './components/projects/ProjectDialog.vue';
@@ -8,10 +8,18 @@ import ProjectRecoveryDialog from './components/projects/ProjectRecoveryDialog.v
 import { navigation } from './lib/navigation';
 import { useWorkspace } from './composables/useWorkspace';
 import type { Project } from './types';
+import { useSurfaceMotion } from './composables/useSurfaceMotion';
 import NotificationStack from './components/ui/NotificationStack.vue';
 const { state, init, dismiss, undoDelete } = useWorkspace();
 const activePage = computed(() => navigation.find((page) => page.id === state.page)!);
 const activeComponent = computed<Component>(() => activePage.value.component);
+const pageSurface = ref<HTMLElement>();
+const pageMotion = useSurfaceMotion();
+watch(
+  () => `${state.loading}:${state.page}:${state.project?.id}`,
+  () => pageMotion.reveal(pageSurface.value),
+  { flush: 'post' },
+);
 const recoveryOpen = ref(false);
 const dialogOpen = ref(false),
   editing = ref<Project | undefined>();
@@ -29,19 +37,21 @@ onMounted(init);
   <div class="app-shell spatial-app">
     <AppSidebar @create="create" @recover="recoveryOpen = true" />
     <div class="app-main">
-      <div v-if="state.loading" class="loading-screen">
-        <Orbit :size="35" class="spinning" />
-        <h2>正在打开工作空间</h2>
-        <p>读取本地项目与演化记录…</p>
+      <div ref="pageSurface" class="app-page-surface">
+        <div v-if="state.loading" class="loading-screen">
+          <Orbit :size="35" class="spinning" />
+          <h2>正在打开工作空间</h2>
+          <p>读取本地项目与演化记录…</p>
+        </div>
+        <component
+          :is="activeComponent"
+          v-else-if="state.project || !activePage.countProjects"
+          :key="`${state.page}-${state.project?.id}`"
+          v-bind="activePage.countProjects ? { project: state.project } : {}"
+          @edit="edit"
+        />
+        <ProjectWelcome v-else :reconnect="Boolean(state.error)" @create="create" @retry="init" />
       </div>
-      <component
-        :is="activeComponent"
-        v-else-if="state.project || !activePage.countProjects"
-        :key="`${state.page}-${state.project?.id}`"
-        v-bind="activePage.countProjects ? { project: state.project } : {}"
-        @edit="edit"
-      />
-      <ProjectWelcome v-else :reconnect="Boolean(state.error)" @create="create" @retry="init" />
     </div>
     <div
       v-if="state.error || state.notice"
@@ -74,3 +84,12 @@ onMounted(init);
     <NotificationStack />
   </div>
 </template>
+
+<style scoped>
+.app-page-surface {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+</style>

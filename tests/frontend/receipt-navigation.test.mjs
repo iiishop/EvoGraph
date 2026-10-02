@@ -1,3 +1,4 @@
+import { surfaceMotionUrl } from './helpers/surface-motion-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -38,6 +39,7 @@ const { env } = await import(envUrl);
 const stub = url('export default { render() { return null; } };');
 const alias = (name) => url(`export { ${name} as default } from ${JSON.stringify(envUrl)};`);
 const imports = {
+  '../../composables/useSurfaceMotion': surfaceMotionUrl,
   vue,
   '../../composables/useAgent': envUrl,
   '../../composables/useWorkspace': envUrl,

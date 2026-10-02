@@ -23,6 +23,9 @@ const replyTrigger = ref<HTMLButtonElement>();
 const receiptTrigger = ref<HTMLButtonElement>();
 const layer = ref<HTMLElement>();
 const surface = ref<HTMLElement>();
+const surfaceFill = ref<HTMLElement>();
+const surfaceContent = ref<HTMLElement>();
+const surfaceHeading = ref<HTMLElement>();
 const closeButton = ref<HTMLButtonElement>();
 const active = ref<Review | null>(null);
 // The original controls/readers stay mounted. Closing keeps presentation until motion ends.
@@ -85,15 +88,16 @@ function measure(kind: Review): Placement | null {
   const viewportWidth = viewport?.width ?? window.innerWidth;
   const viewportHeight = viewport?.height ?? window.innerHeight;
   const ceiling = viewportTop + 12;
-  const floor = Math.min(dock.top - 10, viewportTop + viewportHeight - 12);
+  const floor = Math.min(row.bottom, viewportTop + viewportHeight - 12);
   const width = Math.min(row.width, viewportWidth - 24);
-  const height = Math.min(360, floor - ceiling);
+  const readingFloor = Math.min(dock.top - 10, floor);
+  const height = Math.min(360, readingFloor - ceiling);
   if (width <= 0 || height < 64) return null;
   const left = clamp(row.left, viewportLeft + 12, viewportLeft + viewportWidth - width - 12);
   return {
     ceiling,
     floor,
-    frame: { left, top: floor - height, width, height },
+    frame: { left, top: readingFloor - height, width, height },
     row: box(row),
     tile: box(tile),
   };
@@ -114,21 +118,35 @@ function settleNow() {
   shown.value = active.value;
   tileShown.value = active.value;
 }
+function clip(rect: Box, base: Box) {
+  const top = Math.max(0, rect.top - base.top);
+  const right = Math.max(0, base.left + base.width - rect.left - rect.width);
+  const bottom = Math.max(0, base.top + base.height - rect.top - rect.height);
+  const left = Math.max(0, rect.left - base.left);
+  return `inset(${top}px ${right}px ${bottom}px ${left}px round 13px)`;
+}
 async function change(next: Review | null, animate: boolean, restoreFocus: boolean) {
   const previous = active.value ?? tileShown.value;
   const kind = next ?? previous;
   if (!kind || (next && !available(next))) return;
   const button = trigger(kind);
-  const fill = button?.querySelector<HTMLElement>('.review-tile-fill');
-  const copy = button?.querySelector<HTMLElement>('.review-tile-copy');
+  const triggerFill = button?.querySelector<HTMLElement>('.review-tile-fill');
+  const triggerCopy = button?.querySelector<HTMLElement>('.review-tile-copy');
+  const triggerVisual = triggerFill ? box(triggerFill.getBoundingClientRect()) : null;
+  const triggerCopyLeft = triggerCopy?.getBoundingClientRect().left;
+  const triggerCopyOpacity = triggerCopy ? Number(getComputedStyle(triggerCopy).opacity) : 1;
   const sibling = trigger(kind === 'reply' ? 'receipt' : 'reply');
   const siblingOpacity = sibling ? Number(getComputedStyle(sibling).opacity) : 0;
-  // Sample actual tile visuals BEFORE cancelling an interrupted effect. Reading text never scales.
-  const visual = fill ? box(fill.getBoundingClientRect()) : null;
-  const copyLeft = copy?.getBoundingClientRect().left;
-  const copyOpacity = copy ? Number(getComputedStyle(copy).opacity) : 1;
+  // Read the actual decorative shell BEFORE cancellation. Reversal starts from
+  // these pixels, not from either endpoint. The content itself never scales.
+  const visual =
+    shown.value && surfaceFill.value ? box(surfaceFill.value.getBoundingClientRect()) : null;
+  const headingVisual =
+    shown.value && surfaceHeading.value ? box(surfaceHeading.value.getBoundingClientRect()) : null;
   const readerOpacity =
-    shown.value && surface.value ? Number(getComputedStyle(surface.value).opacity) : 0;
+    shown.value && surfaceContent.value
+      ? Number(getComputedStyle(surfaceContent.value).opacity)
+      : 0;
   const measured = measure(kind);
   const token = ++sequence;
   cancelMotion();
@@ -151,56 +169,95 @@ async function change(next: Review | null, animate: boolean, restoreFocus: boole
   if (!mounted || token !== sequence) return;
   if (next && document.activeElement === focusAtRequest)
     closeButton.value?.focus({ preventScroll: true });
-  const element = surface.value;
-  if (!animate || media?.matches || !element?.animate || !fill || !copy) {
+  const fill = surfaceFill.value;
+  const content = surfaceContent.value;
+  const heading = surfaceHeading.value;
+  if (!animate || media?.matches || !fill?.animate || !content || !heading) {
     shown.value = next;
     tileShown.value = next;
     return;
   }
   const options = {
-    duration: next ? 220 : 180,
-    easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+    duration: next ? 280 : 230,
+    // On-screen geometry needs a readable middle, rather than finishing most
+    // displacement in the first 50 ms of a strong entrance ease-out.
+    easing: 'cubic-bezier(0.77, 0, 0.175, 1)',
     fill: 'both' as const,
   };
   const source = visual && visual.width > 0 ? visual : measured.tile;
-  const target = next ? measured.row : measured.tile;
+  const target = next ? measured.frame : measured.tile;
   const tileMotion = fill.animate(
     [
-      { transform: transform(source, measured.row), opacity: 1 },
-      { transform: transform(target, measured.row), opacity: 1 },
+      { transform: transform(source, measured.frame), opacity: 1 },
+      { transform: transform(target, measured.frame), opacity: 1 },
     ],
     options,
   );
-  // Counterpart label moves at its normal size; only the decorative card surface changes scale.
-  const copyMotion = copy.animate(
+  const headingSource = headingVisual ?? source;
+  const headingTarget = next ? measured.frame : measured.tile;
+  const headingMotion = heading.animate(
     [
       {
-        transform: `translateX(${(copyLeft ?? measured.tile.left + 12) - measured.row.left - 12}px)`,
-        opacity: copyOpacity,
+        transform: `translate(${headingSource.left - measured.frame.left}px, ${headingSource.top - measured.frame.top}px)`,
       },
       {
-        transform: `translateX(${next ? 0 : measured.tile.left - measured.row.left}px)`,
-        opacity: next ? 1 : 0,
+        transform: `translate(${headingTarget.left - measured.frame.left}px, ${headingTarget.top - measured.frame.top}px)`,
       },
     ],
     options,
   );
-  const readerMotion = element.animate(
-    [{ opacity: readerOpacity }, { opacity: next ? 1 : 0 }],
+  const readerMotion = content.animate(
+    [
+      { clipPath: clip(source, measured.frame), opacity: readerOpacity },
+      { clipPath: clip(target, measured.frame), opacity: next ? 1 : 0 },
+    ],
     options,
   );
   const siblingMotion = sibling?.animate(
     [{ opacity: siblingOpacity }, { opacity: next ? 0 : 1 }],
     options,
   );
-  const owned = [tileMotion, copyMotion, readerMotion, ...(siblingMotion ? [siblingMotion] : [])];
+  const triggerMotions =
+    triggerFill && triggerCopy
+      ? [
+          triggerFill.animate(
+            [
+              { transform: transform(triggerVisual ?? measured.tile, measured.row), opacity: 1 },
+              {
+                transform: transform(next ? measured.row : measured.tile, measured.row),
+                opacity: 1,
+              },
+            ],
+            options,
+          ),
+          triggerCopy.animate(
+            [
+              {
+                transform: `translateX(${(triggerCopyLeft ?? measured.tile.left + 12) - measured.row.left - 12}px)`,
+                opacity: triggerCopyOpacity,
+              },
+              {
+                transform: `translateX(${next ? 0 : measured.tile.left - measured.row.left}px)`,
+                opacity: next ? 1 : 0,
+              },
+            ],
+            options,
+          ),
+        ]
+      : [];
+  const owned = [
+    ...triggerMotions,
+    tileMotion,
+    headingMotion,
+    readerMotion,
+    ...(siblingMotion ? [siblingMotion] : []),
+  ];
   motions = owned;
   tileMotion.onfinish = () => {
     if (token !== sequence) return;
     shown.value = active.value;
     tileShown.value = active.value;
     motions = [];
-    // Apply collapsed DOM geometry/visibility before removing filled effects.
     void nextTick(() => {
       for (const animation of owned) animation.cancel();
     });
@@ -239,14 +296,16 @@ function locate(id: string) {
 function reposition() {
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
-  const kind = active.value;
-  settleNow();
+  const kind = active.value ?? tileShown.value;
   if (!kind) return;
   const measured = measure(kind);
-  if (measured) placement.value = measured;
-  else {
-    // A viewport constraint may retire the reader without a user dismissal. Return only
-    // its own focus to the still-owned trigger; background focus remains untouched.
+  if (measured) {
+    // ResizeObserver's initial notification or an unrelated scroll must not
+    // silently cancel a healthy transition whose anchors have not moved.
+    if (JSON.stringify(measured) === JSON.stringify(placement.value)) return;
+    settleNow();
+    placement.value = measured;
+  } else {
     const restore = surface.value?.contains(document.activeElement);
     const button = trigger(kind);
     reset();
@@ -403,47 +462,50 @@ onUnmounted(() => {
         :aria-hidden="!active"
         :inert="active ? undefined : true"
       >
-        <header class="review-surface-heading">
-          <div>
-            <strong>{{ shown === 'receipt' ? '最近变更' : '对话记录' }}</strong>
-            <span>{{
-              shown === 'receipt' && summary ? turnSummaryStatus(summary) : '已保存的请求与回复'
-            }}</span>
-          </div>
-          <button
-            ref="closeButton"
-            type="button"
-            class="review-close"
-            aria-label="收起阅读面板"
-            @click="close"
+        <div ref="surfaceFill" class="review-surface-fill" aria-hidden="true"></div>
+        <div ref="surfaceContent" class="review-surface-content">
+          <header ref="surfaceHeading" class="review-surface-heading">
+            <div>
+              <strong>{{ shown === 'receipt' ? '最近变更' : '对话记录' }}</strong>
+              <span>{{
+                shown === 'receipt' && summary ? turnSummaryStatus(summary) : '已保存的请求与回复'
+              }}</span>
+            </div>
+            <button
+              ref="closeButton"
+              type="button"
+              class="review-close"
+              aria-label="收起阅读面板"
+              @click="close"
+            >
+              <X :size="16" aria-hidden="true" />
+            </button>
+          </header>
+          <div
+            v-show="shown === 'reply'"
+            class="review-reader review-history"
+            tabindex="0"
+            aria-label="项目对话记录"
           >
-            <X :size="16" aria-hidden="true" />
-          </button>
-        </header>
-        <div
-          v-show="shown === 'reply'"
-          class="review-reader review-history"
-          tabindex="0"
-          aria-label="项目对话记录"
-        >
-          <article v-for="message in project.messages" :key="message.id" :class="message.role">
-            <strong>{{ message.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
-            <MessageContent :message="message" />
-          </article>
-        </div>
-        <div
-          v-show="shown === 'receipt'"
-          class="review-reader review-receipt"
-          tabindex="0"
-          aria-label="最近已保存的规划变更"
-        >
-          <AgentTurnSummary
-            v-if="summary && !running"
-            :summary="summary"
-            :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
-            :open="true"
-            @locate="locate"
-          />
+            <article v-for="message in project.messages" :key="message.id" :class="message.role">
+              <strong>{{ message.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
+              <MessageContent :message="message" />
+            </article>
+          </div>
+          <div
+            v-show="shown === 'receipt'"
+            class="review-reader review-receipt"
+            tabindex="0"
+            aria-label="最近已保存的规划变更"
+          >
+            <AgentTurnSummary
+              v-if="summary && !running"
+              :summary="summary"
+              :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
+              :open="true"
+              @locate="locate"
+            />
+          </div>
         </div>
       </section>
     </div>
@@ -555,14 +617,32 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
+  border-radius: 14px;
+  color: var(--ink, #233c4d);
+  overflow: visible;
+  pointer-events: auto;
+  transform-origin: top left;
+}
+.review-surface-fill {
+  position: absolute;
+  inset: 0;
   border: 1px solid var(--line, #d8e1e7);
   border-radius: 14px;
   background: #fff;
-  color: var(--ink, #233c4d);
   box-shadow: 0 10px 32px #223d551c;
-  overflow: hidden;
-  pointer-events: auto;
+  box-sizing: border-box;
   transform-origin: top left;
+  pointer-events: none;
+}
+.review-surface-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-radius: inherit;
+  overflow: hidden;
 }
 .agent-review-surface[aria-hidden='true'] {
   pointer-events: none;
