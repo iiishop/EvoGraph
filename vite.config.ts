@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { frontendProvenance } from './tools/frontend_provenance.mjs';
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), frontendProvenance()],
   root: 'frontend',
   base: './',
   build: { outDir: '../dist', emptyOutDir: true },

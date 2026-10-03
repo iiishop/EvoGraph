@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 from .application.api import Application
-from .frontend_build import is_stale, rebuild
+from .frontend_build import bundle_status, rebuild
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
         "--build",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Rebuild the frontend before starting; default rebuilds only when sources changed",
+        help="Rebuild before starting; default verifies provenance and rebuilds stale bundles",
     )
     args = parser.parse_args()
 
@@ -41,14 +41,27 @@ def main():
 
     root = Path(__file__).resolve().parents[2]
     dist = root / "dist"
-    if args.build is not False and (args.build or is_stale(root, dist)):
-        ok, message = rebuild(root)
-        print(message, flush=True)
-        if not ok and not (dist / "index.html").exists():
-            install = "npm ci" if (root / "package-lock.json").is_file() else "npm install"
-            raise SystemExit(
-                f"前端未构建，且自动构建不可用。请在 {root} 依次运行：\n{install}\nnpm run build"
-            )
+    if args.build is False:
+        print(
+            "警告：已显式使用 --no-build，跳过前端校验和重建；现有 dist 可能与源码不一致。",
+            flush=True,
+        )
+    else:
+        valid, provenance = bundle_status(root, dist)
+        if args.build or not valid:
+            if not valid:
+                print(f"{provenance}，正在重新构建…", flush=True)
+            ok, message = rebuild(root)
+            print(message, flush=True)
+            if not ok:
+                install = "npm ci" if (root / "package-lock.json").is_file() else "npm install"
+                raise SystemExit(
+                    f"前端构建失败，已停止启动以避免使用旧版或不完整界面。\n"
+                    f"请在 {root} 依次运行：\n{install}\nnpm run build\n"
+                    "如需有意使用现有预构建界面，可显式传入 --no-build（不保证与源码一致）。"
+                )
+        else:
+            print(provenance, flush=True)
 
     try:
         app = Application(args.data_dir)

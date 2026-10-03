@@ -163,9 +163,11 @@ npm ci
 uv run evograph
 ```
 
-Start-up checks the frontend itself: if `dist/` is missing, or anything under `frontend/` is newer than the built output, it runs `npm run build` (about 15 seconds) before launching, so a frontend edit needs no manual rebuild. A failed build does not block start-up: npm's output is printed and the existing `dist/` is used; only a missing `dist/` is fatal.
+Start-up verifies the frontend by content, not file timestamps. Each `npm run build` records source, dependency-lock, build-configuration and output hashes in `dist/.evograph-build.json`. A missing, changed or unverifiable bundle is rebuilt before launching, including after copying a checkout or preserving timestamps. Startup prints the frontend version and source fingerprint. If the build fails, startup stops and shows the complete diagnostics instead of silently serving an old or incomplete interface.
 
-uv manages Python packages only. After pulling changes to frontend dependencies, run `npm ci` from the repository root, then launch again. This replaces `node_modules/` using the committed lockfile; it does not change EvoGraph's saved projects. Before building, the launcher checks for missing or out-of-date npm dependencies and prints an install command; it never installs them automatically.
+A verified bundle can launch offline without Node.js or `node_modules/`, including a prebuilt distribution with no local build inputs. Older bundles without provenance need one successful rebuild. To intentionally use an existing bundle without checking or building it, pass `--no-build`; startup prints a warning that it may differ from the source. This also preserves browser API-only use without a bundle. Linked `dist` directories are checked against the current checkout, but the launcher will not rebuild through a symbolic link into another directory.
+
+uv manages Python packages only. After pulling changes to frontend dependencies, run `npm ci` from the repository root, then launch again. This replaces `node_modules/` using the committed lockfile; it does not change EvoGraph's saved projects. Both the launcher and `npm run build` check for missing or out-of-date npm dependencies against the lockfile and print an install command; neither installs them automatically.
 
 If a build still fails, run `npm run build` directly in that directory to diagnose it. The launcher also prints the complete combined build output, so npm configuration warnings cannot hide TypeScript errors. These commands work in Windows PowerShell too; run them on separate lines:
 
@@ -187,7 +189,7 @@ The same `uv run evograph` command works on Linux, Windows and macOS. uv install
 
 On first launch EvoGraph creates a demo project (认证工作台): a seven-milestone registration and login plan that is deliberately unexecuted, so acceptance starts at 0/7. It is there to be looked at and taken apart, not to be trusted.
 
-Other flags: `--port` (default `8765`), `--data-dir` (default `~/.evograph`, or `EVOGRAPH_DATA_DIR`), `--build` (force a frontend rebuild first) and `--no-build` (skip the frontend check). Project state, events and evidence live in `evograph.sqlite3` inside that directory.
+Other flags: `--port` (default `8765`), `--data-dir` (default `~/.evograph`, or `EVOGRAPH_DATA_DIR`), `--build` (force a frontend rebuild first) and `--no-build` (explicitly skip frontend verification and rebuilding, with a warning). Project state, events and evidence live in `evograph.sqlite3` inside that directory.
 
 Desktop notes: Windows needs the WebView2 runtime, macOS uses the system WebKit, and Linux needs a graphical session and Qt's native system libraries. The launcher never installs system packages or changes security/keyring settings. Use `--gui gtk` only for a manually configured GTK backend; `--gui qt` remains an explicit override. Browser mode serves the same application over local HTTP without starting a desktop backend.
 

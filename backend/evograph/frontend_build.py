@@ -2,63 +2,117 @@
 
 The desktop and browser entry points both serve ``dist/``, so an edit under
 ``frontend/`` stays invisible until someone runs ``npm run build``. Start-up
-rebuilds the bundle when a source is newer than the built output, unless the
-caller passes ``--no-build``.
+verifies content hashes of the build inputs and outputs, rebuilding any stale
+or unverifiable bundle unless the caller explicitly passes ``--no-build``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
 
-# Everything under these paths ends up inside the bundle.
-WATCHED_DIRS = ("frontend/src",)
-WATCHED_FILES = (
-    "frontend/index.html",
+# Match tools/frontend_provenance.mjs (verified by a cross-language contract test).
+WATCHED_PATHS = (
+    "frontend",
     "package.json",
     "package-lock.json",
     "tsconfig.json",
     "vite.config.ts",
+    "tools/frontend_provenance.mjs",
+    "tools/frontend_provenance.d.mts",
 )
-
+MANIFEST_NAME = ".evograph-build.json"
+EXPECTED_SOURCE_HASH_ENV = "EVOGRAPH_EXPECTED_FRONTEND_SOURCE_HASH"
 BUILD_TIMEOUT_SECONDS = 300
 
 
-def _newest_mtime(paths: list[Path]) -> float:
-    newest = 0.0
-    for path in paths:
-        if not path.exists():
-            continue
-        if path.is_file():
-            newest = max(newest, path.stat().st_mtime)
-            continue
-        for item in path.rglob("*"):
-            if item.is_file():
-                newest = max(newest, item.stat().st_mtime)
-    return newest
+def _is_link(path: Path) -> bool:
+    """Include Windows junctions, which Path.is_symlink omits (also on Python 3.11)."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_reparse_tag", 0) == 0xA0000003
 
 
-def bundle_time(dist: Path) -> float:
-    """Newest mtime inside the built bundle, 0.0 when it is missing."""
-    newest = 0.0
-    if not dist.exists():
-        return newest
-    for item in dist.rglob("*"):
-        if item.is_file():
-            newest = max(newest, item.stat().st_mtime)
-    return newest
+def file_hashes(root: Path, paths: tuple[str, ...], exclude: str = "") -> dict[str, str]:
+    """Portable, content-based identity, independent of checkout path and timestamps."""
+    files = {}
+
+    def visit(path: Path) -> None:
+        name = path.relative_to(root).as_posix()
+        if name == exclude:
+            return
+        if _is_link(path):
+            raise ValueError(f"不能校验符号链接：{path}")
+        if path.is_dir():
+            for child in path.iterdir():
+                visit(child)
+        elif path.is_file():
+            files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    for name in paths:
+        visit(root / name)
+    return files
+
+
+def source_hashes(project_root: Path) -> dict[str, str]:
+    return file_hashes(project_root, WATCHED_PATHS)
+
+
+def source_hash(files: dict[str, str]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(files):
+        digest.update(f"{name}\0{files[name]}\n".encode("utf-8"))
+    return digest.hexdigest()
+
+
+def bundle_status(project_root: Path, dist: Path) -> tuple[bool, str]:
+    """Verify build provenance and outputs; source-free distributions need no npm.
+
+    This is a freshness/integrity check, not a signed software authenticity check.
+    Existing legacy builds remain available through the explicit --no-build override.
+    """
+    if not (dist / "index.html").is_file():
+        return False, "前端 dist/index.html 缺失"
+    try:
+        manifest = json.loads((dist / MANIFEST_NAME).read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+            return False, "前端构建来源记录无效或版本不受支持"
+        sources, outputs = manifest.get("sources"), manifest.get("outputs")
+        for files in (sources, outputs):
+            if not isinstance(files, dict) or not files or not all(
+                isinstance(name, str) and isinstance(value, str)
+                and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+                for name, value in files.items()
+            ):
+                return False, "前端构建来源记录不完整"
+        if source_hash(sources) != manifest.get("sourceHash"):
+            return False, "前端构建来源指纹无效"
+        # Resolve only the bundle root, allowing a deliberately linked dist to be
+        # verified against this checkout; nested links are not trusted build assets.
+        if file_hashes(dist.resolve(), (".",), MANIFEST_NAME) != outputs:
+            return False, "前端构建文件已变更或缺失"
+        current_sources = source_hashes(project_root)
+        if current_sources and current_sources != sources:
+            return False, "前端源码、依赖锁文件或构建配置与现有 dist 不一致"
+        mode = "已校验" if current_sources else "已校验预构建包（无本地源码）"
+        version = manifest.get("version", "unknown")
+        return True, f"前端 v{version} · 源码 {manifest['sourceHash'][:12]} · {mode}"
+    except FileNotFoundError:
+        return False, "前端缺少构建来源记录（旧版或未完成的构建）"
+    except (OSError, ValueError, TypeError) as error:
+        return False, f"无法校验前端构建：{error}"
 
 
 def is_stale(project_root: Path, dist: Path) -> bool:
-    """True when the bundle is missing or older than a frontend source."""
-    if not (dist / "index.html").exists():
-        return True
-    sources = [project_root / name for name in (*WATCHED_DIRS, *WATCHED_FILES)]
-    return _newest_mtime(sources) > bundle_time(dist)
+    return not bundle_status(project_root, dist)[0]
 
 
 def npm_command() -> list[str] | None:
@@ -140,9 +194,18 @@ def _build_output(output: str | bytes | None) -> str:
 
 def rebuild(project_root: Path) -> tuple[bool, str]:
     """Run the frontend build. Returns ``(ok, message)``; never raises."""
+    try:
+        linked = _is_link(project_root / "dist")
+    except OSError as error:
+        return False, f"无法检查前端构建目录：{error}"
+    if linked:
+        return False, (
+            "dist 是符号链接或 Windows 目录联接，已停止构建以免覆盖其他目录。"
+            "请手动改为本仓库的构建目录后重试，或用 --no-build 显式使用现有界面"
+        )
     command = npm_command()
     if command is None:
-        return False, "未找到 npm，跳过前端构建（沿用现有 dist）"
+        return False, "未找到 npm，无法构建前端。请安装 Node.js 与 npm 后重试"
     install_command = "npm ci" if (project_root / "package-lock.json").is_file() else "npm install"
     try:
         issues = _dependency_issues(project_root)
@@ -159,6 +222,7 @@ def rebuild(project_root: Path) -> tuple[bool, str]:
         )
     started = time.monotonic()
     try:
+        inputs = source_hashes(project_root)
         completed = subprocess.run(
             command,
             cwd=project_root,
@@ -168,13 +232,16 @@ def rebuild(project_root: Path) -> tuple[bool, str]:
             encoding="utf-8",
             errors="replace",
             timeout=BUILD_TIMEOUT_SECONDS,
+            # Vite loads configuration before buildStart. Bind its provenance to
+            # the inputs that existed before npm/type-checking/config evaluation.
+            env={**os.environ, EXPECTED_SOURCE_HASH_ENV: source_hash(inputs)},
         )
     except subprocess.TimeoutExpired as error:
         return False, (
-            f"前端构建超时（{BUILD_TIMEOUT_SECONDS}s），沿用现有 dist：\n"
+            f"前端构建超时（{BUILD_TIMEOUT_SECONDS}s）：\n"
             f"{_build_output(error.output)}"
         )
-    except OSError as error:
+    except (OSError, ValueError) as error:
         return False, f"前端构建无法启动：{error}"
     elapsed = time.monotonic() - started
     if completed.returncode != 0:
@@ -182,4 +249,12 @@ def rebuild(project_root: Path) -> tuple[bool, str]:
             f"前端构建失败（npm 退出码 {completed.returncode}）：\n"
             f"{_build_output(completed.stdout)}"
         )
-    return True, f"前端构建完成（{elapsed:.1f}s）"
+    try:
+        if source_hashes(project_root) != inputs:
+            return False, "前端输入在构建期间发生变化，已停止启动；请重新运行 npm run build"
+    except (OSError, ValueError) as error:
+        return False, f"前端构建后无法校验输入：{error}"
+    valid, provenance = bundle_status(project_root, project_root / "dist")
+    if not valid:
+        return False, f"构建命令成功，但前端校验失败：{provenance}\n请运行 npm run build 重试"
+    return True, f"前端构建完成（{elapsed:.1f}s）\n{provenance}"
