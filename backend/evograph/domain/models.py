@@ -136,8 +136,23 @@ class ProposedMilestone(Model):
     title: str = Field(min_length=1, max_length=120)
     intent: str = Field(min_length=1, max_length=1500)
     scope: list[str] = Field(min_length=1, max_length=30)
-    dependencies: list[str] = Field(default_factory=list, max_length=24)
-    dependency_reasons: dict[str, str] = Field(default_factory=dict)
+    dependencies: list[str] = Field(
+        default_factory=list, max_length=24,
+        description=(
+            "IDs of prerequisites THIS milestone needs first, not its dependents. "
+            "If B needs A, B.dependencies=[A]; the graph arrow is A -> B. "
+            "On update_milestone, omit to retain existing prerequisites; an explicit list replaces "
+            "them, including [] to clear. On create and full-plan proposals, omission means none."
+        ),
+    )
+    dependency_reasons: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "For each prerequisite ID, explain why THIS milestone cannot proceed without it. "
+            "On update_milestone, omission retains reasons for surviving edges. An explicit map "
+            "replaces all reasons and must cover every prerequisite; new edges always need reasons."
+        ),
+    )
     architecture_components: list[str] = Field(default_factory=list, max_length=30)
     attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     behaviors: list[ProposedBehavior] = Field(min_length=1, max_length=12)

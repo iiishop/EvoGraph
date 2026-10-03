@@ -22,7 +22,7 @@ class ReadFile(Model):
 
 @tool(
     "read_project",
-    "Read current target, milestones, behavior revisions and baseline. Always use actual stable IDs when editing.",
+    "Read current target, milestones, behavior revisions and baseline. Each milestone's dependencies lists the prerequisites it needs first, not its dependents: B.dependencies=[A] means B needs A, drawn A -> B. Always use actual stable IDs when editing.",
     Empty,
     label="读取当前规划",
 )

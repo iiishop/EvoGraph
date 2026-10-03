@@ -36,6 +36,15 @@ class GraphEditor:
             behaviors = [by_id[bid] for bid in node.behavior_revision_ids]
             if any(b.owner != node.id for b in behaviors):
                 raise ValueError("行为验收归属不一致")
+            # Validate edge metadata before filtering out read-only SRC nodes.
+            # Missing reasons must be a tool validation error, not a KeyError.
+            if len(node.dependencies) != len(set(node.dependencies)):
+                raise ValueError("同一前置依赖不能重复")
+            if set(node.dependency_reasons) - set(node.dependencies):
+                raise ValueError("依赖理由引用了不存在的连线")
+            for dependency in node.dependencies:
+                if not node.dependency_reasons.get(dependency, "").strip():
+                    raise ValueError(f"{node.id} 的前置依赖 {dependency} 缺少依赖理由")
             dependencies = [d for d in node.dependencies if d not in source_ids]
             proposed.append(
                 ProposedMilestone(
@@ -117,6 +126,16 @@ class GraphEditor:
         architecture_components = resolve_architecture_components(p, proposed, old)
         if set(proposed.attachment_ids) - {a.id for a in p.attachments}:
             raise ValueError("引用的资料不存在")
+        dependencies = proposed.dependencies
+        if old and "dependencies" not in proposed.model_fields_set:
+            dependencies = old.dependencies
+        dependency_reasons = proposed.dependency_reasons
+        if old and "dependency_reasons" not in proposed.model_fields_set:
+            # Retain metadata only for surviving edges. New prerequisites still
+            # need an explicit reason, and [] deliberately removes every edge.
+            dependency_reasons = {
+                d: old.dependency_reasons[d] for d in dependencies if d in old.dependency_reasons
+            }
         before = [m.model_dump() for m in p.milestones]
         bids = []
         existing_behaviors = {
@@ -160,7 +179,11 @@ class GraphEditor:
                 p.behaviors.append(b)
                 bids.append(b.id)
         node = Milestone(
-            **proposed.model_dump(exclude={"behaviors", "architecture_components"}),
+            **proposed.model_dump(
+                exclude={"behaviors", "architecture_components", "dependencies", "dependency_reasons"}
+            ),
+            dependencies=dependencies,
+            dependency_reasons=dependency_reasons,
             architecture_components=architecture_components,
             behavior_revision_ids=bids,
             obligations=obligations(proposed.change_types),
@@ -199,7 +222,21 @@ class GraphEditor:
                 )
             )
         self._save(p, f"{'创建' if create else '更新'} {node.id} · {node.title}", before)
-        return {"node_ids": [node.id], "effect": "created" if create else "updated"}
+        return {
+            "node_ids": [node.id],
+            "effect": "created" if create else "updated",
+            "dependency": {
+                "dependent_id": node.id,
+                "dependent_title": node.title,
+                "previous_prerequisite_ids": list(old.dependencies) if old else [],
+                "dependent_prerequisite_ids": list(node.dependencies),
+                "dependency_reasons": dict(node.dependency_reasons),
+                "dependency_types": {
+                    d: node.dependency_types.get(d, "implementation") for d in node.dependencies
+                },
+                "state": "saved_before_transitive_reduction",
+            },
+        }
 
     def remove(self, project_id: str, milestone_id: str):
         p = self.db.get(project_id)
@@ -231,6 +268,7 @@ class GraphEditor:
         node = p.milestone(target)
         if node.lease_active:
             raise ValueError("目标节点正在执行，不能修改依赖")
+        edge_existed_before = source in node.dependencies
         before = [n.model_dump() for n in p.milestones]
         if remove:
             node.dependencies = [d for d in node.dependencies if d != source]
@@ -242,8 +280,27 @@ class GraphEditor:
             if source not in node.dependencies:
                 node.dependencies.append(source)
             node.dependency_reasons[source], node.dependency_types[source] = reason, kind
-        self._save(p, f"{'移除' if remove else '连接'} {source} → {target}", before)
-        return {"node_ids": [target], "effect": "updated"}
+        changed = before != [m.model_dump() for m in p.milestones]
+        if changed:
+            self._save(p, f"{'移除' if remove else '连接'} {source} → {target}", before)
+        else:
+            self._check(p)
+        prerequisite = next(m for m in [*p.source_milestones, *p.milestones] if m.id == source)
+        return {
+            **({} if changed else {"status": "NO_PROGRESS"}),
+            "node_ids": [target],
+            "effect": "updated",
+            "dependency": {
+                "prerequisite_id": source,
+                "prerequisite_title": prerequisite.title,
+                "dependent_id": target,
+                "dependent_title": node.title,
+                "edge_existed_before": edge_existed_before,
+                "edge_present_after": source in node.dependencies,
+                "dependent_prerequisite_ids": list(node.dependencies),
+                "state": "saved_before_transitive_reduction",
+            },
+        }
 
     def target(self, project_id: str, statement: str):
         p = self.db.get(project_id)

@@ -75,6 +75,7 @@ This distinction is about final-goal membership. It does not waive step acceptan
 ## What the graph enforces
 
 - Prerequisite edges only. Every edge carries a written reason and a type: implementation, migration or verification.
+- Incremental milestone updates preserve prerequisites when `dependencies` is omitted. An explicit list replaces them, including `[]` to clear. Omitted `dependency_reasons` retains reasons for surviving edges; an explicit map replaces them and must explain every prerequisite. New edges always require reasons. Surviving edge types are preserved, removed-edge metadata is dropped, and the tool receipt reports the saved prerequisites before transitive reduction. Creation and full-plan proposals still treat omitted dependencies as none.
 - Structural checks run before anything is saved. Duplicate milestone ids, one behavior key claimed by two milestones, unknown change types, a dependency without a reason, and dependency cycles are all rejected.
 - Obligations generated from change types. general, api, data and auth each add their own checklist: an api change asks who consumes the API and whether the contract stays compatible, a data change asks about migration and rollback, an auth change asks about credential storage and failure paths.
 - A tick needs a written basis. Resolving an obligation without a note is refused. The checkbox records an investigation, it does not replace one.
@@ -92,6 +93,8 @@ This distinction is about final-goal membership. It does not waive step acceptan
 | inspect_repository | Bounded file inventory plus README and manifest excerpts |
 | read_repository_file | Read one source or test file: at most six per turn, secrets and symlinks refused |
 | ask_user | Stop and ask when the intent is too thin for a reliable edit |
+
+Dependency tools name the roles explicitly: if B needs A first, use `prerequisite_id=A` and `dependent_id=B`. This stores A in B's `dependencies` and draws A → B. Complete legacy `source`/`target` pairs retain that meaning; mixed endpoint names are rejected. The tool receipt reports whether the edge existed before and after the operation, plus the dependent's saved prerequisites. A successful removal of an absent edge does not claim an edge was deleted. These are immediate saved-state receipts; the final turn summary still reports net edges after transitive reduction. This clarifies direction without mechanically proving that a dependency is semantically justified.
 
 Each turn gets 12 model rounds, 24 tool calls and 6 source files, then stops. Two rounds without progress end the turn as well.
 
