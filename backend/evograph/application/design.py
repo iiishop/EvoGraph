@@ -1,5 +1,7 @@
 """Versioned architecture decisions and reusable, validated visual descriptions."""
 
+from copy import deepcopy
+
 from ..domain.models import ArchitectureRevision, ArchitectureSpec, Diagram, Obligation
 from ..infrastructure.repository import EXCLUDED, readable, root_path
 
@@ -21,6 +23,8 @@ def validate_diagram(diagram: Diagram):
         raise ValueError("架构分组 ID 重复")
     members: set[str] = set()
     for group in diagram.groups:
+        if len(set(group.member_node_ids)) != len(group.member_node_ids):
+            raise ValueError("同一架构分组中的节点不能重复")
         unknown = set(group.member_node_ids) - ids
         if unknown:
             raise ValueError("架构分组引用不存在的节点：" + ", ".join(sorted(unknown)))
@@ -53,10 +57,24 @@ class DesignService:
         }
 
     def update(self, project_id: str, specification: ArchitectureSpec):
-        validate_diagram(specification.diagram)
         p = self.db.get(project_id)
         if p.archived:
             raise ValueError("项目已删除")
+        if p.architectures:
+            previous = p.architectures[-1]
+            # An omitted rationale field is not a request to erase prior decisions.
+            # Explicit [] still clears it; retirements remains this revision's delta.
+            preserved = {
+                name: deepcopy(getattr(previous, name))
+                for name in ("decisions", "quality_scenarios", "risks", "research_ids")
+                if name not in specification.model_fields_set
+            }
+            specification = specification.model_copy(update=preserved, deep=True)
+        validate_diagram(specification.diagram)
+        if set(specification.diagram.milestone_ids) - {m.id for m in p.milestones}:
+            raise ValueError("关联的里程碑不存在")
+        if set(specification.diagram.attachment_ids) - {a.id for a in p.attachments}:
+            raise ValueError("关联的资料不存在")
         component_ids = {n.id for n in specification.diagram.nodes}
         refs = {name for node in specification.diagram.nodes for name in node.source_refs}
         if refs:
@@ -79,8 +97,12 @@ class DesignService:
             raise ValueError("架构设计必须使用 architecture 图类型")
         if (
             p.architectures
-            and p.architectures[-1].model_dump(exclude={"number", "created_at"})
-            == specification.model_dump()
+            and p.architectures[-1].model_dump(exclude={"number", "created_at", "retirements"})
+            == specification.model_dump(exclude={"retirements"})
+            and (
+                not specification.retirements
+                or p.architectures[-1].retirements == specification.retirements
+            )
         ):
             return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS"}
         old_ids = {n.id for n in p.architectures[-1].diagram.nodes} if p.architectures else set()

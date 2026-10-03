@@ -94,3 +94,43 @@ def test_review_accepts_mixed_target_and_step_coverage(planned):
     planned.behaviors.append(temporary)
     planned.milestones[0].behavior_revision_ids.append(temporary.id)
     assert "target_coverage_missing" not in {f["code"] for f in review_design(planned)["findings"]}
+
+
+def test_review_exposes_actual_target_membership_despite_optional_prose(planned):
+    from evograph.domain.models import BehaviorRevision
+
+    milestone = planned.milestones[0]
+    milestone.title = "Optional leaf"
+    milestone.intent = "This can be skipped"
+    local = BehaviorRevision(
+        behavior_key="local.check", version=1, statement="Transitional check",
+        owner=milestone.id, acceptance_scope="milestone",
+    )
+    planned.behaviors.append(local)
+    milestone.behavior_revision_ids.append(local.id)
+    before = planned.model_dump()
+    membership = review_design(planned)["prospective_target_membership"]
+    row = membership["milestones"][0]
+    assert row["milestone_id"] == milestone.id
+    assert row["target_behavior_count"] == 1
+    assert row["milestone_behavior_count"] == 1
+    assert row["missing_behavior_count"] == 0
+    assert membership["target_behavior_count"] == 1
+    assert planned.model_dump() == before
+
+
+def test_membership_preview_counts_active_revisions_not_old_targets(planned):
+    from evograph.domain.models import BehaviorRevision
+
+    for behavior in planned.behaviors:
+        behavior.acceptance_scope = "milestone"
+    planned.behaviors.append(BehaviorRevision(
+        behavior_key="retired.target", version=1, statement="Historical target",
+        owner="removed",
+    ))
+    planned.milestones[0].behavior_revision_ids.append("missing")
+    report = review_design(planned)
+    membership = report["prospective_target_membership"]
+    assert membership["target_behavior_count"] == 0
+    assert membership["milestones"][0]["missing_behavior_count"] == 1
+    assert any(f["code"] == "invalid_behavior" for f in report["findings"])

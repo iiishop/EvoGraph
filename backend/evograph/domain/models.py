@@ -204,7 +204,12 @@ class Attachment(Model):
 class DiagramNode(Model):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
     label: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=1500)
+    description: str = Field(
+        default="", max_length=1500,
+        description="For architecture nodes: concrete responsibility, owned data/invariants and public "
+        "contract; distinguish "
+        "observed source facts from proposed design or assumptions. Avoid a technology-name-only label.",
+    )
     role: Literal["frontend", "backend", "database", "security", "cloud", "message", "external"] = (
         "backend"
     )
@@ -251,14 +256,35 @@ class QualityScenario(Model):
 
 
 class ArchitectureSpec(Model):
-    quality_scenarios: list[QualityScenario] = Field(default_factory=list, max_length=20)
-    risks: list[str] = Field(default_factory=list, max_length=20)
+    quality_scenarios: list[QualityScenario] = Field(
+        default_factory=list, max_length=20,
+        description="Relevant concrete scenarios and proposed targets, never invented measurements. "
+        "Omit to retain existing scenarios; an explicit list replaces them, including [] to clear.",
+    )
+    risks: list[str] = Field(
+        default_factory=list, max_length=20,
+        description="Material risks, assumptions and mitigations. Omit to retain existing risks; "
+        "an explicit list replaces them, including [] to clear.",
+    )
 
-    summary: str = Field(min_length=1, max_length=4000)
+    summary: str = Field(
+        min_length=1, max_length=4000,
+        description="Complete target design and its basis: user outcome, known scale and deployment "
+        "constraints, scope and labeled assumptions. Explain why its complexity fits this project.",
+    )
     technologies: list[Technology] = Field(min_length=1, max_length=30)
-    decisions: list[str] = Field(default_factory=list, max_length=30)
+    decisions: list[str] = Field(
+        default_factory=list, max_length=30,
+        description="Consequential boundary/technology/pattern choices: concrete pressure, simplest "
+        "viable alternative, tradeoff and reconsideration trigger. Patterns are optional. Omit to retain "
+        "existing decisions; an explicit list replaces them, including [] to clear.",
+    )
     diagram: Diagram
-    research_ids: list[str] = Field(default_factory=list, max_length=30)
+    research_ids: list[str] = Field(
+        default_factory=list, max_length=30,
+        description="Existing research evidence IDs. Omit to retain current references; "
+        "an explicit list replaces them, including [] to clear.",
+    )
     retirements: list[MigrationStep] = Field(default_factory=list)
 
 
