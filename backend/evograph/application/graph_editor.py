@@ -263,8 +263,8 @@ class GraphEditor:
         p = self.db.get(project_id)
         if not any(m.id == source for m in p.source_milestones):
             p.milestone(source)
-        elif remove:
-            raise ValueError("SRC 基线能力不能通过计划工具修改")
+        # Both operations edit only the planned dependent's reference. A SRC
+        # prerequisite stays read-only; milestone() still rejects SRC targets.
         node = p.milestone(target)
         if node.lease_active:
             raise ValueError("目标节点正在执行，不能修改依赖")
