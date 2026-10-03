@@ -90,7 +90,7 @@ function receive(event: AgentEvent) {
   )
     workspace.appendMessage(event.project_id, event.saved_message);
   if (event.label) state.label = event.label;
-  if (event.type === 'thinking') state.label = '正在理解目标与当前图…';
+  if (event.type === 'thinking') state.label = event.label || '正在理解目标与当前图…';
   if (event.type === 'focus') {
     state.focusId = event.node_id ?? '';
     state.effect = event.effect ?? '';

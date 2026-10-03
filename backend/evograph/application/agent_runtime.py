@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+from contextlib import aclosing
 
 from ..agent_tools import tools
 from ..agent_tools.base import ToolContext
@@ -206,70 +207,73 @@ class AgentRuntime:
                 saved_message = None
                 round_interrupted = False
                 try:
-                    async for chunk in self.app.settings.stream(
-                        messages, [t.schema() for t in registry.values()]
-                    ):
-                        kind = chunk["type"]
-                        if kind == "usage":
-                            token_count += chunk["tokens"]
-                        elif kind == "text":
-                            text += chunk["text"]
-                            # Streamed narration is deliberately not rendered in the main workspace.
-                        elif kind == "tool_delta":
-                            call = calls.setdefault(
-                                chunk["index"],
-                                {
-                                    "id": "",
-                                    "name": "",
-                                    "arguments": "",
-                                    "started": False,
-                                    "focus": None,
-                                    "execution": None,
-                                },
-                            )
-                            call["id"] += chunk.get("id", "")
-                            call["name"] += chunk.get("name", "")
-                            if call["execution"] and chunk.get("arguments", "").strip():
-                                raise ValueError("工具参数完成后仍收到额外内容，已停止本轮")
-                            call["arguments"] += chunk.get("arguments", "")
-                            if len(call["arguments"]) > 100000:
-                                raise ValueError("工具参数过长")
-                            spec = registry.get(call["name"])
-                            if spec and not call["started"]:
-                                call["started"] = True
-                                yield {
-                                    "type": "tool_started",
-                                    "tool": spec.name,
-                                    "label": spec.label,
-                                    "effect": spec.effect,
-                                }
-                            if spec and spec.focus_field:
-                                match = re.search(
-                                    r'"' + re.escape(spec.focus_field) + r'"\s*:\s*"([^"\\]+)"',
-                                    call["arguments"],
+                    async with aclosing(
+                        self.app.settings.stream(
+                            messages, [t.schema() for t in registry.values()]
+                        )
+                    ) as provider_stream:
+                        async for chunk in provider_stream:
+                            kind = chunk["type"]
+                            if kind == "usage":
+                                token_count += chunk["tokens"]
+                            elif kind == "text":
+                                text += chunk["text"]
+                                # Streamed narration is deliberately not rendered in the main workspace.
+                            elif kind == "tool_delta":
+                                call = calls.setdefault(
+                                    chunk["index"],
+                                    {
+                                        "id": "",
+                                        "name": "",
+                                        "arguments": "",
+                                        "started": False,
+                                        "focus": None,
+                                        "execution": None,
+                                    },
                                 )
-                                if match and match[1] != call["focus"]:
-                                    call["focus"] = match[1]
+                                call["id"] += chunk.get("id", "")
+                                call["name"] += chunk.get("name", "")
+                                if call["execution"] and chunk.get("arguments", "").strip():
+                                    raise ValueError("工具参数完成后仍收到额外内容，已停止本轮")
+                                call["arguments"] += chunk.get("arguments", "")
+                                if len(call["arguments"]) > 100000:
+                                    raise ValueError("工具参数过长")
+                                spec = registry.get(call["name"])
+                                if spec and not call["started"]:
+                                    call["started"] = True
                                     yield {
-                                        "type": "focus",
-                                        "node_id": match[1],
-                                        "effect": spec.effect,
+                                        "type": "tool_started",
+                                        "tool": spec.name,
                                         "label": spec.label,
+                                        "effect": spec.effect,
                                     }
-                            if spec and call["execution"] is None:
-                                try:
-                                    complete = isinstance(json.loads(call["arguments"]), dict)
-                                except ValueError:
-                                    complete = False
-                                if complete:
-                                    call["execution"] = await executor.invoke(
-                                        call["name"], call["arguments"]
+                                if spec and spec.focus_field:
+                                    match = re.search(
+                                        r'"' + re.escape(spec.focus_field) + r'"\s*:\s*"([^"\\]+)"',
+                                        call["arguments"],
                                     )
-                                    changed = executor.changed
-                                    for event in call["execution"]["events"]:
-                                        yield event
-                                    if ctx.paused:
-                                        break
+                                    if match and match[1] != call["focus"]:
+                                        call["focus"] = match[1]
+                                        yield {
+                                            "type": "focus",
+                                            "node_id": match[1],
+                                            "effect": spec.effect,
+                                            "label": spec.label,
+                                        }
+                                if spec and call["execution"] is None:
+                                    try:
+                                        complete = isinstance(json.loads(call["arguments"]), dict)
+                                    except ValueError:
+                                        complete = False
+                                    if complete:
+                                        call["execution"] = await executor.invoke(
+                                            call["name"], call["arguments"]
+                                        )
+                                        changed = executor.changed
+                                        for event in call["execution"]["events"]:
+                                            yield event
+                                        if ctx.paused:
+                                            break
                 except (asyncio.CancelledError, GeneratorExit, Exception):
                     round_interrupted = True
                     raise

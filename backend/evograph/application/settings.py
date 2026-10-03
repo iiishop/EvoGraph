@@ -1,3 +1,5 @@
+from contextlib import aclosing
+
 from ..providers import adapters
 from ..providers.base import check_url
 
@@ -80,5 +82,6 @@ class SettingsService:
         adapter = adapters()[saved["adapter"]]
         if not hasattr(adapter, "stream"):
             raise ValueError("当前 Provider 适配器不支持流式工具调用")
-        async for event in adapter.stream(saved["config"], secret, messages, tools):
-            yield event
+        async with aclosing(adapter.stream(saved["config"], secret, messages, tools)) as stream:
+            async for event in stream:
+                yield event

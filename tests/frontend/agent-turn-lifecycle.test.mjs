@@ -751,3 +751,30 @@ test('no admitted turn ID never infers success from a later canonical receipt', 
   h.workspace.state.project = receiptProject('T1', 'completed');
   assert.match(h.agent.state.label, /待确认/);
 });
+
+test('thinking events preserve explicit phase labels and use a fallback when unlabeled', async () => {
+  const { agent, env } = await agentHarness('thinking-label-precedence');
+  const labels = [];
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'T1' });
+    for (const event of [
+      { type: 'thinking', label: '正在评审架构与交付设计…' },
+      { type: 'thinking' },
+      { type: 'thinking', label: '调查当前项目' },
+      { type: 'thinking', label: '' },
+      { type: 'tool_started', label: '读取源文件' },
+    ]) {
+      receive(event);
+      labels.push(agent.state.label);
+    }
+    receive({ type: 'done', summary: { turn_id: 'T1', status: 'completed', changed: false } });
+  };
+  assert.equal(await agent.send('P1', 'Investigate the current project'), true);
+  assert.deepEqual(labels, [
+    '正在评审架构与交付设计…',
+    '正在理解目标与当前图…',
+    '调查当前项目',
+    '正在理解目标与当前图…',
+    '读取源文件',
+  ]);
+});
