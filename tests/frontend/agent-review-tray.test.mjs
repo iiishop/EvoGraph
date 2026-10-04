@@ -229,6 +229,7 @@ const transpile = (code) =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
 const summaryModule = url(transpile(source('lib/turnSummary.ts')));
+const { latestTurnSummary } = await import(summaryModule);
 const composerModule = url(transpile(source('lib/composerDocument.ts')));
 async function component(name, imports) {
   const path = `components/agent/${name}.vue`;
@@ -1218,6 +1219,11 @@ test('project-specific reader contains only each project’s persisted Markdown 
     ]) {
       view.props.project = current;
       await flush();
+      assertConversationLabel(view);
+      assert.match(
+        view.tiles()[0].querySelector('.review-tile-preview').textContent,
+        new RegExp(`^最近保存的回复 · ${current.id === 'P1' ? 'A result' : 'B result'}`),
+      );
       await click(view.tiles()[0]);
       const reader = view.surface().querySelector('.review-history');
       assert.match(reader.textContent, new RegExp(current.id === 'P1' ? 'A result' : 'B result'));
@@ -1236,6 +1242,7 @@ test('project-specific reader contains only each project’s persisted Markdown 
   // Settings destroys the workspace/dock; a remount uses canonical project data.
   const reopened = await mount({ project: a, summary: null });
   try {
+    assertConversationLabel(reopened);
     await click(reopened.tiles()[0]);
     assert.match(reopened.surface().querySelector('h1').textContent, /A result/);
     assert.doesNotMatch(reopened.surface().textContent, /B result/);
@@ -1273,7 +1280,7 @@ test('compact reply preview uses parsed text without changing saved Markdown or 
     const preview = view.tiles()[0].querySelector('.review-tile-preview').textContent;
     assert.equal(
       preview,
-      '已保存 · Result Done with a_b **literal** and https://example.com/a_b?q=x#part Item State A Ready',
+      '最近保存的回复 · Result Done with a_b **literal** and https://example.com/a_b?q=x#part Item State A Ready',
     );
     assert.equal(view.props.project.messages[0].content, content);
     await click(view.tiles()[0]);
@@ -1317,6 +1324,168 @@ const historicalProject = (events) => ({
 });
 const eventButtons = (view) => [...view.root.querySelectorAll('.timeline-receipt-trigger')];
 const receiptText = (view) => view.surface().querySelector('.review-receipt').textContent;
+
+function assertConversationLabel(view) {
+  const tile = view.tiles()[0];
+  assert.equal(tile.querySelector('.review-tile-title').textContent.trim(), '对话记录');
+  assert.equal(view.root.querySelector('.agent-review-tray').ariaLabel, '对话记录与最近变更');
+  assert.doesNotMatch(tile.textContent, /本轮回复/);
+}
+
+test('saved conversation labels never infer reply ownership from status, timestamps, or retained boundaries', async () => {
+  const old = project().messages;
+  const request = {
+    id: 'new-user',
+    role: 'user',
+    content: 'New request',
+    created_at: '2026-10-03',
+  };
+  const answer = {
+    id: 'new-answer',
+    role: 'assistant',
+    content: 'New saved answer',
+    created_at: '2026-10-03',
+  };
+  const failed = historicalSummary('failed-turn', 'failed', false);
+  const completed = historicalSummary('completed-turn', 'completed', false);
+  const savedPreview = (content) => `最近保存的回复 · ${content}`;
+  const cases = [
+    {
+      name: 'admission failure without new messages',
+      messages: old,
+      summary: failed,
+      preview: savedPreview('Latest saved answer'),
+    },
+    {
+      name: 'post-admission failure without assistant text',
+      messages: [...old, request],
+      summary: failed,
+      preview: '本轮未完成 · 查看已保存的对话',
+    },
+    {
+      name: 'partially saved assistant text',
+      messages: [...old, request, answer],
+      summary: { ...failed, history_warning: '这轮对话未完整保存' },
+      preview: savedPreview(answer.content),
+    },
+    {
+      name: 'ordinary completed new reply',
+      messages: [...old, request, answer],
+      summary: completed,
+      preview: savedPreview(answer.content),
+    },
+    {
+      name: 'missing legacy timestamps',
+      messages: old.map(({ created_at, ...message }) => message),
+      summary: failed,
+      eventTime: undefined,
+      preview: savedPreview('Latest saved answer'),
+    },
+    {
+      name: 'equal timestamps at unrelated turn boundary',
+      messages: old.map((message) => ({ ...message, created_at: '2026-10-04T00:47:04Z' })),
+      summary: failed,
+      preview: savedPreview('Latest saved answer'),
+    },
+    {
+      name: 'trimmed request and terminal event boundaries',
+      messages: [old.at(-1)],
+      summary: null,
+      preview: savedPreview('Latest saved answer'),
+    },
+    {
+      name: 'older completed receipt without a new reply',
+      messages: [...old, request],
+      summary: completed,
+      eventTime: '2026-10-02',
+      preview: '尚无新回复 · 查看已保存的对话',
+    },
+    {
+      name: 'running with only earlier saved messages',
+      messages: old,
+      summary: failed,
+      running: true,
+      preview: '正在处理 · 查看已保存的对话',
+    },
+  ];
+  for (const entry of cases) {
+    const event = entry.summary ? historicalEvent(entry.name, entry.summary) : null;
+    if (event && Object.hasOwn(entry, 'eventTime')) event.created_at = entry.eventTime;
+    const p = { ...historicalProject(event ? [event] : []), messages: entry.messages };
+    const saved = latestTurnSummary(p);
+    const before = JSON.stringify(p);
+    const view = await mount({ project: p, summary: saved, running: entry.running ?? false });
+    try {
+      assertConversationLabel(view);
+      assert.equal(
+        view.tiles()[0].querySelector('.review-tile-preview').textContent,
+        entry.preview,
+        entry.name,
+      );
+      await click(view.tiles()[0]);
+      assert.deepEqual(
+        [...view.surface().querySelectorAll('.review-history .message-content')].map(
+          (item) => item.textContent,
+        ),
+        entry.messages.map((message) => message.content),
+        entry.name,
+      );
+      if (saved && !entry.running) {
+        await click(close(view));
+        await click(view.tiles()[1]);
+        assert.equal(
+          view.surface().querySelector('.agent-turn-summary').dataset.status,
+          saved.status,
+          entry.name,
+        );
+      }
+      assert.equal(
+        JSON.stringify(view.props.project),
+        before,
+        `${entry.name}: saved prose stays untouched`,
+      );
+    } finally {
+      view.dispose();
+    }
+  }
+});
+
+// Optional read-only witness from the real no-provider admission-failure path.
+// Only explicit fixture bytes are read; this never opens the application's data directory.
+if (process.env.EVOGRAPH_SAVED_REPLY_FIXTURE) {
+  test('runtime admission failure keeps prior saved prose labeled as conversation history', async () => {
+    const p = JSON.parse(readFileSync(process.env.EVOGRAPH_SAVED_REPLY_FIXTURE, 'utf8'));
+    const saved = latestTurnSummary(p);
+    const before = JSON.stringify(p);
+    assert.equal(saved.status, 'failed');
+    assert.equal(saved.changed, false);
+    assert.equal(p.messages.at(-1).role, 'assistant');
+    assert.ok(p.messages.every((message) => !Object.hasOwn(message, 'turn_id')));
+    const view = await mount({ project: p, summary: saved });
+    try {
+      console.log(
+        `runtime witness ${p.id}: receipt ${saved.turn_id}, ${saved.status}, ${p.messages.length} saved messages; tile=${view.tiles()[0].textContent}`,
+      );
+      assertConversationLabel(view);
+      assert.match(
+        view.tiles()[0].querySelector('.review-tile-preview').textContent,
+        /^最近保存的回复 · /,
+      );
+      await click(view.tiles()[0]);
+      const rendered = [...view.surface().querySelectorAll('.review-history .message-content')];
+      assert.equal(rendered.length, p.messages.length);
+      for (const [index, message] of p.messages.entries())
+        for (const line of message.content.split('\n').filter(Boolean))
+          assert.ok(rendered[index].textContent.includes(line));
+      await click(close(view));
+      await click(view.tiles()[1]);
+      assert.equal(view.surface().querySelector('.agent-turn-summary').dataset.status, 'failed');
+      assert.equal(JSON.stringify(view.props.project), before);
+    } finally {
+      view.dispose();
+    }
+  });
+}
 
 test('real activity titles open each exact failed/stopped/recovered receipt, with historical context and predictable latest return', async () => {
   const latest = historicalSummary('LATEST', 'completed');

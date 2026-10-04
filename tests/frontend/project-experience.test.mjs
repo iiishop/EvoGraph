@@ -345,7 +345,7 @@ test('reply tile previews the latest saved assistant text when no newer user req
     }),
   });
   const preview = html.match(/class="review-tile-preview"[^>]*>([\s\S]*?)<\/span>/)?.[1] || '';
-  assert.match(preview, /已保存.*最新回复：规划已更新/);
+  assert.match(preview, /最近保存的回复 · 最新回复：规划已更新/);
   assert.doesNotMatch(preview, /旧回复|更新规划/);
 });
 

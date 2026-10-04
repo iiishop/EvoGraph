@@ -372,9 +372,11 @@ test('saved reply and change controls share a fixed strip without enabling a rea
       ],
     }),
   });
-  assert.match(html, /本轮回复/);
+  assert.match(html, /对话记录/);
+  assert.match(html, /最近保存的回复 · 规划已更新/);
+  assert.doesNotMatch(html, /本轮回复/);
   assert.match(html, /最近变更/);
-  assert.ok(html.indexOf('本轮回复') < html.indexOf('class="agent-input"'));
+  assert.ok(html.indexOf('对话记录') < html.indexOf('class="agent-input"'));
   assert.ok(html.indexOf('最近变更') < html.indexOf('class="agent-input"'));
   assert.doesNotMatch(source, /is-reading|conversationOpen/);
   assert.match(source, /:disabled="dockCollapsed"/);

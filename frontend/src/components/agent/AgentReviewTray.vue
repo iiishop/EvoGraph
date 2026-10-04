@@ -79,7 +79,7 @@ const replyPreview = computed(() => {
   if (props.running) return '正在处理 · 查看已保存的对话';
   if (props.project.messages.at(-1)?.role === 'user')
     return `${props.summary ? turnSummaryStatus(props.summary) : '尚无新回复'} · 查看已保存的对话`;
-  return text ? `已保存 · ${text.slice(0, 160)}` : '查看已发送的请求';
+  return text ? `最近保存的回复 · ${text.slice(0, 160)}` : '查看已发送的请求';
 });
 const trigger = (kind: Review) => (kind === 'reply' ? replyTrigger.value : receiptTrigger.value);
 function composerControl() {
@@ -492,7 +492,7 @@ onUnmounted(() => {
     class="agent-review-tray"
     :class="{ 'is-single': !hasReply || !hasReceipt }"
     role="group"
-    aria-label="本轮回复与最近变更"
+    aria-label="对话记录与最近变更"
   >
     <div v-if="hasReply" class="review-tile-slot">
       <button
@@ -513,7 +513,7 @@ onUnmounted(() => {
         <span class="review-tile-fill" aria-hidden="true"></span>
         <span class="review-tile-copy">
           <span class="review-tile-title"
-            >{{ latestReply ? '本轮回复' : '对话记录' }} <ChevronUp :size="13" aria-hidden="true"
+            >对话记录 <ChevronUp :size="13" aria-hidden="true"
           /></span>
           <span class="review-tile-preview">{{ replyPreview }}</span>
         </span>
