@@ -117,6 +117,8 @@ class ProjectService:
             from ..infrastructure.plan_candidates import CandidateStore
             record = CandidateStore(self.db).latest(project_id)
             if record:
+                from ..domain.plan_harness import CURRENT_POLICY
+                record["current_harness_policy_version"] = CURRENT_POLICY.version
                 if record["status"] not in {"applied", "discarded"} and record["base_revision"] != result["revision"]:
                     record["status"] = "stale"
                 record["project"] = project_view(Project.model_validate(record["project"]), self.db, include_history=False)

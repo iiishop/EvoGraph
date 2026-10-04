@@ -272,6 +272,13 @@ export interface PlanBinding {
   component_ids: string[];
   mechanism: string;
   requires_behavior_keys: string[];
+  provides?: { key: string; kind: 'command' | 'query'; action: string }[];
+  steps?:
+    | (
+        | { kind: 'invoke_command' | 'invoke_query'; capability_key: string; quote: string }
+        | { kind: 'inspect'; requirement_id: string; quote: string }
+      )[]
+    | null;
 }
 export interface PlanProcessConstraint {
   id: string;
@@ -284,6 +291,21 @@ export interface PlanContract {
   process_constraints?: PlanProcessConstraint[];
   requirements: PlanRequirement[];
   bindings: PlanBinding[];
+}
+export interface PlanHarnessDisclosure {
+  schema_version: 'planning-harness-disclosure/v1';
+  snapshot_id: string;
+  policy_version: string;
+  decision: 'apply' | 'hold';
+  checks: {
+    id: string;
+    kind: 'deterministic' | 'model_opinion';
+    version: string;
+    execution: string;
+    verdict: 'pass' | 'block' | 'unknown' | 'not_applicable' | null;
+    findings: number;
+    message: string;
+  }[];
 }
 export interface PlanValidationReceipt {
   schema_version: 'planning-validation/v1';
@@ -299,9 +321,16 @@ export interface PlanValidationReceipt {
     status: 'not_run';
     existing_record_count: number;
   };
+  harness?: PlanHarnessDisclosure;
 }
 export interface PlanCandidate {
   id: string;
+  generation_progress?: {
+    state: 'staged' | 'ready';
+    checkpoint_count: number;
+    last_revision?: number;
+  };
+  created_at?: string;
   base_revision: number;
   status:
     | 'generating'
@@ -316,10 +345,11 @@ export interface PlanCandidate {
   revision: number;
   candidate_hash: string;
   validation_receipt?: PlanValidationReceipt;
+  current_harness_policy_version?: string;
   applied_revision?: number;
   turn_summary?: TurnSummary;
   report: {
-    findings: { code: string; subject: string; message: string }[];
+    findings: { code: string; subject: string; message: string; severity?: 'error' | 'review' }[];
     semantic?: {
       candidate_hash?: string;
       checks: {

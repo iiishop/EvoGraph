@@ -34,6 +34,7 @@ _FAILURES = (
     (IndexError, "internal_index_error", "内部数据索引异常"),
     (AttributeError, "internal_attribute_error", "内部对象属性异常"),
     (AssertionError, "internal_assertion_error", "内部状态检查失败"),
+    (TimeoutError, "request_timeout", "请求超过等待时限"),
     (OSError, "internal_io_error", "内部输入输出失败"),
     (RuntimeError, "internal_runtime_error", "内部运行异常"),
 )

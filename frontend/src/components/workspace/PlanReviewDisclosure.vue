@@ -32,19 +32,54 @@ function close(event: KeyboardEvent) {
     <summary>{{ evidence.label }}</summary>
     <div class="plan-review-layers">
       <dl>
-        <div>
-          <dt>结构检查</dt>
-          <dd>{{ evidence.structural }}</dd>
-        </div>
-        <div>
-          <dt>模型评审</dt>
-          <dd>{{ evidence.semantic }}</dd>
-        </div>
+        <template v-if="evidence.harness">
+          <div
+            v-for="check in evidence.harness.checks"
+            :key="check.id"
+            :data-harness-check="check.id"
+          >
+            <dt class="plan-review-check-title">
+              <span :title="check.id">{{ check.name }}</span>
+              <small>{{ check.kindLabel }} · {{ check.version }}</small>
+            </dt>
+            <dd>
+              {{ check.status
+              }}<span v-if="check.findings">
+                · {{ check.findings }} {{ check.verdict === 'pass' ? '项建议' : '项问题' }}</span
+              >
+              <p
+                v-if="
+                  check.message && (check.execution !== 'completed' || check.verdict !== 'pass')
+                "
+                class="plan-review-check-detail"
+              >
+                {{ check.message }}
+              </p>
+            </dd>
+          </div>
+          <div v-if="!evidence.harness.checks.length">
+            <dt>程序检查 · 模型意见</dt>
+            <dd>尚无插件执行记录；状态未知</dd>
+          </div>
+        </template>
+        <template v-else>
+          <div>
+            <dt>结构检查</dt>
+            <dd>{{ evidence.structural }}</dd>
+          </div>
+          <div>
+            <dt>模型评审</dt>
+            <dd>{{ evidence.semantic }}</dd>
+          </div>
+        </template>
         <div>
           <dt>{{ evidence.implementationTitle }}</dt>
           <dd>{{ evidence.implementation }}</dd>
         </div>
       </dl>
+      <p v-if="evidence.harness" class="plan-review-policy">
+        {{ evidence.harness.decisionLabel }}
+      </p>
       <p v-if="evidence.legacyNotice" class="plan-review-legacy">{{ evidence.legacyNotice }}</p>
       <p class="plan-review-source">
         {{ evidence.source
@@ -52,7 +87,19 @@ function close(event: KeyboardEvent) {
           · 指纹 {{ evidence.fingerprint.slice(0, 12) }}</span
         >
       </p>
-      <p class="plan-review-limit">模型评审可能遗漏问题，不代表实现已验证</p>
+      <details v-if="evidence.harness" class="plan-review-identity">
+        <summary>检查版本与快照</summary>
+        <p>策略 {{ evidence.harness.policy_version }}</p>
+        <p>快照 {{ evidence.harness.snapshot_id }}</p>
+        <p>记录 {{ evidence.harness.schema_version }}</p>
+      </details>
+      <p class="plan-review-limit">
+        {{
+          evidence.harness
+            ? '程序检查通过不代表语义正确；模型未发现问题仍可能有遗漏'
+            : '模型评审可能遗漏问题，不代表实现已验证'
+        }}
+      </p>
     </div>
   </details>
 </template>
@@ -106,6 +153,34 @@ function close(event: KeyboardEvent) {
   font-weight: 600;
 }
 .plan-review-layers dd {
+  margin: 3px 0 0;
+}
+.plan-review-check-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.plan-review-check-title small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 400;
+}
+.plan-review-check-detail {
+  margin: 3px 0 0;
+}
+.plan-review-policy {
+  margin: 10px 0 0;
+}
+.plan-review-identity {
+  margin-top: 6px;
+  font-size: 10px;
+}
+.plan-review-identity > summary {
+  cursor: pointer;
+}
+.plan-review-identity p {
   margin: 3px 0 0;
 }
 .plan-review-source {

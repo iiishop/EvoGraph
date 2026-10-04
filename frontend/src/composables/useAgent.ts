@@ -73,7 +73,7 @@ function reconcileReceipts(project: Project | null) {
         summary.history_warning ||
           (summary.status === 'failed'
             ? summary.candidate_outcome
-              ? `正式方案未应用。${summary.candidate_outcome.note}`
+              ? `本轮方案未应用。${summary.candidate_outcome.note}`
               : '本轮未完成，已提交的修改保留'
             : ''),
       );

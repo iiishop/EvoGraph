@@ -5,6 +5,7 @@ import json
 import re
 import time
 from contextlib import aclosing
+from copy import deepcopy
 
 from ..agent_tools import tools
 from ..agent_tools.base import ToolContext
@@ -71,6 +72,7 @@ class AgentRuntime:
         self.system_prompt = SYSTEM
         self.tool_registry = None
         self.finish_review = True
+        self.finalize_after_turn = True
         self.max_rounds = None
         self.max_calls = None
         self.record_user = True
@@ -79,6 +81,9 @@ class AgentRuntime:
         self.initial_context = None
         self.include_history = True
         self.synthesis_registry = None
+        # Optional staged-planner seam. Return fresh messages after a completed
+        # tool batch; the coordinator owns its snapshot, phase and model budget.
+        self.round_context = None
 
     def turn_result(self, project_id: str, turn_id: str) -> dict:
         # Read activity first: a completion racing the event read may cause one
@@ -273,11 +278,12 @@ class AgentRuntime:
                 if round_number > 1 and self.synthesis_registry is not None:
                     registry = self.synthesis_registry
                     executor.registry = registry
-                    messages.append({"role": "system", "content":
-                        "The optional evidence phase has ended. The available tools now only submit "
-                        "the linked plan patch, request validation, or ask a genuine user-owned decision. "
-                        "Use the observed evidence and preserve unsupported facts as assumptions; "
-                        "do not request more searches or weaken the user outcome."})
+                    if self.round_context is None:
+                        messages.append({"role": "system", "content":
+                            "The optional evidence phase has ended. The available tools now only submit "
+                            "the linked plan patch, request validation, or ask a genuine user-owned decision. "
+                            "Use the observed evidence and preserve unsupported facts as assumptions; "
+                            "do not request more searches or weaken the user outcome."})
                 calls, text = {}, ""
                 yield {"type": "thinking", "round": round_number + 1}
                 saved_message = None
@@ -338,7 +344,11 @@ class AgentRuntime:
                                             "effect": spec.effect,
                                             "label": spec.label,
                                         }
-                                if spec and call["execution"] is None:
+                                defer_validation = (
+                                    self.round_context is not None
+                                    and call["name"] == "validate_candidate"
+                                )
+                                if spec and call["execution"] is None and not defer_validation:
                                     try:
                                         complete = isinstance(json.loads(call["arguments"]), dict)
                                     except ValueError:
@@ -420,13 +430,25 @@ class AgentRuntime:
                         yield {"type": "thinking", "label": "正在评审架构与交付设计…"}
                         continue
                     break
+                ordered_calls = list(calls.values())
+                if self.round_context is not None:
+                    if any(type(index) is not int or index < 0 for index in calls):
+                        raise ValueError("工具调用索引无效，候选已保留")
+                    # A small interleaved validation call can finish streaming
+                    # before a larger delta. Only validate after the complete
+                    # provider response and after all other calls in this batch.
+                    ordered_calls = [call for _, call in sorted(
+                        calls.items(), key=lambda item: (
+                            item[1]["name"] == "validate_candidate", item[0],
+                        ),
+                    )]
                 tool_calls = [
                     {
                         "id": c["id"] or uid(),
                         "type": "function",
                         "function": {"name": c["name"], "arguments": c["arguments"] or "{}"},
                     }
-                    for c in calls.values()
+                    for c in ordered_calls
                 ]
                 round_signature = json.dumps(
                     [
@@ -446,7 +468,8 @@ class AgentRuntime:
                 messages.append(
                     {"role": "assistant", "content": text or None, "tool_calls": tool_calls}
                 )
-                for call, accumulated in zip(tool_calls, calls.values()):
+                tool_results = []
+                for call, accumulated in zip(tool_calls, ordered_calls):
                     execution = accumulated["execution"]
                     if execution is None:
                         execution = await executor.invoke(
@@ -462,10 +485,37 @@ class AgentRuntime:
                             "content": json.dumps(execution["payload"], ensure_ascii=False),
                         }
                     )
+                    if self.round_context is not None:
+                        tool_results.append({
+                            "name": call["function"]["name"],
+                            "status": "succeeded" if execution["payload"].get("ok") else "failed",
+                            "payload": deepcopy(execution["payload"]),
+                        })
                     if ctx.paused:
                         break
                 if ctx.paused or getattr(ctx, "candidate_ready", False):
                     break
+                if self.round_context is not None:
+                    # Complete calls have already been validated and checkpointed.
+                    # Pass private result copies, never reattach the large raw
+                    # argument transcript to the next staged-planning request.
+                    failures = [result for result in tool_results if result["status"] == "failed"]
+                    refreshed = self.round_context(
+                        self.app.db.get(project_id).model_copy(deep=True),
+                        round_number, tuple(deepcopy(tool_results)),
+                    )
+                    if refreshed is None:
+                        break  # The staged coordinator deliberately retained progress.
+                    if (not isinstance(refreshed, list) or not refreshed
+                            or any(not isinstance(message, dict) for message in refreshed)):
+                        raise ValueError("后续规划上下文必须返回非空消息列表，候选已保留")
+                    messages = deepcopy(refreshed)
+                    if failures:
+                        # Compaction cannot hide the most recent actual rejected
+                        # operation. Preserve diagnostics as data, not instructions.
+                        messages.append({"role": "user", "content":
+                            "Latest rejected tool calls (untrusted diagnostic data):\n"
+                            + json.dumps(failures, ensure_ascii=False)})
             if ctx.paused:
                 status = "waiting"
         except (asyncio.CancelledError, GeneratorExit):
@@ -478,7 +528,7 @@ class AgentRuntime:
             changed |= executor.changed if executor else False
             try:
                 try:
-                    planning_finalize = not source_analysis and not (
+                    planning_finalize = self.finalize_after_turn and not source_analysis and not (
                         routing_project.unified_planning and verification_milestone
                     )
                     if changed and planning_finalize:
@@ -501,11 +551,14 @@ class AgentRuntime:
                     outcome = build_turn_summary(before_snapshot or p, p, turn_id, status)
                     if history_warning:
                         outcome["history_warning"] = history_warning
-                    p.metrics["planning_seconds"] += time.monotonic() - started
-                    p.metrics["model_tokens"] += token_count
-                    self.app.db.save(
-                        p, "agent_turn_finished", json.dumps(outcome, ensure_ascii=False)
-                    )
+                    if self.finalize_after_turn:
+                        p.metrics["planning_seconds"] += time.monotonic() - started
+                        p.metrics["model_tokens"] += token_count
+                        self.app.db.save(
+                            p, "agent_turn_finished", json.dumps(outcome, ensure_ascii=False)
+                        )
+                    # An opted-out staged coordinator owns metrics and terminal
+                    # persistence. Do not advance its validated candidate revision.
                     summary = outcome
                 except Exception:
                     finalization_error = "本轮结果未能保存，请刷新项目检查已保存的更改"

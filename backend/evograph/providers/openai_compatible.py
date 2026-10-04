@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 import httpx
 
 from .base import check_url, register
@@ -64,10 +66,28 @@ class OpenAICompatible:
         except (KeyError, IndexError, TypeError, ValueError):
             raise ValueError("Provider 返回了不支持的响应格式") from None
 
-    async def stream(self, config, secret, messages, tools):
+    @staticmethod
+    def validate_request_controls(config, request_controls):
+        """Allow only the ephemeral official DeepSeek Flash review experiment."""
+        base_url = config["base_url"]
+        target = urlsplit(base_url)
+        if (
+            request_controls != {"reasoning_effort": "low"}
+            or config["model"] != "deepseek-flash"
+            or target.scheme != "https"
+            or target.netloc not in {"api.deepseek.com", "api.deepseek.com:443"}
+            or target.path not in {"", "/", "/v1", "/v1/"}
+            or "?" in base_url or "#" in base_url
+        ):
+            raise ValueError("评审 low 实验仅支持官方 HTTPS DeepSeek Flash，未发送请求")
+        return {"reasoning_effort": "low"}
+
+    async def stream(self, config, secret, messages, tools, *, request_controls=None):
         check_url(config["base_url"])
         headers = {"Authorization": f"Bearer {secret}"} if secret else {}
         body = {"model": config["model"], "messages": messages, "tools": tools, "stream": True}
+        if request_controls is not None:
+            body.update(self.validate_request_controls(config, request_controls))
         # Derive diagnostics from the outgoing body, never from arbitrary config,
         # headers, credentials or an assumed provider/model default.
         controls = ("model", "stream", "max_tokens", "max_completion_tokens", "reasoning_effort",
@@ -94,6 +114,10 @@ class OpenAICompatible:
                     raise ValueError(f"Provider 流式请求失败（HTTP {response.status_code}）")
                 observed = _DoneObservedResponse(response)
                 async for payload in sse_payloads(observed):
+                    # Parsed-payload activity only: the SSE helper does not yield
+                    # comments, blank keepalives or the terminal sentinel.
+                    yield {"type": "stream_activity",
+                           "payload_kind": "empty" if not payload else "data"}
                     if payload.get("error"):
                         raise ValueError("Provider 返回流式错误，请检查模型是否支持工具调用")
                     if payload.get("usage"):
@@ -110,6 +134,11 @@ class OpenAICompatible:
                                "usage_counter": "openai_total", "usage_details": allowed}
                     for choice in payload.get("choices", []):
                         delta = choice.get("delta", {})
+                        reasoning = delta.get("reasoning_content")
+                        if isinstance(reasoning, str) and reasoning:
+                            # Keep only volume metadata, never reasoning content.
+                            yield {"type": "reasoning_activity",
+                                   "utf8_bytes": len(reasoning.encode("utf-8"))}
                         if delta.get("content"):
                             yield {"type": "text", "text": delta["content"],
                                    "choice_index": choice.get("index", 0)}

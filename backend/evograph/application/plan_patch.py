@@ -15,7 +15,6 @@ from typing import Literal
 from pydantic import Field
 
 from ..agent_tools.base import ToolContext, ToolSpec
-from ..domain.design_review import review_design
 from ..domain.models import (
     ArchitectureRevision,
     ArchitectureSpec,
@@ -25,13 +24,14 @@ from ..domain.models import (
 )
 from ..domain.plan_contracts import (
     PLANNING_FIELDS,
+    AcceptanceStep,
+    ProvidedCapability,
     active_behaviors,
     candidate_hash,
-    contract_findings,
-    history_findings,
     planning_payload,
 )
 from ..domain.target_contract import target_finalization
+from ..domain.typed_capabilities import capability_changes, validate_capability_moves
 from ..infrastructure.database import ConflictError
 from .design import DesignService
 from .graph_editor import GraphEditor
@@ -43,6 +43,7 @@ from .plan_contracts import (
     TracePlan,
     trace_plan,
 )
+from .plan_harness import run_deterministic, seal_snapshot
 
 
 class PatchBehavior(ProposedBehavior):
@@ -60,6 +61,9 @@ class PatchBehavior(ProposedBehavior):
         default_factory=list, max_length=100,
         description="Contracts required before this acceptance holds. Omit to retain existing links.",
     )
+    provides: list[ProvidedCapability] = Field(default_factory=list, max_length=16)
+    steps: list[AcceptanceStep] | None = Field(default=None, max_length=24)
+    capability_move_reason: str | None = Field(default=None, min_length=1, max_length=240)
 
 
 class PatchMilestone(ProposedMilestone):
@@ -152,9 +156,11 @@ class _CompilingGraphEditor(GraphEditor):
         return self.db.save(project, "compiling_graph", summary)
 
 
-_BINDING_FIELDS = {"requirement_ids", "mechanism", "component_ids", "requires_behavior_keys"}
+_BINDING_FIELDS = {"requirement_ids", "mechanism", "component_ids", "requires_behavior_keys",
+                   "provides", "steps"}
+_BINDING_INPUT_FIELDS = _BINDING_FIELDS | {"capability_move_reason"}
 _CONTRACT_FIELDS = ("owner", "statement", "acceptance_scope", "requirement_ids", "mechanism",
-                    "component_ids", "requires_behavior_keys")
+                    "component_ids", "requires_behavior_keys", "provides", "steps")
 
 
 def _json_hash(value):
@@ -202,7 +208,7 @@ def contract_changes(before, after):
 def _check_compiler_base(audit, before, args):
     if audit is None or audit.get("protocol_version") == "plan-delta/v1":
         return
-    if (audit.get("protocol_version") != "plan-delta/v2"
+    if (audit.get("protocol_version") not in {"plan-delta/v2", "plan-delta/v3"}
             or audit.get("project_id") != before.id
             or audit.get("base_revision") != before.revision
             or audit.get("base_candidate_hash") != candidate_hash(before)
@@ -218,6 +224,13 @@ def _completed_compiler_audit(audit, before, after, *, changed):
     result["result_revision"] = before.revision + int(changed)
     result["result_candidate_hash"] = candidate_hash(after)
     result["contract_changes"] = contract_changes(before, after)
+    result["capability_changes"] = capability_changes(before, after)
+    move_reasons = {item["key"]: item["capability_move_reason"]
+                    for item in audit["ir"].get("contracts", []) if "capability_move_reason" in item}
+    for change in result["capability_changes"]:
+        for provider in change["after_providers"]:
+            if provider["behavior_key"] in move_reasons:
+                change["capability_move_reason"] = move_reasons[provider["behavior_key"]]
     reasons = {item["key"]: item["owner_change_reason"]
                for item in audit["ir"].get("contracts", []) if "owner_change_reason" in item}
     for change in result["contract_changes"]:
@@ -290,7 +303,7 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     bindings, restored = [], []
     for item in args.milestones:
         payload = item.model_dump(exclude_unset=True, exclude={"behaviors", "restore_inactive_behavior_keys"})
-        payload["behaviors"] = [b.model_dump(exclude_unset=True, exclude=_BINDING_FIELDS)
+        payload["behaviors"] = [b.model_dump(exclude_unset=True, exclude=_BINDING_INPUT_FIELDS)
                                 for b in item.behaviors]
         for behavior, proposed in zip(item.behaviors, payload["behaviors"]):
             prior = prior_active.get(behavior.key)
@@ -299,12 +312,16 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
                 # unused historical revision of that key has another scope.
                 proposed["acceptance_scope"] = prior.acceptance_scope
         for behavior in item.behaviors:
-            links = behavior.model_dump(include=_BINDING_FIELDS)
+            links = behavior.model_dump(include=_BINDING_INPUT_FIELDS)
             previous = existing_bindings.get(behavior.key)
             if previous:
-                for name in ("component_ids", "requires_behavior_keys"):
+                prior = prior_active.get(behavior.key)
+                if (previous.steps is not None and prior and prior.statement != behavior.statement
+                        and "steps" not in behavior.model_fields_set):
+                    raise ValueError(f"contracts.{behavior.key}: changed typed statement requires explicit steps")
+                for name in ("component_ids", "requires_behavior_keys", "provides", "steps"):
                     if name not in behavior.model_fields_set:
-                        links[name] = list(getattr(previous, name))
+                        links[name] = previous.model_dump()[name]
             bindings.append(BindContract(behavior_key=behavior.key, **links))
         # Direct behavior links suffice for component ownership; callers need not
         # repeat those same IDs on the milestone. Preserve additional old mappings.
@@ -341,12 +358,6 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     if args.target is not None:
         GraphEditor(memory).target(ctx.project_id, args.target)
     project = memory.get(ctx.project_id)
-    findings = contract_findings(project) + history_findings(before, project)
-    findings.extend({k: f[k] for k in ("code", "subject", "message")}
-                    for f in review_design(project)["findings"] if f["severity"] == "error")
-    if findings:
-        raise ValueError("规划补丁校验失败：" + "; ".join(
-            f"{f['code']} [{f['subject']}]: {f['message']}" for f in findings))
     decision = target_finalization(project)
     if decision is not None and not decision.creates_version:
         project.target_draft = None
@@ -364,9 +375,26 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     removed_edges = final_graph.finalize(ctx.project_id)
     project = memory.get(ctx.project_id)
     final_graph._check(project)
-    findings = contract_findings(project) + history_findings(before, project)
-    if findings:
-        raise ValueError("规划补丁最终校验失败：" + "; ".join(f["message"] for f in findings))
+    validate_capability_moves(before, project, {
+        b.key: b.capability_move_reason for node in args.milestones for b in node.behaviors
+        if b.capability_move_reason is not None
+    })
+    # The finalized compiler output uses the same read-only program plugins as
+    # the main run and commit. Unsupported evidence can remain a visible candidate;
+    # central publication policy will hold it rather than manufacture clearance.
+    checked = run_deterministic(seal_snapshot(before, project, {
+        "id": "compiler:" + project.id, "project_id": project.id,
+        "base_revision": before.revision, "input": "", "reference_context": {},
+    }))
+    findings = [finding for row in checked.executions
+                if row.status == "completed" and row.result.verdict == "block"
+                for finding in row.result.findings if finding.severity == "error"]
+    failures = [row for row in checked.executions if row.status not in {
+        "completed", "prerequisite_skipped"}]
+    if findings or failures:
+        messages = [f"{f.code} [{f.subject}]: {f.message}" for f in findings]
+        messages.extend(f"{row.plugin_id}: {row.detail}" for row in failures)
+        raise ValueError("规划补丁最终检查未通过：" + "; ".join(messages))
     if compiler_audit is None:
         db.save(project, "plan_patch_applied", args.summary)
     else:

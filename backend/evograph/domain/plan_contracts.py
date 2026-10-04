@@ -2,9 +2,9 @@
 import hashlib
 import json
 from collections import Counter
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ContractModel(BaseModel):
@@ -40,6 +40,35 @@ class Requirement(ContractModel):
     active: bool = True
     retired_by: Retirement | None = None
 
+class TypedContractModel(ContractModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def nonblank_strings(cls, value):
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("typed capability fields must not be blank")
+        return value
+
+class ProvidedCapability(TypedContractModel):
+    key: str = Field(min_length=1, max_length=80)
+    kind: Literal["command", "query"]
+    action: str = Field(min_length=1, max_length=80)
+
+class InvokeCapabilityStep(TypedContractModel):
+    kind: Literal["invoke_command", "invoke_query"]
+    capability_key: str = Field(min_length=1, max_length=80)
+    quote: str = Field(min_length=1, max_length=80)
+
+class InspectAcceptanceStep(TypedContractModel):
+    kind: Literal["inspect"]
+    requirement_id: str = Field(min_length=1, max_length=80)
+    quote: str = Field(min_length=1, max_length=80)
+
+AcceptanceStep = Annotated[
+    InvokeCapabilityStep | InspectAcceptanceStep, Field(discriminator="kind")
+]
+
 class ContractBinding(ContractModel):
     behavior_key: str
     behavior_revision_id: str
@@ -47,6 +76,9 @@ class ContractBinding(ContractModel):
     component_ids: list[str] = Field(default_factory=list)
     mechanism: str
     requires_behavior_keys: list[str] = Field(default_factory=list)
+    provides: list[ProvidedCapability] = Field(default_factory=list, max_length=16)
+    # None is legacy/unannotated; [] explicitly clears typing and is also unknown.
+    steps: list[AcceptanceStep] | None = Field(default=None, max_length=24)
 
 class PlanContract(ContractModel):
     sources: list[IntentSource] = Field(default_factory=list)
@@ -103,9 +135,8 @@ def bootstrap_contract(project):
         contract.requirements.append(Requirement(id=source.id, source_id=source.id,
             quote=source.text, origin="legacy"))
 
-def contract_findings(project):
+def contract_findings(project, *, include_availability=True):
     """Exact coverage and declared slice availability, no NLP truth heuristic."""
-    from .dependencies import ancestor_sets
     findings = []
     def issue(code, subject, message):
         findings.append({"code": code, "subject": subject, "message": message})
@@ -143,7 +174,6 @@ def contract_findings(project):
             issue("process_constraint_violated", constraint.id, "该请求要求不联网调查，但已有外部调查尝试")
     behaviors = active_behaviors(project)
     owners = {m.id: m for m in project.milestones}
-    ancestors = ancestor_sets({m.id: m.dependencies for m in [*project.source_milestones, *project.milestones]})
     components = {n.id for n in project.architectures[-1].diagram.nodes} if project.architectures else set()
     by_key, covered = {}, set()
     for binding in contract.bindings:
@@ -167,22 +197,42 @@ def contract_findings(project):
             issue("missing_component", key, "机制引用了不存在的架构组件")
         if set(binding.component_ids) - set(owners[behavior.owner].architecture_components):
             issue("unmapped_mechanism", key, "契约组件未与交付切片关联")
-        available = {*ancestors.get(behavior.owner, set()), behavior.owner}
-        for needed in binding.requires_behavior_keys:
-            dependency = behaviors.get(needed)
-            if not dependency or dependency.owner not in available:
-                issue("future_control", key, f"所需契约 {needed} 不在此切片或已声明前置中")
     for key in behaviors.keys() - by_key.keys():
         issue("untraced_acceptance", key, "活跃验收尚未关联需求与实现机制")
     for rid in active.keys() - covered:
         issue("uncovered_requirement", rid, "有效需求尚未由最终目标验收覆盖")
+    if include_availability:
+        findings.extend(declared_availability_findings(project))
     return findings
+
+
+def declared_availability_findings(project):
+    """Only declared owner/prerequisite reachability, never mechanism entailment."""
+    from .dependencies import ancestor_sets
+
+    behaviors = active_behaviors(project)
+    ancestors = ancestor_sets({m.id: m.dependencies
+                               for m in [*project.source_milestones, *project.milestones]})
+    findings = []
+    for binding in project.plan_contract.bindings:
+        behavior = behaviors.get(binding.behavior_key)
+        if behavior is None:
+            continue  # The contract-integrity check owns inactive bindings.
+        available = {*ancestors.get(behavior.owner, set()), behavior.owner}
+        for needed in binding.requires_behavior_keys:
+            dependency = behaviors.get(needed)
+            if not dependency or dependency.owner not in available:
+                findings.append({"code": "future_control", "subject": binding.behavior_key,
+                                 "message": f"所需契约 {needed} 不在此切片或已声明前置中"})
+    return findings
+
 
 def review_subjects(project):
     return ["requirement:" + r.id for r in project.plan_contract.requirements if r.active] + [
         "retirement:" + r.id for r in project.plan_contract.requirements if not r.active
     ] + ["process:" + c.source_id + ":" + c.id for c in project.plan_contract.process_constraints] + [
-        "goal_preservation", "cross_contract_consistency", "failure_boundaries", "slice_activation", "cohesion_and_scope"]
+        "goal_preservation", "cross_contract_consistency", "failure_boundaries", "cohesion_and_scope"
+    ] + ["slice_activation:" + m.id for m in project.milestones]
 
 def eligible_execution_evidence(project):
     """Return copies of existing records applicable to this exact project state.

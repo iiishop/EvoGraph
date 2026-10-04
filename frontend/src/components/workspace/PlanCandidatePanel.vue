@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { AlertCircle, Eye, RefreshCw } from 'lucide-vue-next';
 import type { PlanCandidate, PlanProcessConstraint, Project } from '../../types';
 import {
@@ -10,10 +10,12 @@ import {
   requirementSource,
 } from '../../lib/planPreview';
 import { useWorkspace } from '../../composables/useWorkspace';
+import { useAgent } from '../../composables/useAgent';
 import DiagramView from '../design/DiagramView.vue';
 import PlanReviewDisclosure from './PlanReviewDisclosure.vue';
 const props = defineProps<{ candidate: PlanCandidate; canonical: Project }>();
 const { state, perform } = useWorkspace();
+const agent = useAgent();
 const project = computed(() => props.candidate.project);
 const architecture = computed(() => project.value.architectures.at(-1));
 const rows = computed(() => contractRows(project.value));
@@ -27,7 +29,20 @@ const checks = computed(() => {
     ? review.checks
     : [];
 });
-const findings = computed(() => props.candidate.report?.findings ?? []);
+const findings = computed(() =>
+  (props.candidate.report?.findings ?? []).filter((finding) => finding.severity !== 'review'),
+);
+const advisories = computed(() =>
+  (props.candidate.report?.findings ?? []).filter((finding) => finding.severity === 'review'),
+);
+function capabilityProvider(key: string) {
+  const providers = rows.value.filter((row) =>
+    row.binding.provides?.some((item) => item.key === key),
+  );
+  if (providers.length !== 1) return providers.length ? '重复提供者' : '未找到提供者';
+  const row = providers[0]!;
+  return `${row.owner?.title ?? '未找到所属步骤'} · ${row.binding.behavior_key}`;
+}
 const tab = ref('contracts');
 const focusedId = ref('');
 watch(
@@ -43,6 +58,38 @@ const focused = computed(() =>
 const active = computed(() =>
   ['generating', 'reviewing', 'ready'].includes(props.candidate.status),
 );
+const live = computed(
+  () =>
+    active.value &&
+    agent.state.running &&
+    agent.state.projectId === props.canonical.id &&
+    agent.state.turnId === props.candidate.id,
+);
+const clock = ref(Date.now());
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+watch(
+  live,
+  (running) => {
+    clearInterval(clockTimer);
+    clockTimer = undefined;
+    clock.value = Date.now();
+    if (running)
+      clockTimer = setInterval(() => {
+        clock.value = Date.now();
+      }, 1000);
+  },
+  { immediate: true },
+);
+onUnmounted(() => clearInterval(clockTimer));
+const elapsedSeconds = computed(() => {
+  const recorded = props.candidate.metrics?.elapsed_seconds ?? 0;
+  const start = Date.parse(props.candidate.created_at ?? '');
+  return Math.round(
+    live.value && Number.isFinite(start)
+      ? Math.max(recorded, (clock.value - start) / 1000)
+      : recorded,
+  );
+});
 const requirementKind = { outcome: '结果', constraint: '约束', exclusion: '排除项' };
 const processRule = {
   planning_only: '仅做规划',
@@ -86,6 +133,15 @@ async function discard() {
             candidateNotice(candidate, canonical.revision)
           }}
         </p>
+        <p v-if="candidate.generation_progress" class="candidate-eyebrow">
+          {{
+            candidate.generation_progress.checkpoint_count > 0
+              ? `已保存 ${candidate.generation_progress.checkpoint_count} 段规划改动`
+              : '尚未保存规划改动'
+          }}
+          ·
+          {{ candidate.generation_progress.state === 'ready' ? '已提交统一检查' : '尚待完成生成' }}
+        </p>
         <PlanReviewDisclosure :candidate="candidate" />
       </div>
       <button
@@ -119,6 +175,12 @@ async function discard() {
         </li>
       </ul>
     </div>
+    <details v-if="advisories.length" class="candidate-review-details">
+      <summary>非阻断建议 · {{ advisories.length }} 项</summary>
+      <p v-for="(finding, index) in advisories" :key="`${finding.code}:${index}`">
+        {{ finding.message }}
+      </p>
+    </details>
     <nav class="candidate-tabs" aria-label="候选内容">
       <button type="button" :aria-pressed="tab === 'contracts'" @click="tab = 'contracts'">
         需求与实现 <span>{{ requirements.length }}</span>
@@ -247,6 +309,31 @@ async function discard() {
             <dd>{{ row.binding.requires_behavior_keys.join('、') }}</dd>
           </div>
         </dl>
+        <details
+          v-if="row.binding.provides?.length || row.binding.steps?.length"
+          class="candidate-review-details"
+        >
+          <summary>
+            动作声明 · 提供 {{ row.binding.provides?.length ?? 0 }} 项 · 验收
+            {{ row.binding.steps?.length ?? 0 }} 步
+          </summary>
+          <p v-for="capability in row.binding.provides ?? []" :key="capability.key">
+            {{ capability.kind === 'command' ? '操作' : '查询' }} {{ capability.key }}：{{
+              capability.action
+            }}
+          </p>
+          <p v-for="(step, stepIndex) in row.binding.steps ?? []" :key="stepIndex">
+            <template v-if="step.kind === 'inspect'">检查范围 {{ step.requirement_id }}</template>
+            <template v-else>
+              {{ step.kind === 'invoke_command' ? '调用操作' : '调用查询' }}
+              {{ step.capability_key }} · {{ capabilityProvider(step.capability_key) }}
+            </template>
+            ：{{ step.quote }}
+          </p>
+          <p class="candidate-caveat">
+            这些是规划中的动作声明，程序检查其可用范围；未执行实现，也不证明动作提取完整
+          </p>
+        </details>
       </article>
       <p v-if="requirements.length && !rows.length" class="candidate-empty">
         需求与验收的对应关系尚未生成
@@ -333,10 +420,10 @@ async function discard() {
         >请求尝试 {{ candidate.metrics?.provider_calls ?? 0 }} 次 ·
         {{
           candidate.metrics?.usage_reported
-            ? `${candidate.metrics.tokens} tokens`
+            ? `已报告 ${candidate.metrics.tokens} tokens`
             : 'token 用量未返回'
         }}
-        · {{ Math.round(candidate.metrics?.elapsed_seconds ?? 0) }} 秒</span
+        · {{ live ? '已等待约 ' : '' }}{{ elapsedSeconds }} 秒</span
       >
     </footer>
   </section>

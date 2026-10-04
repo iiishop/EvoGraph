@@ -9,6 +9,10 @@ from contextlib import aclosing
 from .provider_output import ProviderOutputError, require_complete_provider_output
 
 
+class BudgetExceededError(ValueError):
+    """Request admission/output budget ended this run, not model uncertainty."""
+
+
 def encoded_size(value):
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -72,21 +76,26 @@ def _capture_output(audit, event, remaining_bytes):
 
 
 class BudgetedSettings:
-    def __init__(self, settings, metrics, checkpoint=None):
+    def __init__(self, settings, metrics, checkpoint=None, *, request_controls=None):
         self.settings, self.metrics, self.checkpoint = settings, metrics, checkpoint
         self.secrets = settings.secrets
+        self.request_controls = dict(request_controls) if request_controls is not None else None
 
     async def stream(self, messages, tools):
         tools = [compact_schema(t) for t in tools]
         request = {"messages": messages, "tools": tools}
+        options = {}
+        if self.request_controls is not None:
+            request["request_controls"] = copy.deepcopy(self.request_controls)
+            options["request_controls"] = self.request_controls
         request_bytes = encoded_size(request)
         budget = self.metrics.get("budget", {})
         if self.metrics["provider_calls"] >= budget.get("max_calls", 5):
-            raise ValueError("已到达统一规划的总模型调用上限，候选保留，未自动重试")
+            raise BudgetExceededError("已到达统一规划的总模型调用上限，候选保留，未自动重试")
         if request_bytes > budget.get("max_request_bytes", 98304):
-            raise ValueError("完整模型输入超过本次上下文预算，未截断或发送；请缩小本轮变更")
+            raise BudgetExceededError("完整模型输入超过本次上下文预算，未截断或发送；请缩小本轮变更")
         if self.metrics.get("input_bytes", 0) + request_bytes > budget.get("max_total_input_bytes", 262144):
-            raise ValueError("累计输入已达到本轮预算，候选保留，未发送额外模型请求")
+            raise BudgetExceededError("累计输入已达到本轮预算，候选保留，未发送额外模型请求")
         call = {
             "number": self.metrics["provider_calls"] + 1,
             "input_bytes": request_bytes, "schema_bytes": encoded_size(tools),
@@ -98,6 +107,17 @@ class BudgetedSettings:
             "request_metadata": None, "response_finish": [], "provider_response_received": False,
             "received_finish_marker": False, "received_terminal_marker": False,
             "normal_stream_end": False,
+            # These overlapping activity counters are not usage/token counters.
+            # Absence of known reasoning chunks says nothing about internal
+            # provider reasoning, unknown fields, comments or blank heartbeats.
+            "stream_activity": {
+                "coverage": "parsed_sse_payloads_only",
+                "reasoning_coverage": "known_streamed_fields_only",
+                "payload_count": 0, "empty_payload_count": 0, "ping_payload_count": 0,
+                "first_payload_seconds": None, "last_payload_seconds": None,
+                "reasoning_chunk_count": 0, "reasoning_utf8_bytes": 0,
+                "first_reasoning_seconds": None, "last_reasoning_seconds": None,
+            },
             "response_audit": {"text": "", "tool_calls": [], "output_event_count": 0,
                                "captured_output_bytes": 0, "capture_complete": True,
                                "omitted_output_bytes": 0},
@@ -109,6 +129,7 @@ class BudgetedSettings:
             self.checkpoint(request=copy.deepcopy(request))
         started = time.monotonic()
         cumulative = {}
+        active_error = None
         try:
             yield {"type": "request_started", "number": call["number"]}
             call["dispatched"] = True
@@ -118,7 +139,7 @@ class BudgetedSettings:
             if self.checkpoint:
                 self.checkpoint()
             async with asyncio.timeout(budget.get("call_timeout_seconds", 180)):
-                async with aclosing(self.settings.stream(messages, tools)) as stream:
+                async with aclosing(self.settings.stream(messages, tools, **options)) as stream:
                     async for event in stream:
                         if event["type"] == "usage":
                             self.metrics["usage_reported"] = True
@@ -140,7 +161,7 @@ class BudgetedSettings:
                                                         for key in ("text", "name", "id", "arguments"))
                             if call["output_bytes"] > limit:
                                 call["termination_reason"] = "output_limit"
-                                raise ValueError("模型输出达到本轮预算，候选已保留，未自动应用")
+                                raise BudgetExceededError("模型输出达到本轮预算，候选已保留，未自动应用")
                         elif event["type"] == "request_metadata":
                             call["request_metadata"] = copy.deepcopy({k: event[k] for k in (
                                 "provider", "controls", "unset_controls", "completion_limit", "tool_strict"
@@ -148,6 +169,26 @@ class BudgetedSettings:
                         elif event["type"] == "response_started":
                             call["provider_response_received"] = True
                             call["http_status"] = event.get("http_status")
+                            call["response_started_seconds"] = round(time.monotonic() - started, 3)
+                        elif event["type"] == "stream_activity":
+                            activity = call["stream_activity"]
+                            elapsed = round(time.monotonic() - started, 3)
+                            activity["payload_count"] += 1
+                            if event.get("payload_kind") in {"empty", "ping"}:
+                                activity[f"{event['payload_kind']}_payload_count"] += 1
+                            if activity["first_payload_seconds"] is None:
+                                activity["first_payload_seconds"] = elapsed
+                            activity["last_payload_seconds"] = elapsed
+                        elif event["type"] == "reasoning_activity":
+                            size = event.get("utf8_bytes")
+                            if type(size) is int and size > 0:
+                                activity = call["stream_activity"]
+                                elapsed = round(time.monotonic() - started, 3)
+                                activity["reasoning_chunk_count"] += 1
+                                activity["reasoning_utf8_bytes"] += size
+                                if activity["first_reasoning_seconds"] is None:
+                                    activity["first_reasoning_seconds"] = elapsed
+                                activity["last_reasoning_seconds"] = elapsed
                         elif event["type"] == "response_finish":
                             call["response_finish"].append(copy.deepcopy({k: event[k] for k in (
                                 "choice_index", "finish_reason", "stop_reason"
@@ -171,6 +212,7 @@ class BudgetedSettings:
             if call["request_metadata"] is not None:
                 call["output_integrity"] = {"status": "finish_markers_accepted"}
         except BaseException as exc:
+            active_error = exc
             if not call["normal_stream_end"]:
                 call["status"] = "interrupted" if call["dispatched"] else "cancelled_before_dispatch"
             call["error_type"] = type(exc).__name__
@@ -183,5 +225,18 @@ class BudgetedSettings:
             raise
         finally:
             call["elapsed_seconds"] = round(time.monotonic() - started, 3)
+            activity = call["stream_activity"]
+            for kind in ("payload", "reasoning"):
+                last = activity[f"last_{kind}_seconds"]
+                activity[f"seconds_since_last_{kind}"] = (
+                    round(call["elapsed_seconds"] - last, 3) if last is not None else None
+                )
             if self.checkpoint:
-                self.checkpoint()
+                try:
+                    self.checkpoint()
+                except Exception as checkpoint_error:
+                    # A terminal/discard race cannot replace the real cancellation
+                    # or provider failure. The outer owner persists late audit.
+                    call["audit_checkpoint_error_type"] = type(checkpoint_error).__name__
+                    if active_error is None:
+                        raise

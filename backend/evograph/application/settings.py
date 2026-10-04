@@ -74,14 +74,21 @@ class SettingsService:
         text, _ = await self.complete([{"role": "user", "content": "Reply with OK only."}])
         return {"ok": True, "message": text[:200]}
 
-    async def stream(self, messages, tools):
+    async def stream(self, messages, tools, *, request_controls=None):
         saved = self.db.setting("provider")
         if not saved:
             raise ValueError("请先在设置中配置支持工具调用的 Provider")
-        secret = self.secrets.get(saved["secret_id"]) if saved.get("has_key") else ""
         adapter = adapters()[saved["adapter"]]
         if not hasattr(adapter, "stream"):
             raise ValueError("当前 Provider 适配器不支持流式工具调用")
-        async with aclosing(adapter.stream(saved["config"], secret, messages, tools)) as stream:
+        options = {}
+        if request_controls is not None:
+            if saved["adapter"] != "openai_compatible":
+                raise ValueError("当前 Provider 不支持评审 low 实验，未发送请求")
+            # Validate before credential access, without changing saved config.
+            options["request_controls"] = adapter.validate_request_controls(
+                saved["config"], request_controls)
+        secret = self.secrets.get(saved["secret_id"]) if saved.get("has_key") else ""
+        async with aclosing(adapter.stream(saved["config"], secret, messages, tools, **options)) as stream:
             async for event in stream:
                 yield event

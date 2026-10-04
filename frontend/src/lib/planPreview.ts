@@ -1,4 +1,4 @@
-import type { PlanCandidate, PlanRequirement, Project } from '../types';
+import type { PlanCandidate, PlanHarnessDisclosure, PlanRequirement, Project } from '../types';
 
 export const candidateStatus: Record<PlanCandidate['status'], string> = {
   generating: '正在生成',
@@ -23,6 +23,8 @@ export function candidateApplication(candidate: PlanCandidate): 'applied' | 'noo
 }
 
 export function candidateStatusLabel(candidate: PlanCandidate): string {
+  if (candidate.status === 'needs_resolution' && candidate.generation_progress?.state === 'staged')
+    return '待继续生成';
   if (candidate.status !== 'applied') return candidateStatus[candidate.status];
   const application = candidateApplication(candidate);
   return application === 'applied'
@@ -30,6 +32,55 @@ export function candidateStatusLabel(candidate: PlanCandidate): string {
     : application === 'noop'
       ? '本轮无变更'
       : '已处理';
+}
+
+const harnessCheckNames: Record<string, string> = {
+  source_completeness: '来源完整性',
+  graph_identity: '图结构与标识',
+  contract_source_history: '需求来源与历史',
+  design_consistency: '架构结构与绑定',
+  declared_availability: '前置声明可用性',
+  typed_capability_flow: '验收调用可用性',
+  semantic_review: '语义评审',
+};
+
+const harnessExecutionLabels: Record<string, string> = {
+  prerequisite_skipped: '已跳过 · 前置检查未满足',
+  disabled_by_policy: '已跳过 · 当前策略禁用',
+  unavailable: '不可用 · 未完成',
+  timeout: '超时 · 未完成',
+  budget_exhausted: '预算耗尽 · 未完成',
+  invalid_output: '输出无效 · 未形成结论',
+  error: '运行出错 · 未完成',
+  cancelled: '已取消 · 未完成',
+};
+
+function harnessCheckDisclosure(check: PlanHarnessDisclosure['checks'][number]) {
+  let status = harnessExecutionLabels[check.execution] ?? '执行状态未知 · 无法确认完成';
+  if (check.execution === 'completed') {
+    const verdicts = {
+      pass:
+        check.kind === 'model_opinion'
+          ? '模型未发现问题'
+          : check.id === 'typed_capability_flow'
+            ? '已声明动作检查通过；未声明范围未覆盖'
+            : '程序检查通过',
+      block: check.kind === 'model_opinion' ? '模型指出阻断项' : '发现阻断项',
+      unknown: '尚无法判断',
+      not_applicable: '未覆盖 · 此可选检查不适用',
+    };
+    status = `已完成 · ${check.verdict ? verdicts[check.verdict] : '结论未知'}`;
+  }
+  return {
+    ...check,
+    message:
+      check.message === 'no_declared_typed_actions'
+        ? '当前没有已声明的动作可供此可选检查覆盖；不代表该范围已通过'
+        : check.message,
+    name: harnessCheckNames[check.id] ?? check.id,
+    kindLabel: check.kind === 'model_opinion' ? '模型意见' : '程序检查',
+    status,
+  };
 }
 
 export function planReviewDisclosure(candidate?: PlanCandidate | null, canonicalRevision?: number) {
@@ -45,6 +96,17 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
     candidate?.validation_receipt?.schema_version === 'planning-validation/v1' &&
     candidate.validation_receipt.candidate_hash === candidate.candidate_hash
       ? candidate.validation_receipt
+      : undefined;
+  const harness =
+    receipt?.harness?.schema_version === 'planning-harness-disclosure/v1'
+      ? {
+          ...receipt.harness,
+          checks: receipt.harness.checks.map(harnessCheckDisclosure),
+          decisionLabel:
+            receipt.harness.decision === 'apply'
+              ? '当次检查策略允许自动应用'
+              : '当次检查策略暂不允许应用',
+        }
       : undefined;
   const review = matchesView && application !== 'noop' ? candidate?.report?.semantic : undefined;
   const legacyReview =
@@ -91,7 +153,14 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
   if (application === 'noop' && receipt?.model.status !== 'not_run')
     semantic = '本轮没有应用规划变更，不能据此推断进行过模型评审';
   const savedOpinion = candidate?.report?.semantic;
-  let legacyNotice = '';
+  const previousPolicy = Boolean(
+    harness &&
+    candidate?.current_harness_policy_version &&
+    harness.policy_version !== candidate.current_harness_policy_version,
+  );
+  let legacyNotice = previousPolicy
+    ? `这些检查来自旧策略 ${harness!.policy_version}；当前策略 ${candidate!.current_harness_policy_version} 尚未检查此版本`
+    : '';
   if (savedOpinion && !matchesView && canonicalRevision !== undefined)
     legacyNotice = '保存的候选模型意见不适用于当前正式版本';
   else if (savedOpinion && savedOpinion.candidate_hash !== candidate?.candidate_hash)
@@ -102,7 +171,8 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
     receipt?.implementation.scope === 'current_planning_turn' &&
     receipt.implementation.status === 'not_run';
   return {
-    label,
+    label: harness ? (previousPolicy ? '历史检查记录 · 策略已更新' : '程序检查 · 模型意见') : label,
+    harness,
     structural,
     semantic,
     legacyNotice,
@@ -130,8 +200,13 @@ export function candidateNotice(candidate: PlanCandidate, canonicalRevision: num
   }
   if (candidate.status === 'stale' || candidate.base_revision < canonicalRevision)
     return '正式方案已发生变化，这份候选不能直接提交。可在下方继续说明调整要求';
-  if (candidate.status === 'needs_resolution')
-    return '评审有待解决项，正式方案未被替换。候选已保留，可在下方补充要求继续调整';
+  if (candidate.status === 'needs_resolution') {
+    if (candidate.generation_progress?.state === 'staged')
+      return candidate.generation_progress.checkpoint_count > 0
+        ? '规划进度已保留，尚待完成剩余生成；正式方案未被替换'
+        : '请求已保留，尚未保存规划改动，可继续生成；正式方案未被替换';
+    return '候选仍有待解决项，正式方案未被替换。候选已保留，可在下方补充要求继续调整';
+  }
   if (candidate.status === 'failed' || candidate.status === 'stopped')
     return '本次候选尚未提交，正式方案未被替换。已生成的内容保留供查看';
   return '生成后自动检查需求、验收与架构的对应关系；评审接受后自动提交';

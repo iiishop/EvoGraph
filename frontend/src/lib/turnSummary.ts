@@ -301,8 +301,8 @@ export function turnSummaryHeadline(summary: TurnSummary): string {
   if (summary.candidate_outcome)
     return summary.candidate_outcome.id &&
       !['discarded', 'not_admitted'].includes(summary.candidate_outcome.status)
-      ? '候选已保留，正式方案未应用'
-      : '正式方案未应用';
+      ? '该轮候选已保留，未应用到正式方案'
+      : '该轮请求未应用到正式方案';
   if (!turnSummaryHasChanges(summary)) return '无净变更';
   const { milestones, dependencies, target, architecture, other } = summary.changes;
   const parts: string[] = [];

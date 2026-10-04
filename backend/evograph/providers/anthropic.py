@@ -95,6 +95,10 @@ class Anthropic:
                 received_message_stop = False
                 async for payload in sse_payloads(response):
                     kind = payload.get("type")
+                    # JSON ping events are observable; SSE comments and blank
+                    # keepalives are not yielded by the shared framing helper.
+                    yield {"type": "stream_activity", "payload_kind":
+                           "ping" if kind == "ping" else "empty" if not payload else "data"}
                     if kind == "error":
                         raise ValueError("Provider 返回流式错误")
                     if kind == "message_start":
@@ -130,6 +134,12 @@ class Anthropic:
                             }
                     if kind == "content_block_delta":
                         delta = payload.get("delta", {})
+                        if delta.get("type") == "thinking_delta":
+                            thinking = delta.get("thinking")
+                            if isinstance(thinking, str) and thinking:
+                                # Do not forward or persist reasoning text.
+                                yield {"type": "reasoning_activity",
+                                       "utf8_bytes": len(thinking.encode("utf-8"))}
                         if delta.get("type") == "text_delta":
                             yield {"type": "text", "text": delta["text"]}
                         elif delta.get("type") == "input_json_delta":

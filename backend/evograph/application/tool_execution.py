@@ -4,8 +4,78 @@ import asyncio
 import json
 
 import anyio
+from pydantic import ValidationError
 
 from .agent_errors import agent_error_event
+
+
+def _plan_delta_input_failure(spec, arguments, error):
+    """Describe a rejected input, without repairing it or entering its handler."""
+    errors = error.errors(include_input=False, include_context=False, include_url=False)
+    issues = [{
+        "location": [part if isinstance(part, int) else str(part)[:80]
+                     for part in item["loc"][:8]],
+        "type": item["type"][:80],
+        "message": item["msg"][:240],
+    } for item in errors[:6]]
+    invalid_json = any(item["type"] == "json_invalid" for item in errors)
+    message = "规划数据格式不符合工具协议；规划内容未改动"
+    if invalid_json:
+        message = "规划数据的 JSON 格式无效；规划内容未改动"
+        # This second parser supplies diagnostic coordinates only. Its result
+        # can never be executed, normalized, unwrapped or accepted as a delta.
+        try:
+            json.loads(arguments)
+        except json.JSONDecodeError as syntax:
+            byte_offset = len(arguments[:syntax.pos].encode("utf-8"))
+            issues[0]["position"] = {
+                "line_1_based": syntax.lineno, "column_1_based": syntax.colno,
+                "character_offset_0_based": syntax.pos,
+                "utf8_byte_offset_0_based": byte_offset,
+            }
+            start = max(0, syntax.pos - 40)
+            issues[0]["context"] = {
+                "character_offset_0_based": start,
+                "excerpt": arguments[start:syntax.pos + 40],
+            }
+            message = (f"规划数据 JSON 格式无效（第 {syntax.lineno} 行、第 {syntax.colno} 列，"
+                       f"UTF-8 字节偏移 {byte_offset}）；规划内容未改动")
+        except RecursionError:
+            pass  # Preserve the original bounded validation issue for deep JSON.
+    elif issues and issues[0]["type"] == "extra_forbidden":
+        location = ".".join(str(part) for part in issues[0]["location"])[:100]
+        message = f"规划数据包含未允许的字段（{location}）；规划内容未改动"
+    schema = spec.parameters.model_json_schema()
+    # Only the direct field/type outline is repeated; item schemas remain in
+    # the advertised tool definition. No transport-envelope fields are added.
+    shape = {
+        "type": schema["type"],
+        "additionalProperties": schema.get("additionalProperties", True),
+        "properties": {key: {"type": value["type"]}
+                       for key, value in schema.get("properties", {}).items()
+                       if "type" in value},
+        "required": schema.get("required", []),
+    }
+    return {
+        "events": [{"type": "tool_failed", "tool": spec.name,
+                    "code": "invalid_plan_delta", "label": spec.label, "message": message}],
+        "progress": False,
+        "payload": {
+            "ok": False, "error": message,
+            "code": "invalid_json" if invalid_json else "schema_mismatch",
+            "issues": issues, "omitted_issue_count": max(0, len(errors) - len(issues)),
+            "direct_object_shape": shape,
+            "resubmit_operation": {
+                "tool": spec.name, "action": "replace_rejected_call",
+                "instruction": "Resubmit the complete intended delta as the direct tool-input JSON "
+                               "object matching the advertised schema. Escape quotes inside JSON "
+                               "strings. Do not encode the whole object as a string or put it inside "
+                               "an arguments, parameters, or other wrapper. Only correct the input "
+                               "format; preserve the intended planning changes. Omit unchanged "
+                               "fields instead of null. No planning changes from this call were saved.",
+            },
+        },
+    }
 
 
 async def _drain_worker(task: asyncio.Task) -> None:
@@ -47,8 +117,17 @@ class ToolExecutor:
             result = await self._invoke(name, arguments)
         except BaseException as exc:
             if attempt is not None:
-                db.finish_tool_attempt(attempt, "interrupted" if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) else "failed",
-                                       {"ok": False, "error": agent_error_event(exc)["message"]})
+                interrupted = isinstance(exc, (asyncio.CancelledError, GeneratorExit))
+                try:
+                    db.finish_tool_attempt(attempt, "interrupted" if interrupted else "failed",
+                                           {"ok": False, "error": agent_error_event(exc)["message"]})
+                except Exception as audit_error:
+                    if not interrupted:
+                        raise
+                    # Concurrent discard closes candidate writes. Preserve the
+                    # interruption instead of replacing it with an audit error.
+                    exc.add_note("Interruption audit not persisted (" + type(audit_error).__name__
+                                 + "); stored candidate remains authoritative")
             raise
         if attempt is not None:
             db.finish_tool_attempt(attempt, "succeeded" if result["payload"].get("ok") else "failed", result["payload"])
@@ -62,7 +141,12 @@ class ToolExecutor:
         try:
             if spec is None:
                 raise ValueError("未知工具")
-            args = spec.parameters.model_validate_json(arguments)
+            try:
+                args = spec.parameters.model_validate_json(arguments)
+            except ValidationError as exc:
+                if name == "submit_plan_delta":
+                    return _plan_delta_input_failure(spec, arguments, exc)
+                raise
             mutation = spec.effect in {"created", "updated", "removed", "target"}
             task = asyncio.create_task(asyncio.to_thread(spec.handler, self.context, args))
             try:

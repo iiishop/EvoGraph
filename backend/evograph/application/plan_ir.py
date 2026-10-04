@@ -15,12 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..agent_tools.base import ToolSpec
 from ..domain.models import ArchitectureSpec, Project
-from ..domain.plan_contracts import candidate_hash
+from ..domain.plan_contracts import AcceptanceStep, ProvidedCapability, candidate_hash
 from .design import validate_diagram
 from .plan_contracts import AddProcessConstraint, AddRequirement, RetireRequirement
 from .plan_patch import PlanPatch, compiled_plan_hash, propose_plan_patch
 
-PROTOCOL_VERSION = "plan-delta/v2"
+PROTOCOL_VERSION = "plan-delta/v3"
 
 
 class IRModel(BaseModel):
@@ -48,16 +48,32 @@ class RequirementRetirement(RetireRequirement, IRModel):
 
 class ContractDelta(IRModel):
     key: str = Field(min_length=1, max_length=100)
-    owner: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,40}$")
-    statement: str | None = Field(default=None, min_length=1, max_length=1000)
-    requirement_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
-    mechanism: str | None = Field(default=None, min_length=1, max_length=2500)
-    component_ids: list[str] = Field(default_factory=list, max_length=40)
-    requires_behavior_keys: list[str] = Field(default_factory=list, max_length=100)
-    acceptance_scope: Literal["target", "milestone"] = "target"
+    owner: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,40}$",
+                             json_schema_extra={"required_if_new": True, "references": [{"kind": "slice"}]})
+    statement: str | None = Field(default=None, min_length=1, max_length=1000,
+                                 json_schema_extra={"required_if_new": True})
+    requirement_ids: list[str] | None = Field(default=None, min_length=1, max_length=100,
+        json_schema_extra={"required_if_new": True, "references": [{"kind": "requirement"}]})
+    mechanism: str | None = Field(default=None, min_length=1, max_length=2500,
+                                 json_schema_extra={"required_if_new": True})
+    component_ids: list[str] = Field(default_factory=list, max_length=40,
+                                    json_schema_extra={"references": [{"kind": "component"}]})
+    requires_behavior_keys: list[str] = Field(default_factory=list, max_length=100,
+                                            json_schema_extra={"references": [{"kind": "contract"}]})
+    provides: list[ProvidedCapability] = Field(default_factory=list, max_length=16,
+        json_schema_extra={"references": [{"kind": "capability", "path": "key"}]})
+    steps: list[AcceptanceStep] = Field(default_factory=list, max_length=24,
+        json_schema_extra={"references": [{"kind": "capability", "path": "capability_key"},
+                                          {"kind": "requirement", "path": "requirement_id"}]})
+    capability_move_reason: str | None = Field(default=None, min_length=1, max_length=240)
+    acceptance_scope: Literal["target", "milestone"] = Field(
+        default="target",
+        description="Final-goal membership only, never delivery timing. Both scopes must hold at "
+        "the owning slice using its actual prerequisites; target does not defer acceptance.",
+    )
     owner_change_reason: str | None = Field(default=None, min_length=1, max_length=1500)
 
-    @field_validator("key", "statement", "mechanism", "owner_change_reason")
+    @field_validator("key", "statement", "mechanism", "owner_change_reason", "capability_move_reason")
     @classmethod
     def reject_blank(cls, value):
         if not value.strip():
@@ -67,10 +83,14 @@ class ContractDelta(IRModel):
 
 class SliceDelta(IRModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
-    title: str | None = Field(default=None, min_length=1, max_length=120)
-    intent: str | None = Field(default=None, min_length=1, max_length=1500)
-    scope: list[str] | None = Field(default=None, min_length=1, max_length=30)
-    dependencies: list[str] | None = Field(default=None, max_length=24)
+    title: str | None = Field(default=None, min_length=1, max_length=120,
+                             json_schema_extra={"required_if_new": True})
+    intent: str | None = Field(default=None, min_length=1, max_length=1500,
+                              json_schema_extra={"required_if_new": True})
+    scope: list[str] | None = Field(default=None, min_length=1, max_length=30,
+                                   json_schema_extra={"required_if_new": True})
+    dependencies: list[str] | None = Field(default=None, max_length=24,
+        json_schema_extra={"references": [{"kind": "slice"}]})
     dependency_reasons: dict[str, str] | None = None
 
 
@@ -83,8 +103,10 @@ class ComponentDelta(IRModel):
 
 
 class RelationDelta(IRModel):
-    source: str = Field(min_length=1, max_length=40)
-    target: str = Field(min_length=1, max_length=40)
+    source: str = Field(min_length=1, max_length=40,
+                        json_schema_extra={"references": [{"kind": "component"}]})
+    target: str = Field(min_length=1, max_length=40,
+                        json_schema_extra={"references": [{"kind": "component"}]})
     label: str = Field(min_length=1, max_length=120)
 
 
@@ -96,7 +118,8 @@ class TechnologyDelta(IRModel):
 
 class ComponentRetirement(IRModel):
     component_id: str = Field(min_length=1, max_length=40)
-    milestone_id: str = Field(min_length=1, max_length=40)
+    milestone_id: str = Field(min_length=1, max_length=40,
+                              json_schema_extra={"references": [{"kind": "slice"}]})
     instruction: str = Field(min_length=1, max_length=1500)
 
 
@@ -128,17 +151,25 @@ class PlanDelta(IRModel):
     remove_slice_ids: list[str] = Field(default_factory=list, max_length=24)
     remove_contract_keys: list[str] = Field(default_factory=list, max_length=256)
     remove_component_ids: list[str] = Field(default_factory=list, max_length=40)
-    restore_contract_keys: list[str] = Field(default_factory=list, max_length=256)
+    restore_contract_keys: list[str] = Field(default_factory=list, max_length=256,
+        json_schema_extra={"manifest_extra": {"kind": "contract", "field": "restore"}})
     retirements: list[ComponentRetirement] = Field(default_factory=list, max_length=40)
     target: str | None = Field(default=None, min_length=1, max_length=4000)
-    architecture_summary: str | None = Field(default=None, min_length=1, max_length=4000)
-    technologies: list[TechnologyDelta] | None = Field(default=None, min_length=1, max_length=30)
-    decisions: list[str] | None = Field(default=None, max_length=30)
+    architecture_summary: str | None = Field(default=None, min_length=1, max_length=4000,
+        json_schema_extra={"manifest_kind": "architecture", "required_if_new": True})
+    technologies: list[TechnologyDelta] | None = Field(default=None, min_length=1, max_length=30,
+        json_schema_extra={"manifest_kind": "architecture", "required_if_new": True})
+    decisions: list[str] | None = Field(default=None, max_length=30,
+        json_schema_extra={"manifest_kind": "architecture"})
     # Optional repair/replacement fields, never mandatory for a new architecture.
-    architecture_groups: list[ArchitectureGroupDelta] | None = Field(default=None, max_length=12)
-    architecture_milestone_ids: list[str] | None = Field(default=None, max_length=256)
-    risks: list[str] | None = Field(default=None, max_length=20)
-    quality_scenarios: list[QualityScenarioDelta] | None = Field(default=None, max_length=20)
+    architecture_groups: list[ArchitectureGroupDelta] | None = Field(default=None, max_length=12,
+        json_schema_extra={"manifest_kind": "architecture", "references": [{"kind": "component", "path": "member_node_ids"}]})
+    architecture_milestone_ids: list[str] | None = Field(default=None, max_length=256,
+        json_schema_extra={"manifest_kind": "architecture", "references": [{"kind": "slice"}]})
+    risks: list[str] | None = Field(default=None, max_length=20,
+        json_schema_extra={"manifest_kind": "architecture"})
+    quality_scenarios: list[QualityScenarioDelta] | None = Field(default=None, max_length=20,
+        json_schema_extra={"manifest_kind": "architecture"})
 
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
@@ -146,6 +177,10 @@ class PlanDelta(IRModel):
 
         def omit_null(node):
             if isinstance(node, dict):
+                # Internal compiler/catalog metadata is not provider schema
+                # vocabulary. Keep it on model_fields only.
+                for key in ("required_if_new", "references", "manifest_kind", "manifest_extra"):
+                    node.pop(key, None)
                 if "default" in node and node["default"] is None:
                     del node["default"]
                 # Python None represents an omitted field internally. The IR
@@ -169,6 +204,17 @@ class PlanDelta(IRModel):
 
         omit_null(schema)
         return schema
+
+
+def required_plan_fields(model, *, new=False):
+    """Canonical presence rules shared by compilation and manifest discovery."""
+    return {name for name, field in model.model_fields.items()
+            if field.is_required() or (new and (field.json_schema_extra or {}).get("required_if_new"))}
+
+
+def architecture_delta_fields():
+    return {name for name, field in PlanDelta.model_fields.items()
+            if (field.json_schema_extra or {}).get("manifest_kind") == "architecture"}
 
 
 @dataclass(frozen=True)
@@ -195,8 +241,7 @@ def _relation_key(relation):
 def _architecture(project, args, slice_ids):
     operations = (args.components, args.relations, args.remove_relations,
                   args.remove_component_ids, args.retirements)
-    metadata = {"architecture_summary", "technologies", "decisions", "architecture_groups",
-                "architecture_milestone_ids", "risks", "quality_scenarios"}
+    metadata = architecture_delta_fields()
     if not any(operations) and not (metadata & args.model_fields_set):
         if project.architectures:
             _known(project.architectures[-1].diagram.milestone_ids, slice_ids,
@@ -206,8 +251,9 @@ def _architecture(project, args, slice_ids):
     if previous:
         specification = previous.model_dump(exclude={"number", "created_at", "retirements"})
     else:
-        if args.architecture_summary is None or args.technologies is None:
-            raise ValueError("new architecture: architecture_summary and technologies are required")
+        missing = (required_plan_fields(PlanDelta, new=True) & metadata) - args.model_fields_set
+        if missing:
+            raise ValueError("new architecture: required fields: " + ", ".join(sorted(missing)))
         specification = {
             "summary": args.architecture_summary,
             "technologies": [item.model_dump() for item in args.technologies],
@@ -325,8 +371,12 @@ def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPla
         affected.add(owners[key])
     for item in args.contracts:
         changes = item.model_dump(exclude_unset=True, exclude={"owner_change_reason"})
+        old = existing.get(item.key)
+        if (old and old.get("steps") is not None and "statement" in changes
+                and changes["statement"] != old["statement"] and "steps" not in changes):
+            raise ValueError(f"contracts.{item.key}: changed typed statement requires explicit steps")
         resolved = {**existing.get(item.key, {}), **changes}
-        missing = {"owner", "statement", "requirement_ids", "mechanism"} - resolved.keys()
+        missing = required_plan_fields(ContractDelta, new=True) - resolved.keys()
         if missing:
             raise ValueError(f"contracts.{item.key}: new or incomplete contract requires "
                              + ", ".join(sorted(missing)))
@@ -337,7 +387,7 @@ def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPla
         if not moved and item.owner_change_reason is not None:
             raise ValueError(f"contracts.{item.key}: owner_change_reason requires an active owner change")
         contracts[item.key] = resolved
-        if resolved != existing.get(item.key):
+        if {k: v for k, v in resolved.items() if k != "capability_move_reason"} != existing.get(item.key):
             affected.add(resolved["owner"])
             if item.key in owners:
                 affected.add(owners[item.key])
@@ -384,7 +434,7 @@ def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPla
                     if key in changes["dependencies"]
                 }
         if not old:
-            missing = {"title", "intent", "scope"} - payload.keys()
+            missing = required_plan_fields(SliceDelta, new=True) - payload.keys()
             if missing:
                 raise ValueError(f"slices.{mid}: new slice requires " + ", ".join(str(value) for value in sorted(missing)))
         dependencies = payload.get("dependencies", [])
@@ -424,17 +474,50 @@ def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPla
 
 
 def submit_plan_delta(ctx, args):
-    compiled = compile_plan_delta(ctx.application.db.get(ctx.project_id), args)
-    return propose_plan_patch(ctx, compiled.patch, compiler_audit=compiled.audit)
+    db = ctx.application.db
+    if getattr(db, "segmented_planning", False):
+        from .plan_units import validate_unit_delta
+        if validate_unit_delta(db, args):
+            pin = db.record["unit_request"]
+            db.record.setdefault("unit_replays", []).append({
+                "unit_id": pin["unit_id"], "delta_hash": pin["accepted_delta_hash"],
+                "candidate_hash": candidate_hash(db.project), "revision": db.project.revision,
+                "effect": "no_progress_exact_replay",
+            })
+            db.record = db.store.save(db.record)
+            ctx.candidate_ready = False
+            return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS",
+                    "candidate_state": "staged", "publication_requested": False,
+                    "replayed_unit_id": pin["unit_id"], "saved_revision": db.project.revision}
+    compiled = compile_plan_delta(db.get(ctx.project_id), args)
+    result = propose_plan_patch(ctx, compiled.patch, compiler_audit=compiled.audit)
+    if getattr(db, "segmented_planning", False):
+        ctx.candidate_ready = False
+        result = {**result, "candidate_state": "staged", "publication_requested": False,
+                  "saved_revision": db.project.revision,
+                  "saved_segments": db.record.get("generation_progress", {}).get("checkpoint_count", 0),
+                  "next": "Continue only remaining changes; call validate_candidate when the whole request is represented."}
+    return result
 
 
 DELTA_TOOL = ToolSpec(
     "submit_plan_delta",
-    "Atomic planning delta; omissions retain data, null is invalid. requirements quote allowed user "
+    "Save one complete, reference-closed candidate segment atomically; this is not final publication. "
+    "Prefer a small coherent group of affected contracts/slices; do not repeat whole unchanged fields. "
+    "Use further segments when needed, then validate_candidate explicitly. omissions retain data, null is invalid. requirements quote allowed user "
     "sources; process_constraints govern this turn, not product acceptance. Existing contracts need "
     "only key and changed fields; every omitted field remains exact. New contracts need owner, "
-    "statement, requirement_ids and mechanism. Explicit values replace; [] clears only component_ids "
-    "or requires_behavior_keys, never required fields. Owner moves need owner_change_reason and "
+    "statement, requirement_ids and mechanism. provides/steps are an OPTIONAL typed extension; do not "
+    "automatically add them or migrate untyped contracts. provides declares stable operation keys with command/query "
+    "kind and action quoted exactly from its provider statement. steps invokes those capabilities with "
+    "invoke_command/invoke_query and an exact quote from the consumer statement. inspect also needs a "
+    "linked active constraint/exclusion requirement_id; outcome contracts require an invocation. "
+    "Only still-active contracts with existing or newly supplied nonempty typed declarations require "
+    "steps; clearing their declarations cannot opt out and missing/empty steps are unknown. Untyped "
+    "contracts remain outside this check. [] clears provides or steps, "
+    "component_ids or requires_behavior_keys. A changed typed statement requires explicit steps. "
+    "Moving a capability key between provider contracts requires capability_move_reason on the receiver. "
+    "Owner moves need owner_change_reason and "
     "retain the stable key/history. Only send actual changes, never rephrase omitted text. "
     "New slices need title/intent/scope (work boundaries). components upsert IDs; source_refs replace "
     "real repository paths ([] clears). relations upsert "

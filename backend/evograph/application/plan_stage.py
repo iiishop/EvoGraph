@@ -4,7 +4,8 @@ import threading
 import time
 
 from ..domain.models import now
-from ..domain.plan_contracts import PLANNING_FIELDS
+from ..domain.plan_contracts import PLANNING_FIELDS, planning_fingerprint
+from ..domain.typed_capabilities import declared_typed_keys
 from ..infrastructure.database import ConflictError
 from .baseline_milestones import BaselineMilestoneService
 from .design import DesignService
@@ -50,10 +51,23 @@ class StagedDatabase:
         updated.updated_at = now()
         if self.metrics_ref is not None:
             self.record["metrics"] = copy.deepcopy({**self.metrics_ref, "elapsed_seconds": time.monotonic() - self.started})
-        record = {**self.record, "project": updated.model_dump(), "revision": updated.revision}
+        record = {**self.record, "project": updated.model_dump(), "revision": updated.revision,
+                  "typed_obligation_keys": sorted(set(self.record.get("typed_obligation_keys", []))
+                                                   | declared_typed_keys(self.project)
+                                                   | declared_typed_keys(updated))}
         if compiler_audit is not None:
             record = copy.deepcopy(record)
             record.setdefault("compilations", []).append(compiler_audit)
+            progress = record.get("generation_progress", {})
+            record["generation_progress"] = {
+                "state": "staged", "checkpoint_count": progress.get("checkpoint_count", 0) + 1,
+                "last_revision": updated.revision, "last_summary": detail,
+                "planning_fingerprint": planning_fingerprint(updated),
+            }
+            record["validation_requested"] = False
+        if getattr(self, "segmented_planning", False):
+            from .plan_units import advance_unit_checkpoint
+            record = advance_unit_checkpoint(record, self.project, updated, compiler_audit)
         # No in-memory revision advance before the durable checkpoint succeeds.
         record = self.store.save(record)
         self.project, self.record = updated, record
@@ -64,13 +78,20 @@ class StagedDatabase:
     def record_compilation_noop(self, audit):
         record = copy.deepcopy(self.record)
         record.setdefault("compilations", []).append(audit)
+        if getattr(self, "segmented_planning", False):
+            from .plan_units import advance_unit_checkpoint
+            record = advance_unit_checkpoint(record, self.project, self.project, audit)
         self.record = self.store.save(record)
 
     def start_tool_attempt(self, name, arguments):
+        if getattr(self, "segmented_planning", False) and name == "submit_plan_delta":
+            self.record["validation_requested"] = False
+            self.record["generation_progress"] = {**self.record.get("generation_progress", {}), "state": "staged"}
         identity = len(self.record.get("tool_attempts", [])) + 1
         self.record.setdefault("tool_attempts", []).append({
             "id": identity, "name": name, "raw_arguments": arguments,
             "status": "started", "source_id": self.source_id,
+            "generation_call": (self.metrics_ref or {}).get("provider_calls", 0),
         })
         for source in self.project.plan_contract.sources:
             if source.id == self.source_id:

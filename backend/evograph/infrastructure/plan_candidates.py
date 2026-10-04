@@ -5,11 +5,7 @@ from copy import deepcopy
 from ..domain.models import Project, now, uid
 from ..domain.plan_contracts import (
     PLANNING_FIELDS,
-    SemanticReview,
     candidate_hash,
-    contract_findings,
-    history_findings,
-    validate_semantic_review,
 )
 from .database import ConflictError
 
@@ -142,7 +138,8 @@ class CandidateStore:
         return data, summary
 
     def commit(self, record, before, turn_id):
-        from ..application.graph_editor import GraphEditor
+        from ..application.plan_harness import replay_harness, seal_snapshot
+        from ..application.plan_review import validate_batch_certificate
         from ..application.plan_validation import build_validation_receipt
         from ..application.turn_summary import build_turn_summary
 
@@ -153,23 +150,38 @@ class CandidateStore:
             saved = self._writable_candidate(connection, record["id"])
             if not saved or saved["status"] != "ready" or saved["candidate_hash"] != record["candidate_hash"]:
                 raise ValueError("候选已变化，需要重新校验")
+            if saved.get("work_units") is not None:
+                from ..application.plan_units import all_units_complete
+                if not all_units_complete(saved):
+                    raise ValueError("调度单元尚未全部完成，不能提交部分候选")
             staged = Project.model_validate(saved["project"])
             if candidate_hash(staged) != saved["candidate_hash"]:
                 raise ValueError("候选内容指纹不一致")
-            if saved["report"].get("findings") or contract_findings(staged) or history_findings(before, staged):
-                raise ValueError("候选仍有未解决的契约关联问题")
-            review = SemanticReview.model_validate(saved["report"].get("semantic", {}))
-            if not validate_semantic_review(staged, review):
-                raise ValueError("候选尚有未解决的语义问题")
-            GraphEditor(None)._check(staged)
-            saved["validation_receipt"] = build_validation_receipt(
-                staged, structural_findings=[], semantic_review=review)
             row = connection.execute("SELECT payload FROM projects WHERE id=?", (before.id,)).fetchone()
             current = self.db.decode_project(connection, row[0]) if row else None
             if not current or current.revision != saved["base_revision"]:
                 raise ConflictError("正式规划已改变；候选保留，但不能覆盖较新的状态")
             if current.archived or not current.unified_planning:
                 raise ConflictError("项目状态已改变，候选未应用")
+            if candidate_hash(current) != candidate_hash(before):
+                raise ConflictError("评审前快照与当前正式规划不一致，候选需要重新校验")
+            snapshot = seal_snapshot(before, staged, saved)
+
+            def replay_model(sealed, certificate):
+                # This synchronous callback only replays the exact durable model
+                # certificate. No provider or application handles enter plugins.
+                if not saved.get("batch_reviews") or certificate != saved["batch_reviews"][-1]:
+                    raise ValueError("插件评审证书与保存的原始记录不一致")
+                return validate_batch_certificate(
+                    sealed.before_project(), sealed.candidate_project(), saved)
+
+            run = replay_harness(snapshot, saved.get("harness_run"), replay_model)
+            if run.decision != "apply":
+                raise ValueError("当前检查策略仍有未解决项，候选未应用")
+            saved["harness_commit_replay"] = {
+                "kind": "synchronous_certificate_replay", "run": run.model_dump(mode="json")}
+
+            saved["validation_receipt"] = build_validation_receipt(staged, harness_run=run)
             result = current.model_copy(deep=True)
             for field in PLANNING_FIELDS:
                 setattr(result, field, deepcopy(getattr(staged, field)))

@@ -6,13 +6,16 @@ from pydantic import Field
 from ..agent_tools.base import ToolSpec
 from ..domain.models import BehaviorRevision, Model
 from ..domain.plan_contracts import (
+    AcceptanceStep,
     ContractBinding,
     ProcessConstraint,
+    ProvidedCapability,
     Requirement,
     Retirement,
     active_behaviors,
     contract_findings,
 )
+from ..domain.typed_capabilities import validate_capability_moves
 
 
 class AddRequirement(Model):
@@ -38,6 +41,9 @@ class BindContract(Model):
     component_ids: list[str] = Field(default_factory=list, max_length=40)
     mechanism: str = Field(min_length=1, max_length=2500)
     requires_behavior_keys: list[str] = Field(default_factory=list, max_length=100)
+    provides: list[ProvidedCapability] = Field(default_factory=list, max_length=16)
+    steps: list[AcceptanceStep] | None = Field(default=None, max_length=24)
+    capability_move_reason: str | None = Field(default=None, min_length=1, max_length=240)
 
 class TracePlan(Model):
     add_requirements: list[AddRequirement] = Field(default_factory=list, max_length=40)
@@ -50,6 +56,7 @@ def trace_plan(ctx, args):
     if not getattr(db, "is_candidate", False):
         raise ValueError("统一契约只能在候选规划中修改")
     p = db.get(ctx.project_id)
+    before = p.model_copy(deep=True)
     source = next(s for s in p.plan_contract.sources if s.id == db.source_id)
     by_id = {r.id: r for r in p.plan_contract.requirements}
     process = {(c.source_id, c.id): c for c in p.plan_contract.process_constraints}
@@ -96,7 +103,17 @@ def trace_plan(ctx, args):
         if not behavior:
             raise ValueError("只可关联当前活跃验收：" + item.behavior_key)
         previous = bindings.get(item.behavior_key)
-        new_binding = ContractBinding(**item.model_dump(), behavior_revision_id=behavior.id)
+        links = item.model_dump(exclude={"capability_move_reason"})
+        if previous:
+            old_behavior = next((b for b in p.behaviors if b.id == previous.behavior_revision_id), None)
+            if (previous.steps is not None and old_behavior is not None
+                    and old_behavior.statement != behavior.statement
+                    and "steps" not in item.model_fields_set):
+                raise ValueError(f"contracts.{item.behavior_key}: changed typed statement requires explicit steps")
+            for field in ("provides", "steps"):
+                if field not in item.model_fields_set:
+                    links[field] = previous.model_dump()[field]
+        new_binding = ContractBinding(**links, behavior_revision_id=behavior.id)
         # Evidence pins behavior revision IDs. Mechanism/requirements form part of
         # this contract, so changing those also creates a revision and stales evidence.
         canonical_ids = {b.id for b in active_behaviors(db.canonical.get(p.id)).values()}
@@ -122,6 +139,10 @@ def trace_plan(ctx, args):
             new_binding.behavior_revision_id = revised.id
         bindings[item.behavior_key] = new_binding
     p.plan_contract.bindings = list(bindings.values())
+    validate_capability_moves(before, p, {
+        item.behavior_key: item.capability_move_reason for item in args.bindings
+        if item.capability_move_reason is not None
+    })
     db.save(p, "contract_traced", "关联需求、实现机制与验收")
     return {"node_ids": [], "effect": "updated", "findings": contract_findings(p)}
 
@@ -145,15 +166,32 @@ class ValidateCandidate(Model):
 
 def validate_candidate(ctx, args):
     db = ctx.application.db
+    generation_call = (getattr(db, "metrics_ref", None) or {}).get("provider_calls", 0)
+    if getattr(db, "segmented_planning", False) and any(
+            attempt["name"] == "submit_plan_delta" and attempt["status"] != "succeeded"
+            and attempt.get("generation_call") == generation_call
+            for attempt in db.record.get("tool_attempts", [])):
+        raise ValueError("本次模型响应中有未保存的变更段；先读取失败原因，下一次响应修正或明确重新校验")
+    if getattr(db, "segmented_planning", False):
+        from .plan_units import all_units_complete
+        if not all_units_complete(db.record):
+            raise ValueError("仍有未完成的程序调度单元，不能提前把部分候选提交全局检查")
     ctx.candidate_ready = True
+    from ..domain.plan_contracts import planning_fingerprint
     db.record["validation_requested"] = True
+    project = db.get(ctx.project_id)
+    db.record["generation_progress"] = {**db.record.get("generation_progress", {}),
+        "state": "ready", "checkpoint_count": db.record.get("generation_progress", {}).get("checkpoint_count", 0),
+        "ready_revision": project.revision, "ready_planning_fingerprint": planning_fingerprint(project)}
     db.record = db.store.save(db.record)
     return {"status": "VALIDATION_REQUESTED", "findings": contract_findings(db.get(ctx.project_id))}
 
 
 VALIDATE_TOOL = ToolSpec(
     "validate_candidate", "Request validation of the preserved candidate when the user asks to "
-    "retry/continue/finish and no planning edit is needed. This does not certify anything or waive "
+    "retry/continue/finish, or after all complete delta segments for this request have been saved. "
+    "Call this explicitly when the candidate is complete; saving a segment does not request publication. "
+    "This does not certify anything or waive "
     "findings. Do not call for a read-only explanation. The application will run the exact-revision "
     "checks and independent semantic challenge after your turn.",
     ValidateCandidate, validate_candidate, "重新校验保留的候选", "inspect", None,
