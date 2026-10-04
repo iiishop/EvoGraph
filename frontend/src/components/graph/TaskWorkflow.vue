@@ -5,6 +5,7 @@ import { command } from '../../api/client';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
 import { workflowDrafts, runWorkflowAction } from '../../composables/useWorkflowDrafts';
+import { copyText } from '../../lib/copyText';
 import ObligationItem from './ObligationItem.vue';
 const props = defineProps<{ project: Project; milestone: Milestone }>();
 const { state, refresh, setBusy, selectNode } = useWorkspace();
@@ -16,7 +17,12 @@ const { draft, report } = workflowDrafts.bind(
 let mounted = true;
 let viewGeneration = 0;
 watch(
-  () => [props.project.id, props.milestone.id, state.project?.id, state.selectedId],
+  [
+    () => props.project.id,
+    () => props.milestone.id,
+    () => state.project?.id,
+    () => state.selectedId,
+  ],
   () => {
     viewGeneration++;
   },
@@ -31,6 +37,15 @@ const ready = computed(
 );
 const blocked = computed(
   () => state.busy || Boolean(draft.value?.pending || draft.value?.syncError),
+);
+const basisChanged = computed(() =>
+  Boolean(
+    props.milestone.pinned_baseline &&
+    props.milestone.pinned_baseline !== props.project.baselines.at(-1)?.id,
+  ),
+);
+const needsRevalidation = computed(
+  () => props.milestone.status === 'REVALIDATION_REQUIRED' || basisChanged.value,
 );
 const stage = computed(() =>
   props.milestone.status === 'VERIFIED_COMPLETE'
@@ -110,16 +125,19 @@ async function run(action: string) {
     });
     // Never start a delayed clipboard write after leaving the originating inspector.
     if (outcome.confirmed && outcome.current && outcome.result.prompt && origin()) {
-      try {
-        await navigator.clipboard.writeText(outcome.result.prompt);
-        if (origin()) attempt.entry.copied = true;
-      } catch {
-        if (origin()) attempt.entry.error = '剪贴板不可用，请从下方选择并复制提示词。';
-      }
+      attempt.entry.copied = copyText(outcome.result.prompt);
+      if (!attempt.entry.copied)
+        attempt.entry.error = '自动复制未成功，请使用下方复制按钮，或选择提示词后手动复制。';
     }
   } finally {
     setBusy(false);
   }
+}
+function copySavedPrompt() {
+  const entry = draft.value;
+  if (blocked.value || !entry?.prompt) return;
+  entry.copied = copyText(entry.prompt);
+  entry.error = entry.copied ? '' : '剪贴板不可用，请从下方选择并复制提示词。';
 }
 async function sync() {
   if (state.busy || !draft.value) return;
@@ -148,7 +166,7 @@ function investigate() {
   <div class="task-workflow">
     <ol class="workflow-steps" aria-label="任务流程">
       <li
-        v-for="(label, i) in ['条件', '制作', '验收', '完成']"
+        v-for="(label, i) in ['条件', needsRevalidation ? '需复核' : '制作', '验收', '完成']"
         :key="label"
         :class="{ active: i === stage, done: i < stage }"
         :aria-current="i === stage ? 'step' : undefined"
@@ -157,6 +175,22 @@ function investigate() {
         >{{ label }}
       </li>
     </ol>
+    <section
+      v-if="stage > 0 && (needsRevalidation || ready.blockers.length)"
+      class="workflow-basis"
+      aria-label="当前交付依据提醒"
+    >
+      <strong>{{
+        needsRevalidation ? '基线已变化，需重新核对依据' : '当前前置条件仍有待处理项'
+      }}</strong>
+      <p>已领取的任务和草稿保留；以下状态基于最近检查的仓库基线。</p>
+      <ul v-if="ready.blockers.length">
+        <li v-for="item in ready.blockers" :key="item">{{ item }}</li>
+      </ul>
+      <button class="button secondary" :disabled="blocked" @click="run('baseline.refresh')">
+        重新检查基线
+      </button>
+    </section>
     <section v-if="stage === 0" class="task-next">
       <h3>先确认任务可以开始</h3>
       <p>依赖、调查依据与资源检查通过后，领取任务。</p>
@@ -176,7 +210,7 @@ function investigate() {
       </button>
     </section>
     <section v-else-if="stage === 1" class="task-next">
-      <h3>交给外部 Agent 制作</h3>
+      <h3>{{ needsRevalidation ? '核对后继续制作与验收' : '交给外部 Agent 制作' }}</h3>
       <p>复制任务范围与设计约束。制作完成后，生成绑定最新基线的验收提示词。</p>
       <button class="button secondary" :disabled="blocked" @click="run('implementation.export')">
         复制制作提示词</button
@@ -223,6 +257,9 @@ function investigate() {
     </div>
     <details v-if="draft?.prompt" open class="handoff-prompt">
       <summary>{{ draft?.copied ? '已复制提示词' : '外部 Agent 提示词' }}</summary>
+      <button class="button secondary" :disabled="blocked" @click="copySavedPrompt">
+        复制已生成提示词
+      </button>
       <textarea
         :value="draft?.prompt"
         readonly
@@ -263,3 +300,21 @@ function investigate() {
     </button>
   </div>
 </template>
+<style scoped>
+.workflow-basis {
+  margin: 12px 0;
+  padding: 13px;
+  border: 1px solid #ead9b4;
+  border-radius: 9px;
+  background: #fff9eb;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.workflow-basis p {
+  margin: 7px 0;
+}
+.workflow-basis ul {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+</style>

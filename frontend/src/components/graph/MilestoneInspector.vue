@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { X } from 'lucide-vue-next';
 import type { Milestone, Project } from '../../types';
 import { acceptanceScope, acceptanceSummary } from '../../lib/acceptance';
@@ -9,12 +9,20 @@ import AssetPreview from '../attachments/AssetPreview.vue';
 import DiagramView from '../design/DiagramView.vue';
 import UmlView from '../design/UmlView.vue';
 import TaskWorkflow from './TaskWorkflow.vue';
+import DeliveryBriefDialog from './DeliveryBriefDialog.vue';
 import AgentTurnSummary from '../agent/AgentTurnSummary.vue';
 import { milestoneTurnHistory, dependencyTypeLabels } from '../../lib/turnSummary';
 const props = defineProps<{ milestone: Milestone; project: Project }>();
 const { selectNode } = useWorkspace();
-defineEmits<{ locate: [id: string] }>();
+const emit = defineEmits<{ locate: [id: string] }>();
 const workflowOpen = ref(false);
+const briefOpen = ref(false);
+watch(
+  () => [props.project.id, props.milestone.id],
+  () => {
+    briefOpen.value = false;
+  },
+);
 const allMilestones = computed(() => [
   ...props.project.milestones,
   ...(props.project.source_milestones ?? []),
@@ -82,6 +90,7 @@ const uml = computed(() =>
             <strong>交付约定</strong><span>范围 · {{ behaviors.length }} 项验收</span>
           </summary>
           <div class="disclosure-content">
+            <button class="button secondary" @click="briefOpen = true">查看完整交付说明</button>
             <section>
               <h3>交付范围</h3>
               <code v-for="scope in milestone.scope" :key="scope" class="scope-path">{{
@@ -265,5 +274,17 @@ const uml = computed(() =>
         <p class="inspector-composer-note">继续在项目对话中补充想法，由 Agent 判断影响范围。</p>
       </div>
     </div>
+    <DeliveryBriefDialog
+      v-if="briefOpen"
+      :project="project"
+      :milestone="milestone"
+      @close="briefOpen = false"
+      @locate="
+        (id) => {
+          briefOpen = false;
+          emit('locate', id);
+        }
+      "
+    />
   </aside>
 </template>

@@ -88,6 +88,7 @@ class Application:
             "milestone.start": self.execution.start,
             "milestone.release": self.execution.release,
             "implementation.export": self.acceptance.implementation,
+            "implementation.brief": self.acceptance.brief,
             "verification.export": self.acceptance.prepare,
             "verification.import": self.acceptance.import_report,
             "milestone.obligation": self.execution.resolve_obligation,
@@ -129,6 +130,7 @@ class Application:
             "references.list",
             "references.catalog",
             "agent.turn_result",
+            "implementation.brief",
         }
         if not readonly:
             key = params.get("project_id", "__global__")

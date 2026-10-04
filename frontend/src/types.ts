@@ -286,6 +286,49 @@ export interface PlanProcessConstraint {
   quote: string;
   rule: 'planning_only' | 'no_external_research' | 'other';
 }
+export interface DeliveryBrief {
+  milestone_id: string;
+  project_revision: number;
+  repository: string;
+  basis: 'saved_project_snapshot';
+  baseline: {
+    latest: Baseline | null;
+    pinned: Baseline | null;
+    pinned_id: string | null;
+    changed_since_pin: boolean;
+    label: string;
+  };
+  outcome: Pick<
+    Milestone,
+    'title' | 'intent' | 'scope' | 'resources' | 'change_types' | 'migration_steps'
+  >;
+  readiness: Project['readiness'][string];
+  prerequisites: {
+    id: string;
+    title: string;
+    origin: string;
+    direct: boolean;
+    via: { dependent_id: string; reason: string; kind: string }[];
+    state: string;
+    label: string;
+    evidence_ids: string[];
+    source_refs: string[];
+    source_behaviors: NonNullable<Milestone['source_behaviors']>;
+    source_baseline_id: string;
+  }[];
+  contracts: {
+    behavior: Behavior;
+    binding: PlanBinding | null;
+    relation: 'own' | 'prerequisite' | 'unavailable';
+    state: string;
+    label: string;
+    evidence_ids: string[];
+  }[];
+  requirements: PlanRequirement[];
+  sources: { id: string; text: string; origin: string; message_id: string | null }[];
+  global_requirement_ids: string[];
+  warnings: string[];
+}
 export interface PlanContract {
   sources?: { id: string; text: string; origin: 'user' | 'legacy' }[];
   process_constraints?: PlanProcessConstraint[];
