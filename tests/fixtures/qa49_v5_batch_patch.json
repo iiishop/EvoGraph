@@ -1,0 +1,147 @@
+{
+  "provenance": {
+    "source": "v5/canonical-boundaries.json before_canonical; v5/generated-candidate.json compilations[0].ir",
+    "kind": "Frozen real-provider output, not a new model-quality evaluation",
+    "canonical_project_sha256": "3174c2f87f1f1047b3a88206216f8cde412190004e035f2c9f641663579f373f",
+    "model_delta_sha256": "8e887d4c65067a806a63d169f6ec12b898d67d95571e9df8fcf18595288b33df",
+    "limitation": "The original int(s, 10) long-leading-zero parsing limitation is intentionally preserved; no implementation execution is claimed."
+  },
+  "canonical_metadata": {
+    "revision": 2,
+    "updated_at": "2026-10-04T10:14:26.292133+00:00",
+    "metrics": {
+      "planning_seconds": 123.68685960699804,
+      "verification_seconds": 0.0,
+      "model_tokens": 38095.0,
+      "blocked_attempts": 0.0
+    }
+  },
+  "input": "现在改成批量换算：命令接受一个或多个十进制整数；每个仍在[-1000,1000]。全部参数有效时按输入顺序逐行输出原两位小数结果，退出0。先校验全部参数；只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空。参数多于一个不再是错误。原公式、3必验例、标准库/无数据文件网络UI数据库保持；沿用纯函数核心与CLI两个切片，不加新层。",
+  "model_delta": {
+    "summary": "按用户新方向改为批量换算：命令接受一个或多个十进制整数（各在 [-1000,1000]），全部有效时按输入顺序逐行输出两位小数、退出 0；缺参或任一参数非整数/越界则 stderr 一行、退出 2、stdout 完全为空。参数多于一个不再是错误。公式、3 个必验例、仅标准库/无文件网络 UI 数据库保持不变；仍沿用纯函数核心 + 薄 CLI 两个切片，不新增层（核心函数集不改，批量循环留在 CLI）。",
+    "requirements": [
+      {
+        "id": "req-batch-args",
+        "quote": "命令接受一个或多个十进制整数；每个仍在[-1000,1000]。",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-ordered-multi-line-output",
+        "quote": "全部参数有效时按输入顺序逐行输出原两位小数结果，退出0。",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-all-or-nothing-validation",
+        "quote": "先校验全部参数；只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空。",
+        "kind": "outcome"
+      }
+    ],
+    "process_constraints": [
+      {
+        "id": "pc-batch-delivery-shape",
+        "quote": "沿用纯函数核心与CLI两个切片，不加新层。",
+        "rule": "other"
+      }
+    ],
+    "retire_requirements": [
+      {
+        "id": "req-arg-contract",
+        "quote": "命令接受一个或多个十进制整数",
+        "reason": "用户改向批量换算：原“接受且只接受一个十进制整数”被一个或多个参数取代，参数多于一个不再是错误，故该单参数约束不再成立。"
+      },
+      {
+        "id": "req-success-stdout",
+        "quote": "全部参数有效时按输入顺序逐行输出原两位小数结果，退出0",
+        "reason": "成功输出由“只打印两位小数和换行”的单一结果改为按输入顺序逐行输出多个结果，原单行表述不再覆盖当前要求。"
+      },
+      {
+        "id": "req-error-path",
+        "quote": "只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空",
+        "reason": "失败边界改变：参数多于一个不再是失败类别，新增“先校验全部参数、stdout 完全为空”的全或无要求，原四类枚举已被替换。"
+      }
+    ],
+    "contracts": [
+      {
+        "key": "argv-validation",
+        "owner": "slice-02-cli",
+        "statement": "进入成功路径当且仅当 argv 中至少有一个参数，且每个参数都是十进制整数字面量并各自满足 -1000 ≤ c ≤ 1000（含边界）；参数多于一个不是错误。缺少参数、任一参数不是十进制整数、任一参数超出范围都走失败路径，且在全部参数判定完成之前不得产生任何 stdout 输出。",
+        "requirement_ids": [
+          "req-batch-args",
+          "req-all-or-nothing-validation"
+        ],
+        "mechanism": "CLI 入口 `main(argv) -> int` 严格“先全量校验、后任何输出”：① `len(argv) >= 1`，为空即整批失败（缺参）；② 逐个参数按字符白名单判定十进制整数——可选一个前导 '-' 或 '+'，其后至少一个 ASCII '0'-'9'，出现下划线分组、空白、小数点、Unicode 数字等任何其他字符即判为非整数，白名单通过后再 `int(s, 10)` 取值；③ 逐个检查 `-1000 <= c <= 1000`。三步对全部 N 个参数都通过后才调用 convert-formula；任一步在任一位置失败即整批失败，且因校验先于输出，不会出现“前面的行已打印”的中间状态。不使用 argparse（其 usage 与错误格式与本需求的一行简短错误不匹配）。",
+        "component_ids": [
+          "comp-cli-entry"
+        ],
+        "requires_behavior_keys": []
+      },
+      {
+        "key": "success-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "成功路径下按 argv 输入顺序为每个参数各输出一行 format-two-decimals 的文本加一个 '\\n'（恰好 N 行、无其他字符、无额外空行），标准错误为空，退出码为 0。",
+        "requirement_ids": [
+          "req-ordered-multi-line-output"
+        ],
+        "mechanism": "按 argv 顺序解析得到整数列表 values，`for c in values: sys.stdout.write(format_fahrenheit(celsius_to_fahrenheit(c)) + '\\n')`；全部行写出后返回 0。顺序即输入顺序，不排序、不去重、不合并、不追加汇总行。成功路径完全不写 stderr。入口以 `sys.exit(main(sys.argv[1:]))` 把返回值 0 传给进程；批量遍历只在本层完成，不新增核心函数或中间层。",
+        "component_ids": [
+          "comp-cli-entry"
+        ],
+        "requires_behavior_keys": [
+          "convert-formula",
+          "format-two-decimals"
+        ]
+      },
+      {
+        "key": "failure-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "缺参（argv 为空）或任一参数非十进制整数/超出范围时，在标准错误输出恰好一行简短错误信息并返回退出码 2；此时标准输出完全为空（0 字节，不因先前合法参数而输出部分行），任何失败输入都不产生 traceback。",
+        "requirement_ids": [
+          "req-all-or-nothing-validation"
+        ],
+        "mechanism": "失败路径的唯一出口是 CLI 内的 `print(msg, file=sys.stderr)` 后 `return 2`；该出口只在校验阶段被触达，而校验严格先于任何 stdout 写入，因此“stdout 完全为空”由执行顺序保证，不依赖事后回滚或缓冲清理。异常不得从 main 逃逸（如格式化/取值意外抛错，就地 try/except ValueError 转为同一出口）；禁止裸 raise、禁止 `raise SystemExit(消息)` 之类会打印回溯的写法、禁止把 argparse 全量 usage 文本当错误输出。每个失败类别的错误文本由实现选定，但必须是非空单行。",
+        "component_ids": [
+          "comp-cli-entry"
+        ],
+        "requires_behavior_keys": []
+      },
+      {
+        "key": "format-two-decimals",
+        "owner": "slice-01-core",
+        "statement": "转换数值 v 的输出文本恰为 Python 格式说明符 '.2f' 的结果：32.0→'32.00'、212.0→'212.00'、-40.0→'-40.00'，无正号、单位、前导空格或额外字符；批量输出中每个值各占一行。",
+        "requirement_ids": [
+          "req-ordered-multi-line-output",
+          "req-mandatory-cases"
+        ],
+        "mechanism": "纯函数 format_fahrenheit(v: float) -> str：`return f\"{v:.2f}\"`。这是本计划中唯一定义两位小数格式的位置；调用方（CLI）只对每个输入值拼接其返回值与 '\\n'，不自行实现舍入、补零或批量格式化函数。输入域被 c∈[-1000,1000] 限界，故单行文本长度有界；舍入沿用 Python 内建格式化语义。",
+        "component_ids": [
+          "comp-core-converter"
+        ],
+        "requires_behavior_keys": []
+      }
+    ],
+    "slices": [
+      {
+        "id": "slice-02-cli",
+        "title": "CLI 入口：批量参数校验、逐行输出与退出码",
+        "intent": "在已合并的纯函数核心之上加一层薄 CLI，拥有进程边界：接受一个或多个整数参数，先对全部参数校验（缺参、任一非十进制整数、任一越界），全部有效后按输入顺序逐行输出并返回 0；任一失败则 stderr 一行 + 退出码 2 + stdout 完全为空。不新增核心函数、中间层或第三方依赖，批量遍历留在本层。",
+        "scope": [
+          "新增 CLI 入口模块，读取 sys.argv[1:]，对全部参数实现三步校验（参数个数 ≥1、十进制整数字面量字符白名单、区间 [-1000,1000]），且校验严格先于任何 stdout 写入",
+          "成功路径按输入顺序遍历参数，对每个参数调用纯函数核心的转换与格式化，逐行写 stdout 加换行，返回 0",
+          "失败路径（缺参、任一参数非整数、任一参数越界）统一写 stderr 一行简短错误并返回 2，stdout 保持 0 字节，不泄漏 traceback",
+          "参数多于一个不再是错误；不新增核心函数、不引入批处理层/框架，批量循环在 CLI 内完成",
+          "端到端测试（子进程）覆盖单参数 0/100/-40、多参数按输入顺序多行、边界 ±1000，以及缺参、非整数、越界与“前一个参数合法、后一个参数非法时 stdout 完全为空”的失败用例，并断言 stdout/stderr/退出码三元组"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "id": "comp-cli-entry",
+        "label": "CLI 进程边界",
+        "description": "拥有进程边界职责：解析 sys.argv 中的一个或多个参数，先对全部参数做缺参/十进制整数字面量/区间校验，全部通过后按输入顺序逐行写 stdout（每行一个两位小数结果），失败时写 stderr 一行并返回退出码 2。不复制公式与格式规则，仅按 key 调用转换核心；批量遍历在本层完成，不建新层。",
+        "role": "backend"
+      }
+    ],
+    "target": "一个纯 Python 标准库、单文件核心 + 薄 CLI 的可维护小工具：命令接受一个或多个十进制整数，每个 c∈[-1000,1000]（含边界）；全部参数有效时按输入顺序逐行输出 f=c*9/5+32 的两位小数（每个值一行、各带一个换行），退出码 0；缺参（0 个参数）或任一参数非十进制整数/超出范围时，标准错误输出一行简短错误、退出码 2、stdout 完全为空、不输出 traceback；参数多于一个不再是错误。先交付可直接单测的纯函数核心切片，再交付在核心之上做进程边界的 CLI 切片，两个切片各自可合并、可独立验收，且不新增架构层（核心只保留转换与格式化两个纯函数，批量遍历由 CLI 完成）。",
+    "architecture_summary": "最小两极架构，适配单人维护：① 无副作用的转换核心——只含 celsius_to_fahrenheit 与 format_fahrenheit 两个纯函数，无状态、无 I/O，可由纯函数单测直接验收；② 薄 CLI 适配层——接收一个或多个参数，先全量校验（缺参、任一非十进制整数、任一越界），全通过则按输入顺序逐行写 stdout 并返回 0，否则写 stderr 一行、返回 2 且不产生任何 stdout；除调用核心与按序遍历外不做计算。依赖方向单向：CLI → 核心，本次变更不新增层或模块。没有框架、配置、持久化、网络或 UI 边界，也没有需要同步的额外层；两个组件按两个切片交付，切片 1 单独可验收，切片 2 只依赖切片 1 已合并，不依赖任何未来守卫。当前仓库未连接，模块文件命名与具体路径留待实现阶段确定。"
+  }
+}

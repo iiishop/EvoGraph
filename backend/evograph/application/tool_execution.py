@@ -5,6 +5,8 @@ import json
 
 import anyio
 
+from .agent_errors import agent_error_event
+
 
 async def _drain_worker(task: asyncio.Task) -> None:
     """Keep a thread's task alive until completion despite caller cancellation."""
@@ -32,9 +34,29 @@ class ToolExecutor:
         self.compact_snapshots = compact_snapshots
         self.changed = False
         self.calls_used = 0
+        self.max_calls = None
         self.seen_results = set()
 
     async def invoke(self, name: str, arguments: str) -> dict:
+        # Candidate diagnostics must not depend on a later model request copying
+        # the tool exchange. Persist every attempt before parsing, including the
+        # final malformed call and calls rejected by the executor registry.
+        db = self.context.application.db
+        attempt = db.start_tool_attempt(name, arguments) if hasattr(db, "start_tool_attempt") else None
+        try:
+            result = await self._invoke(name, arguments)
+        except BaseException as exc:
+            if attempt is not None:
+                db.finish_tool_attempt(attempt, "interrupted" if isinstance(exc, (asyncio.CancelledError, GeneratorExit)) else "failed",
+                                       {"ok": False, "error": agent_error_event(exc)["message"]})
+            raise
+        if attempt is not None:
+            db.finish_tool_attempt(attempt, "succeeded" if result["payload"].get("ok") else "failed", result["payload"])
+        return result
+
+    async def _invoke(self, name: str, arguments: str) -> dict:
+        if self.max_calls is not None and self.calls_used >= self.max_calls:
+            raise ValueError("已到达本轮工具预算，候选已保留待继续")
         self.calls_used += 1
         spec = self.registry.get(name)
         try:
@@ -52,6 +74,8 @@ class ToolExecutor:
                 # the runtime derives the actual net changes from stored state.
                 self.changed |= mutation
                 raise
+            if hasattr(self.context.application.db, "record_tool"):
+                self.context.application.db.record_tool(name, args.model_dump(), result)
             mutation = mutation and result.get("status") != "NO_PROGRESS"
             self.changed |= mutation
             if mutation:
@@ -83,6 +107,8 @@ class ToolExecutor:
                 "events": [
                     {
                         "type": "tool_failed",
+                        "tool": name,
+                        "code": "invalid_plan_delta" if name in {"submit_plan_delta", "propose_plan_patch"} else "tool_failed",
                         "label": spec.label if spec else "未知工具",
                         "message": str(exc)[:300],
                     }

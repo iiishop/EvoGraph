@@ -1831,3 +1831,27 @@ test('switching project/incarnation/owner closes historical reader without leavi
     view.dispose();
   }
 });
+
+test('candidate receipt tile and reader report retained preview rather than a history-save warning', async () => {
+  const retained = {
+    ...historicalSummary('retained-turn', 'failed', false),
+    candidate_outcome: {
+      id: 'candidate-id',
+      status: 'failed',
+      canonical_unchanged: true,
+      note: '候选保留供继续修改',
+    },
+  };
+  const view = await mount({ summary: retained });
+  try {
+    const tile = view.tiles().find((node) => node.textContent.includes('最近变更'));
+    assert.match(tile.textContent, /候选未完成/);
+    assert.match(tile.textContent, /候选已保留，正式方案未应用/);
+    assert.doesNotMatch(tile.textContent, /对话未完整保存/);
+    await click(tile);
+    assert.match(view.surface().textContent, /候选保留供继续修改/);
+    assert.doesNotMatch(view.surface().textContent, /已保存的部分变更保留/);
+  } finally {
+    view.dispose();
+  }
+});

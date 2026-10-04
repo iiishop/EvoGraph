@@ -137,6 +137,8 @@ for (const name of [
   './components/projects/ProjectRecoveryDialog.vue',
   './components/ui/NotificationStack.vue',
   './WorkspaceHeader.vue',
+  './UnifiedPlanBar.vue',
+  './PlanCandidatePanel.vue',
   '../graph/GraphToolbar.vue',
   '../graph/MilestoneGraph.vue',
   '../graph/MilestoneFinder.vue',

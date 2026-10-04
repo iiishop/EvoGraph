@@ -296,7 +296,7 @@ test('narrow graph details stay in flow and reduced-motion dialogs retain the ex
   );
   assert.match(
     workspace,
-    /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/,
+    /:compact="\s*showingCandidate \|\| tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)\s*"/,
   );
   assert.match(
     source('styles/dialogs.css'),
@@ -330,6 +330,8 @@ test('workspace finder selection opens the existing SRC inspector and re-locates
     '../../composables/useEntrance': url('export const useEntrance = () => {};'),
     '../../lib/workspaceViews': viewsUrl,
     './WorkspaceHeader.vue': stub,
+    './UnifiedPlanBar.vue': stub,
+    './PlanCandidatePanel.vue': stub,
     '../agent/AgentDock.vue': url(
       `import { h } from ${JSON.stringify(vue)}; export default { inheritAttrs: false, render() { return h('agent-dock'); } };`,
     ),

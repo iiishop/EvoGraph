@@ -2,7 +2,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import AgentQuestion from './AgentQuestion.vue';
 import AgentReviewTray from './AgentReviewTray.vue';
-import { latestTurnSummary } from '../../lib/turnSummary';
+import { latestTurnSummary, parseTurnSummary, turnSummaryHeadline } from '../../lib/turnSummary';
 import { planAgentRetry, waitForRetryRead } from '../../lib/agentRetry';
 import FollowAgentButton from '../graph/FollowAgentButton.vue';
 import AttachmentPicker from '../attachments/AttachmentPicker.vue';
@@ -58,6 +58,23 @@ const {
   attachmentTransfer,
 } = useAgentDraft(() => props.project.id);
 const failedAttempt = computed(() => failures.value[0]);
+const failedCandidateReceipt = computed(() => {
+  const turnId = failedAttempt.value?.turnId;
+  if (!turnId) return null;
+  return (
+    (props.project.events ?? [])
+      .filter((event) => event.kind === 'agent_turn_finished')
+      .map((event) => parseTurnSummary(event.detail))
+      .find((summary) => summary?.turn_id === turnId && summary.candidate_outcome) ?? null
+  );
+});
+const recoveryNotice = computed(() => {
+  if (failedCandidateReceipt.value)
+    return `${failureRestored.value ? '请求内容已放回输入框' : '未完成请求已保留，当前草稿未改动'}；${turnSummaryHeadline(failedCandidateReceipt.value)}`;
+  return failureRestored.value
+    ? '本轮未完成，内容已放回输入框；已保存的修改会保留。'
+    : '未完成请求已保留，当前草稿未改动；已保存的修改会保留。';
+});
 const failedQuestion = computed(() => {
   const prompt = failedAttempt.value?.question?.prompt ?? '';
   return prompt.length > 240 ? `${prompt.slice(0, 240)}…` : prompt;
@@ -263,6 +280,7 @@ async function deliver(attempt: DraftAttempt) {
       attempt.request ? attempt.request.verificationMilestone : attempt.verificationMilestone,
       outgoingDocument,
       attempt,
+      attempt.request ? attempt.request.sourceAnalysis : attempt.sourceAnalysis,
     );
   } catch (error) {
     setError(error instanceof Error ? error.message : '请求未完成');
@@ -500,11 +518,7 @@ function choose(option: string) {
       <AttachmentReceipt :transfer="attachmentTransfer" :selected-ids="referencedAttachmentIds" />
       <div v-if="failedAttempt" class="agent-recovery-card">
         <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
-        {{
-          failureRestored
-            ? '本轮未完成，内容已放回输入框；已保存的修改会保留。'
-            : '未完成请求已保留，当前草稿未改动；已保存的修改会保留。'
-        }}
+        {{ recoveryNotice }}
         <details
           v-if="
             !failureRestored ||

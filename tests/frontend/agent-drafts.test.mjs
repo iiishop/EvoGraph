@@ -296,6 +296,8 @@ async function harness() {
     '../graph/FollowAgentButton.vue',
     './ReferenceMentionPicker.vue',
     './WorkspaceHeader.vue',
+    './UnifiedPlanBar.vue',
+    './PlanCandidatePanel.vue',
     '../graph/MilestoneGraph.vue',
     '../graph/MilestoneInspector.vue',
     '../graph/SourceInspector.vue',
@@ -714,6 +716,50 @@ test('consumed-answer retry survives navigation and repeated failure without wra
     await tick();
     assert.deepEqual(h.env.calls[2], first);
     assert.equal(h.find('textarea').value, '');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('source-answer retries keep their operation after question consumption and navigation, without affecting new prompts', async () => {
+  const h = await harness();
+  try {
+    h.workspace.state.project = recoveryProject(recoveryQuestion({ verification_milestone: null }));
+    h.env.send = async (...args) => {
+      assert.equal(args[7], undefined);
+      // The actual runtime receives this identity in the source turn's started frame.
+      args[6].sourceAnalysis = true;
+      h.workspace.state.project.question = null;
+      return false;
+    };
+    await h.input('Inspect login');
+    await h.submit();
+    await tick();
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].sourceAnalysis, true);
+    h.workspace.setPage('settings');
+    await tick();
+    h.workspace.setPage('projects');
+    await tick();
+    h.api.load = async () => recoveryProject(null);
+    h.env.send = async (...args) => {
+      assert.equal(args[2], undefined, 'the old source question has already been consumed');
+      assert.equal(args[7], true, 'only the explicit retry retains source analysis');
+      return false;
+    };
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].sourceAnalysis, true);
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls.length, 3, 'untouched restored Send keeps the retry operation too');
+    await h.input('Plan a genuinely new feature');
+    h.env.send = async (...args) => {
+      assert.equal(args[7], undefined, 'an edited new request must not inherit source analysis');
+      return true;
+    };
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls.length, 4);
   } finally {
     h.dispose();
   }
@@ -1547,4 +1593,15 @@ test('recovery actions remain distinct, named, and independently usable in a wra
       h.dispose();
     }
   }
+});
+
+test('retry admission starts without the previous failed turn identity', () => {
+  const drafts = createAgentDraftStore();
+  const first = drafts.start('P1', { text: 'Original request', ids: [] });
+  first.turnId = 'first-turn';
+  drafts.settle(first, false);
+  const second = drafts.retry('P1', first.id);
+  assert.equal(second.turnId, undefined);
+  drafts.settle(second, false);
+  assert.equal(drafts.bind(() => 'P1').failures.value[0].turnId, undefined);
 });

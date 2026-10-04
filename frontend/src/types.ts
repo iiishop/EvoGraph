@@ -213,6 +213,12 @@ export interface TurnSummary {
   turn_id: string;
   status: 'completed' | 'waiting' | 'stopped' | 'failed';
   history_warning?: string;
+  candidate_outcome?: {
+    id: string | null;
+    status: PlanCandidate['status'] | 'not_admitted';
+    canonical_unchanged: true;
+    note: string;
+  };
   contract_details?: TurnContractDetails;
   changed: boolean;
   before_revision: number;
@@ -250,7 +256,100 @@ export interface TurnSummary {
     other: string[];
   };
 }
+export interface PlanRequirement {
+  id: string;
+  quote: string;
+  source_id: string;
+  origin: 'user' | 'legacy';
+  active: boolean;
+  kind: 'outcome' | 'constraint' | 'exclusion';
+  retired_by?: { source_id: string; quote: string; reason: string } | null;
+}
+export interface PlanBinding {
+  behavior_key: string;
+  behavior_revision_id: string;
+  requirement_ids: string[];
+  component_ids: string[];
+  mechanism: string;
+  requires_behavior_keys: string[];
+}
+export interface PlanProcessConstraint {
+  id: string;
+  source_id: string;
+  quote: string;
+  rule: 'planning_only' | 'no_external_research' | 'other';
+}
+export interface PlanContract {
+  sources?: { id: string; text: string; origin: 'user' | 'legacy' }[];
+  process_constraints?: PlanProcessConstraint[];
+  requirements: PlanRequirement[];
+  bindings: PlanBinding[];
+}
+export interface PlanValidationReceipt {
+  schema_version: 'planning-validation/v1';
+  candidate_hash: string;
+  structural: { status: 'not_run' | 'clear' | 'issues'; finding_count: number | null };
+  model: {
+    kind: 'model_opinion';
+    status: 'not_run' | 'unavailable' | 'no_issue_found' | 'issues';
+    subject_count: number;
+  };
+  implementation: {
+    scope: 'current_planning_turn';
+    status: 'not_run';
+    existing_record_count: number;
+  };
+}
+export interface PlanCandidate {
+  id: string;
+  base_revision: number;
+  status:
+    | 'generating'
+    | 'reviewing'
+    | 'needs_resolution'
+    | 'ready'
+    | 'applied'
+    | 'stopped'
+    | 'failed'
+    | 'stale'
+    | 'discarded';
+  revision: number;
+  candidate_hash: string;
+  validation_receipt?: PlanValidationReceipt;
+  applied_revision?: number;
+  turn_summary?: TurnSummary;
+  report: {
+    findings: { code: string; subject: string; message: string }[];
+    semantic?: {
+      candidate_hash?: string;
+      checks: {
+        subject: string;
+        verdict: 'supported' | 'contradicted' | 'unknown';
+        basis?: 'model_inference' | 'source_statement' | 'existing_execution_record';
+        execution_evidence_ids?: string[];
+        reason: string;
+        counterexample: string;
+      }[];
+      summary: string;
+    };
+  };
+  project: Omit<Project, 'plan_candidate' | 'messages' | 'events'> & {
+    messages?: Message[];
+    events?: ProjectEvent[];
+    snapshot_mode?: 'compact-v1';
+  };
+  input: string;
+  metrics: {
+    provider_calls: number;
+    tokens: number;
+    elapsed_seconds: number;
+    usage_reported?: boolean;
+  };
+}
 export interface Project extends ProjectSummary {
+  unified_planning?: boolean;
+  plan_contract?: PlanContract;
+  plan_candidate?: PlanCandidate | null;
   created_at: string;
   class_model_state: { current: boolean; reasons: string[] };
   uml_diagrams: UmlDiagram[];
@@ -321,6 +420,8 @@ export type CompactProjectSnapshot = Omit<Project, 'messages' | 'events'> & {
 };
 export type ProjectSnapshot = Project | CompactProjectSnapshot;
 export interface AgentEvent {
+  source_analysis?: boolean;
+  candidate?: PlanCandidate;
   snapshot_mode?: 'full' | 'compact-v1';
   saved_message?: Message;
   cancelled?: boolean;

@@ -12,8 +12,10 @@ from PIL import Image
 from pypdf import PdfReader
 
 from ..domain.models import Attachment, Project
+from ..infrastructure.database import ConflictError
 
 MAX_BYTES = 8 * 1024 * 1024
+MAX_EXCERPT_CHARS = 60000
 PARSERS = {}
 
 
@@ -126,11 +128,9 @@ class AttachmentService:
             from ..domain.models import now, uid
 
             with self.db.connect() as connection:
-                updated = connection.execute(
-                    "UPDATE projects SET revision=?,payload=? WHERE id=? AND revision=?",
-                    (project.revision, project.model_dump_json(), project.id, old_revision),
-                )
-                if updated.rowcount != 1:
+                try:
+                    self.db.write_project(connection, project, expected_revision=old_revision)
+                except ConflictError:
                     continue
                 if duplicate_ids:
                     placeholders = ",".join("?" for _ in duplicate_ids)
@@ -170,12 +170,7 @@ class AttachmentService:
 
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT payload FROM projects WHERE id=?", (project_id,)
-            ).fetchone()
-            if row is None:
-                raise ValueError("项目不存在")
-            p = Project.model_validate_json(row[0])
+            p = self.db.read_project(connection, project_id)
             if p.archived:
                 raise ValueError("项目已删除")
             existing = next((a for a in p.attachments if a.sha256 == digest), None)
@@ -187,16 +182,14 @@ class AttachmentService:
                 name=name,
                 media_type=media_type,
                 size=len(data),
-                excerpt=text[:60000],
+                excerpt=text[:MAX_EXCERPT_CHARS],
                 sha256=digest,
             )
             p.attachments.append(asset)
+            old_revision = p.revision
             p.revision += 1
             p.updated_at = now()
-            connection.execute(
-                "UPDATE projects SET revision=?,payload=? WHERE id=?",
-                (p.revision, p.model_dump_json(), p.id),
-            )
+            self.db.write_project(connection, p, expected_revision=old_revision)
             connection.execute("INSERT INTO attachments VALUES(?,?,?)", (asset.id, p.id, data))
             connection.execute(
                 "INSERT INTO events VALUES(?,?,?,?,?)",

@@ -20,6 +20,12 @@ export function useBaseline() {
         '按独立可合并的交付能力划分，提供目标、范围、可验证的行为契约及逐项源码依据，整理真实前置依赖。' +
         '复用已有 SRC_ 能力 ID，不按目录生成节点，不虚构功能或历史 PR，不修改未来规划与目标。' +
         '说明调查覆盖范围和局限；未实现的内容不能当作已实现，源码推导不能代替正式验收。',
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
   }
   async function refresh(project: Project) {

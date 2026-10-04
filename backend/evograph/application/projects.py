@@ -112,7 +112,16 @@ class ProjectService:
         return self.db.save(p, "project_updated")
 
     def get(self, project_id, *, include_history=True):
-        return project_view(self.db.get(project_id), self.db, include_history=include_history)
+        result = project_view(self.db.get(project_id), self.db, include_history=include_history)
+        if not getattr(self.db, "is_candidate", False):
+            from ..infrastructure.plan_candidates import CandidateStore
+            record = CandidateStore(self.db).latest(project_id)
+            if record:
+                if record["status"] not in {"applied", "discarded"} and record["base_revision"] != result["revision"]:
+                    record["status"] = "stale"
+                record["project"] = project_view(Project.model_validate(record["project"]), self.db, include_history=False)
+            result["plan_candidate"] = record
+        return result
 
     def delete(self, project_id: str):
         project = self.db.get(project_id)

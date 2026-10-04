@@ -27,6 +27,7 @@ import type { ArchitectureViewport } from '../../lib/architectureBrowse';
 const props = withDefaults(
   defineProps<{
     diagram: Diagram;
+    isolated?: boolean;
     query?: string;
     source?: boolean;
     focusedId?: string;
@@ -36,6 +37,7 @@ const props = withDefaults(
     initialViewport?: ArchitectureViewport | null;
   }>(),
   {
+    isolated: false,
     query: '',
     source: false,
     focusedId: '',
@@ -186,7 +188,9 @@ const positions = shallowRef(new Map<string, { x: number; y: number }>());
 const error = ref('');
 const agent = useAgent();
 const workspace = useWorkspace();
-const follows = computed(() => agent.state.follow[workspace.state.project?.id ?? ''] !== false);
+const follows = computed(
+  () => !props.isolated && agent.state.follow[workspace.state.project?.id ?? ''] !== false,
+);
 function manual() {
   pendingFit = false;
   initialFocus = false;
@@ -194,7 +198,7 @@ function manual() {
   focusSequence++;
   cancelAnimationFrame(frame);
   viewportMoved = true;
-  if (workspace.state.project) agent.freeView(workspace.state.project.id);
+  if (!props.isolated && workspace.state.project) agent.freeView(workspace.state.project.id);
 }
 function moved({ event }: { event: unknown }) {
   if (event) manual();

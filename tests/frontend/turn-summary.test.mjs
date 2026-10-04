@@ -456,3 +456,97 @@ test('optional saved-history warning survives parsing and is visible in the rece
   assert.match(html, /对话未完整保存/);
   assert.match(html, /部分 Agent 回复未能保存到对话记录/);
 });
+
+const candidateSummary = (overrides = {}) =>
+  summary({
+    status: 'failed',
+    changed: false,
+    before_revision: 4,
+    after_revision: 4,
+    changes: noChanges(),
+    candidate_outcome: {
+      id: 'candidate-1',
+      status: 'failed',
+      canonical_unchanged: true,
+      note: '生成已到本轮上限，可继续补充要求修复候选',
+    },
+    ...overrides,
+  });
+
+test('retained candidate receipt states the formal boundary without claiming lost history or applied changes', async () => {
+  const saved = candidateSummary();
+  assert.deepEqual(parseTurnSummary(JSON.stringify(saved)), saved);
+  assert.equal(turnSummaryStatus(saved), '候选未完成');
+  assert.equal(turnSummaryHeadline(saved), '候选已保留，正式方案未应用');
+  const html = await render(AgentTurnSummary, { summary: saved, milestones: [] });
+  assert.match(html, /本轮候选|候选保留情况/);
+  assert.match(html, /候选已保留，正式方案未应用/);
+  assert.match(html, /生成已到本轮上限/);
+  assert.doesNotMatch(html, /对话未完整保存|已保存的部分变更保留|无净变更/);
+  const warning = await render(AgentTurnSummary, {
+    summary: candidateSummary({ history_warning: '真实的历史保存失败' }),
+    milestones: [],
+  });
+  assert.match(warning, /对话未完整保存/);
+  assert.match(warning, /真实的历史保存失败/);
+  assert.match(warning, /候选已保留，正式方案未应用/);
+});
+
+test('candidate outcome validates its schema and never invents retention before admission', () => {
+  const saved = candidateSummary();
+  for (const extra of [
+    { id: {} },
+    { status: 'made-up' },
+    { canonical_unchanged: false },
+    { note: 42 },
+  ])
+    assert.equal(
+      parseTurnSummary(
+        JSON.stringify(
+          candidateSummary({ candidate_outcome: { ...saved.candidate_outcome, ...extra } }),
+        ),
+      ),
+      null,
+    );
+  const noCandidate = candidateSummary({
+    candidate_outcome: {
+      id: null,
+      status: 'not_admitted',
+      canonical_unchanged: true,
+      note: '请求未进入候选生成',
+    },
+  });
+  assert.equal(turnSummaryStatus(noCandidate), '候选尚未生成');
+  assert.equal(turnSummaryHeadline(noCandidate), '正式方案未应用');
+});
+
+test('failed draft notice uses only its exact candidate receipt, even after a newer turn', async () => {
+  const { agentDrafts } = await import(imports['../../composables/useAgentDrafts']);
+  const projectId = 'candidate-retry-project';
+  const attempt = agentDrafts.start(projectId, { text: 'Original request', ids: [] });
+  attempt.turnId = 'candidate-turn';
+  agentDrafts.settle(attempt, false);
+  const retained = candidateSummary({ turn_id: 'candidate-turn' });
+  const data = project({
+    id: projectId,
+    events: [event(summary({ turn_id: 'newer-turn' })), event(retained, { id: 'retained-event' })],
+  });
+  try {
+    const html = await render(AgentDock, { project: data });
+    const recovery =
+      html.match(/class="agent-recovery-card"[\s\S]*?class="agent-recovery-actions"/)?.[0] ?? '';
+    assert.match(recovery, /请求内容已放回输入框/);
+    assert.match(recovery, /候选已保留，正式方案未应用/);
+    assert.doesNotMatch(recovery, /已保存的修改会保留/);
+    const unrelated = await render(AgentDock, {
+      project: { ...data, events: [event(candidateSummary({ turn_id: 'other-turn' }))] },
+    });
+    const otherRecovery =
+      unrelated.match(/class="agent-recovery-card"[\s\S]*?class="agent-recovery-actions"/)?.[0] ??
+      '';
+    assert.match(otherRecovery, /已保存的修改会保留/);
+    assert.doesNotMatch(otherRecovery, /候选已保留/);
+  } finally {
+    agentDrafts.discard(projectId);
+  }
+});

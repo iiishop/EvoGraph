@@ -23,6 +23,7 @@ from .references import ReferenceService
 from .research import ResearchService
 from .settings import SettingsService
 from .uml import UmlService
+from .unified_planning import UnifiedPlanningService
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class Application:
         self.design = DesignService(self.db)
         self.uml = UmlService(self.db)
         self.agent = AgentRuntime(self)
+        self.unified = UnifiedPlanningService(self)
         self._locks = {}
         self._lock_guard = threading.Lock()
         # A service method is registered once. HTTP and pywebview share this table.
@@ -78,6 +80,8 @@ class Application:
             "uml.preview": self.uml.preview,
             "agent.chat": self.planning.chat,  # Legacy API compatibility; new UI uses streaming tools.
             "agent.turn_result": self.agent.turn_result,
+            "plan.unified_enable": self.unified.enable,
+            "plan.candidate_discard": self.unified.discard,
             "plan.apply": self.planning.apply,
             "plan.discard": self.planning.discard,
             "baseline.refresh": self.execution.refresh,
@@ -102,7 +106,8 @@ class Application:
                 self.demo()
             self.db.set_setting("welcome_initialized", True)
         for project in self.db.list_projects():
-            self.graph.normalize(project.id)
+            if not project.unified_planning:
+                self.graph.normalize(project.id)
         return self.projects.list()
 
     def operation_lock(self, project_id):
@@ -135,6 +140,9 @@ class Application:
                     "error": {"code": "BUSY", "message": "当前项目有操作正在运行，请稍后重试"},
                 }
         try:
+            if action in {"agent.chat", "plan.apply", "plan.discard", "design.update", "design.diagram"}:
+                if self.db.get(params["project_id"]).unified_planning:
+                    raise ValueError("此项目使用统一候选规划，请通过对话修改以完成整体验证")
             fn = self.operations[action]
             if inspect.iscoroutinefunction(fn):
                 result = await fn(**params)

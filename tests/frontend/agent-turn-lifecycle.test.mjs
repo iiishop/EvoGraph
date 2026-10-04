@@ -23,6 +23,14 @@ const { waitForTurnResult, bestEffortRefresh } = await import(
 const vueUrl = pathToFileURL(createRequire(import.meta.url).resolve('vue')).href;
 const composerUrl = moduleUrl(compile('lib/composerDocument.ts'));
 const summariesUrl = moduleUrl(compile('lib/turnSummary.ts'));
+const { planAgentRetry } = await import(
+  moduleUrl(
+    compile('lib/agentRetry.ts').replace(
+      /from ['"]\.\/composerDocument['"]/g,
+      `from ${JSON.stringify(composerUrl)}`,
+    ),
+  )
+);
 const draftsCode = compile('composables/useAgentDrafts.ts')
   .replace(/from ['"]vue['"]/g, `from ${JSON.stringify(vueUrl)}`)
   .replace(/from ['"]\.\.\/lib\/composerDocument['"]/g, `from ${JSON.stringify(composerUrl)}`);
@@ -777,4 +785,318 @@ test('thinking events preserve explicit phase labels and use a fallback when unl
     '正在理解目标与当前图…',
     '读取源文件',
   ]);
+});
+
+function planningCandidate(project, extra = {}) {
+  return {
+    id: 'candidate-1',
+    base_revision: project.revision,
+    revision: 1,
+    status: 'reviewing',
+    candidate_hash: 'hash',
+    input: 'Plan safely',
+    report: { findings: [] },
+    metrics: { provider_calls: 1, tokens: 200, elapsed_seconds: 1 },
+    project: { ...project, revision: project.revision + 1, milestones: [{ id: 'candidate-only' }] },
+    ...extra,
+  };
+}
+
+test('candidate frames remain isolated through semantic failure and saved reopen', async () => {
+  const { agent, env, workspace, records } = await agentHarness('candidate-isolation', true);
+  const original = structuredClone(records.get('P1'));
+  const candidate = planningCandidate(original);
+  const failed = {
+    ...candidate,
+    status: 'needs_resolution',
+    revision: 2,
+    report: {
+      findings: [
+        { code: 'SEMANTIC', subject: 'R1', message: 'Behavior omits the offline constraint' },
+      ],
+    },
+  };
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'T1' });
+    receive({
+      type: 'candidate_changed',
+      project_id: 'P1',
+      turn_id: 'T1',
+      candidate,
+      project: candidate.project,
+      label: 'Reviewing candidate',
+    });
+    assert.equal(workspace.state.project.revision, original.revision);
+    assert.deepEqual(workspace.state.project.milestones, original.milestones);
+    assert.equal(workspace.state.project.plan_candidate.id, candidate.id);
+    assert.equal(agent.state.label, 'Reviewing candidate');
+    receive({ type: 'candidate_changed', project_id: 'P1', turn_id: 'T1', candidate: failed });
+    records.set('P1', { ...original, plan_candidate: failed });
+    receive({
+      type: 'done',
+      project: { ...original, plan_candidate: failed },
+      summary: { turn_id: 'T1', status: 'waiting', changed: false },
+    });
+  };
+  assert.equal(await agent.send('P1', 'Plan safely'), true);
+  await workspace.selectProject('P2');
+  await workspace.selectProject('P1');
+  assert.equal(workspace.state.project.plan_candidate.status, 'needs_resolution');
+  assert.equal(workspace.state.project.plan_candidate.report.findings[0].code, 'SEMANTIC');
+  assert.equal(workspace.state.project.revision, original.revision);
+  assert.deepEqual(workspace.state.project.milestones, original.milestones);
+});
+
+test('candidate delivery rejects wrong project, turn, incarnation and regressive revisions', async () => {
+  const { agent, env, workspace, records } = await agentHarness('candidate-admission', true);
+  const original = structuredClone(records.get('P1'));
+  const candidate = planningCandidate(original, { revision: 4 });
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'T1' });
+    for (const event of [
+      { project_id: 'P2', candidate },
+      { turn_id: 'T2', candidate },
+      { candidate: { ...candidate, project: { ...candidate.project, id: 'P2' } } },
+      { candidate: { ...candidate, project: { ...candidate.project, created_at: 'restored' } } },
+    ])
+      receive({ type: 'candidate_changed', project_id: 'P1', turn_id: 'T1', ...event });
+    assert.equal(workspace.state.project.plan_candidate, undefined);
+    receive({ type: 'candidate_changed', candidate });
+    receive({
+      type: 'candidate_changed',
+      candidate: { ...candidate, revision: 3, status: 'generating' },
+    });
+    assert.equal(workspace.state.project.plan_candidate.revision, 4);
+    assert.equal(workspace.state.project.plan_candidate.status, 'reviewing');
+    receive({ type: 'done', summary: { turn_id: 'T1', status: 'waiting', changed: false } });
+  };
+  await agent.send('P1', 'Plan safely');
+});
+
+test('candidate updates invalidate stale same-revision reads while canonical commit remains explicit', async () => {
+  const { agent, env, workspace, records, commands } = await agentHarness(
+    'candidate-read-order',
+    true,
+  );
+  const original = structuredClone(records.get('P1'));
+  const candidate = planningCandidate(original);
+  let release;
+  const oldRead = new Promise((resolve) => {
+    release = resolve;
+  });
+  const prior = commands.handler;
+  commands.handler = (action, params) =>
+    action === 'projects.get' && params.project_id === 'P1' ? oldRead : prior(action, params);
+  const selecting = workspace.selectProject('P1');
+  workspace.applyPlanCandidate('P1', candidate);
+  release(original);
+  await selecting;
+  assert.equal(workspace.state.project.plan_candidate.id, candidate.id);
+  commands.handler = prior;
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'T1' });
+    receive({
+      type: 'candidate_changed',
+      candidate: { ...candidate, revision: 2, status: 'applied' },
+    });
+    assert.equal(workspace.state.project.revision, original.revision);
+    const committed = {
+      ...candidate.project,
+      plan_candidate: { ...candidate, status: 'applied', revision: 2 },
+    };
+    records.set('P1', committed);
+    receive({
+      type: 'done',
+      project: committed,
+      summary: { turn_id: 'T1', status: 'completed', changed: true },
+    });
+  };
+  await agent.send('P1', 'Plan safely');
+  assert.equal(workspace.state.project.revision, candidate.project.revision);
+  assert.equal(workspace.state.project.milestones[0].id, 'candidate-only');
+});
+
+test('retired project incarnation cannot receive a candidate even if its ID and creation time are reused', async () => {
+  const { agent, env, workspace, drafts, records } = await agentHarness(
+    'candidate-retired-incarnation',
+    true,
+  );
+  const candidate = planningCandidate(structuredClone(records.get('P1')));
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'T1' });
+    drafts.discard('P1');
+    drafts.activate('P1');
+    receive({ type: 'candidate_changed', candidate });
+    assert.equal(workspace.state.project.plan_candidate, undefined);
+    receive({ type: 'done', summary: { turn_id: 'T1', status: 'stopped', changed: false } });
+  };
+  await agent.send('P1', 'Plan safely');
+});
+
+test('failed unified submission keeps its admitted turn identity for exact retry messaging', async () => {
+  const h = await agentHarness('candidate-failed-retry-identity');
+  const attempt = h.drafts.start('P1', { text: 'Original request', ids: [] });
+  h.env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'candidate-turn' });
+    receive({
+      type: 'done',
+      summary: {
+        turn_id: 'candidate-turn',
+        status: 'failed',
+        changed: false,
+        candidate_outcome: {
+          id: 'candidate-turn',
+          status: 'failed',
+          canonical_unchanged: true,
+          note: '候选保留',
+        },
+      },
+    });
+  };
+  const delivered = await h.agent.send(
+    'P1',
+    attempt.text,
+    undefined,
+    [],
+    undefined,
+    undefined,
+    attempt,
+  );
+  assert.equal(delivered, false);
+  h.drafts.settle(attempt, delivered);
+  const draft = h.drafts.bind(() => 'P1');
+  assert.equal(draft.failures.value[0].turnId, 'candidate-turn');
+});
+
+test('source analysis is opt-in only and retains composer, verification and submission positions', async () => {
+  for (const sourceAnalysis of [false, true]) {
+    const h = await agentHarness(`source-analysis-opt-in-${sourceAnalysis}`);
+    const document = { version: 1, parts: [{ type: 'text', text: 'Inspect source' }] };
+    const attempt = h.drafts.start('P1', { text: 'Inspect source', ids: ['A1'] });
+    h.env.run = async (body, receive) => {
+      assert.equal(Object.hasOwn(body, 'source_analysis'), sourceAnalysis);
+      if (sourceAnalysis) assert.equal(body.source_analysis, true);
+      assert.equal(body.project_id, 'P1');
+      assert.equal(body.question_id, 'Q1');
+      assert.deepEqual(body.attachment_ids, ['A1']);
+      assert.deepEqual(body.composer_document, document);
+      assert.equal(body.verification_milestone, 'M1');
+      receive({ type: 'started', turn_id: 'source-turn' });
+      receive({
+        type: 'done',
+        summary: { turn_id: 'source-turn', status: 'completed', changed: false },
+      });
+    };
+    assert.equal(
+      await h.agent.send(
+        'P1',
+        'Inspect source',
+        'Q1',
+        ['A1'],
+        'M1',
+        document,
+        attempt,
+        sourceAnalysis,
+      ),
+      true,
+    );
+    assert.equal(attempt.turnId, 'source-turn');
+  }
+});
+
+test('native and HTTP agent transports preserve explicit source-analysis intent on the original request', async () => {
+  const requests = [];
+  const target = browser({
+    start_agent: async (id, body) => {
+      requests.push(body);
+      queueMicrotask(() => terminal(target, id, { type: 'done' }));
+      return { started: true };
+    },
+  });
+  const body = { ...params, source_analysis: true };
+  await agentStream(body, () => {}, new AbortController().signal);
+  globalThis.window = {};
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async (_, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response('{"type":"done"}\n', { status: 200 });
+  };
+  try {
+    await agentStream(body, () => {}, new AbortController().signal);
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+  assert.deepEqual(requests, [
+    { ...body, snapshot_mode: 'compact-v1' },
+    { ...body, snapshot_mode: 'compact-v1' },
+  ]);
+});
+
+test('a failed source-question answer retains its resolved operation for explicit retries only', async () => {
+  const h = await agentHarness('source-answer-retry');
+  const attempt = h.drafts.start('P1', {
+    text: 'Login',
+    ids: [],
+    questionId: 'source-question',
+    question: { id: 'source-question', prompt: 'Which source behavior matters?', context: '' },
+  });
+  h.env.run = async (body, receive) => {
+    assert.equal(body.source_analysis, undefined, 'the initial answer is routed by its question');
+    receive({ type: 'started', turn_id: 'source-answer', source_analysis: true });
+    receive({ type: 'error', message: 'Provider failed after consuming the question' });
+    receive({
+      type: 'done',
+      summary: { turn_id: 'source-answer', status: 'failed', changed: false },
+    });
+  };
+  const delivered = await h.agent.send(
+    'P1',
+    attempt.text,
+    attempt.questionId,
+    [],
+    undefined,
+    undefined,
+    attempt,
+  );
+  assert.equal(delivered, false);
+  h.drafts.settle(attempt, delivered);
+  const failure = h.drafts.bind(() => 'P1').failures.value[0];
+  assert.equal(failure.sourceAnalysis, true);
+  const plan = planAgentRetry(failure, { question: null, milestones: [] });
+  assert.equal(plan.kind, 'ready');
+  assert.equal(plan.request.questionId, undefined);
+  assert.equal(plan.request.sourceAnalysis, true);
+  const preparation = h.drafts.prepareRetry('P1', failure.id);
+  const retry = h.drafts.commitRetry(preparation, plan.request);
+  assert.equal(retry.sourceAnalysis, true);
+  h.env.run = async (body) => {
+    assert.equal(body.source_analysis, true);
+    throw new DOMException('Aborted before admission', 'AbortError');
+  };
+  const retryDelivered = await h.agent.send(
+    'P1',
+    retry.request.text,
+    retry.request.questionId,
+    [],
+    undefined,
+    undefined,
+    retry,
+    retry.request.sourceAnalysis,
+  );
+  assert.equal(retryDelivered, false);
+  h.drafts.settle(retry, retryDelivered);
+  assert.equal(h.drafts.bind(() => 'P1').failures.value[0].sourceAnalysis, true);
+  h.env.run = async (body, receive) => {
+    assert.equal(
+      body.source_analysis,
+      undefined,
+      'ordinary new prompts do not inherit the old operation',
+    );
+    receive({ type: 'started', turn_id: 'ordinary-turn' });
+    receive({
+      type: 'done',
+      summary: { turn_id: 'ordinary-turn', status: 'completed', changed: false },
+    });
+  };
+  assert.equal(await h.agent.send('P1', 'Plan a new feature'), true);
 });

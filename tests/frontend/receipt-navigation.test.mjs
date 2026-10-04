@@ -46,6 +46,8 @@ const imports = {
   '../../composables/useEntrance': envUrl,
   '../../lib/workspaceViews': envUrl,
   './WorkspaceHeader.vue': stub,
+  './UnifiedPlanBar.vue': stub,
+  './PlanCandidatePanel.vue': stub,
   '../graph/GraphToolbar.vue': alias('Toolbar'),
   '../graph/MilestoneGraph.vue': alias('Graph'),
   '../graph/MilestoneFinder.vue': stub,

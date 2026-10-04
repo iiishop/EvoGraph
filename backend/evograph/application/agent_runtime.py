@@ -68,6 +68,17 @@ class AgentRuntime:
     def __init__(self, application):
         self.app = application
         self.active_turns: dict[str, str] = {}
+        self.system_prompt = SYSTEM
+        self.tool_registry = None
+        self.finish_review = True
+        self.max_rounds = None
+        self.max_calls = None
+        self.record_user = True
+        self.extra_context = ""
+        self.pre_resolved = None
+        self.initial_context = None
+        self.include_history = True
+        self.synthesis_registry = None
 
     def turn_result(self, project_id: str, turn_id: str) -> dict:
         # Read activity first: a completion racing the event read may cause one
@@ -86,7 +97,27 @@ class AgentRuntime:
         verification_milestone: str | None = None,
         composer_document: ComposerDocument | dict | None = None,
         snapshot_mode: str = "full",
+        source_analysis: bool = False,
     ):
+        routing_project = self.app.db.get(project_id)
+        if routing_project.question and routing_project.question.id == question_id:
+            if not verification_milestone:
+                verification_milestone = routing_project.question.verification_milestone
+            if not getattr(self.app.db, "is_candidate", False):
+                source_analysis |= self.app.db.is_source_analysis_question(project_id, question_id)
+        if (
+            not getattr(self.app.db, "is_candidate", False)
+            and not verification_milestone
+            and not source_analysis
+            and routing_project.unified_planning
+        ):
+            async with aclosing(self.app.unified.stream(
+                project_id, content, question_id=question_id, attachment_ids=attachment_ids,
+                composer_document=composer_document, snapshot_mode=snapshot_mode,
+            )) as candidate_stream:
+                async for event in candidate_stream:
+                    yield event
+            return
         # Negotiate once before admission; never retry a potentially accepted turn.
         if snapshot_mode not in {"full", "compact-v1"}:
             raise ValueError("未知的 Agent 快照格式")
@@ -113,10 +144,16 @@ class AgentRuntime:
                 raise ValueError("请输入 1–16000 字符的修改建议")
             p = self.app.db.get(project_id)
             before_snapshot = p.model_copy(deep=True)
+            if (
+                p.unified_planning and not routing_project.unified_planning
+                and not verification_milestone and not source_analysis
+                and not getattr(self.app.db, "is_candidate", False)
+            ):
+                raise ValueError("规划模式已被其他操作切换，请重新提交到统一候选流程")
             design_review_reminded = False
             if p.archived:
                 raise ValueError("项目已删除")
-            resolved = self.app.references.resolve(
+            resolved = self.pre_resolved or self.app.references.resolve(
                 p, content, composer_document, attachment_ids or []
             )
             content = resolved.content
@@ -132,7 +169,8 @@ class AgentRuntime:
             elif question_id:
                 raise ValueError("问题已经失效，请刷新项目")
             history = self.app.db.messages(project_id)[-16:]
-            self.app.db.message(project_id, "user", content, resolved.document)
+            if self.record_user:
+                self.app.db.message(project_id, "user", content, resolved.document)
             initial = p.model_dump(
                 include={
                     "name",
@@ -154,6 +192,8 @@ class AgentRuntime:
                 }
             )
             initial["attachments"] = [a.model_dump(exclude={"excerpt"}) for a in p.attachments]
+            if getattr(self.app.db, "is_candidate", False):
+                initial["plan_contract"] = p.plan_contract.model_dump()
             initial["behavior_lifecycle"] = behavior_lifecycle(p)
             initial["class_model_state"] = class_model_state(p)
             initial["design_review"] = review_design(p)
@@ -162,6 +202,8 @@ class AgentRuntime:
             initial["research"] = [
                 {**r, "excerpt": r["excerpt"][:800]} for r in initial["research"][-12:]
             ]
+            if self.initial_context:
+                initial = self.initial_context(p)
             user_blocks = [{"type": "text", "text": content}]
             if resolved.references:
                 user_blocks.append(
@@ -175,18 +217,29 @@ class AgentRuntime:
             messages = [
                 {
                     "role": "system",
-                    "content": SYSTEM
+                    "content": self.system_prompt + self.extra_context
                     + "\nCurrent state (data):\n"
                     + json.dumps(initial, ensure_ascii=False),
                 },
-                *[{"role": m["role"], "content": history_content(m)} for m in history],
+                *[{"role": m["role"], "content": history_content(m)} for m in history if self.include_history],
                 {
                     "role": "user",
                     "content": user_blocks if len(user_blocks) > 1 else content,
                 },
             ]
-            registry = tools()
+            registry = self.tool_registry if self.tool_registry is not None else tools()
+            if p.unified_planning and verification_milestone and not getattr(self.app.db, "is_candidate", False):
+                registry = {name: tool for name, tool in registry.items() if name in {
+                    "read_project", "inspect_repository", "read_repository_file", "read_reference",
+                    "web_search", "web_fetch", "ask_user", "resolve_investigation", "review_design",
+                }}
+            if source_analysis:
+                registry = {name: tool for name, tool in registry.items() if name in {
+                    "read_project", "inspect_repository", "read_repository_file", "read_reference",
+                    "reconstruct_baseline_milestones", "ask_user",
+                }}
             ctx = ToolContext(project_id, self.app)
+            ctx.source_analysis = source_analysis
             ctx.before_snapshot = before_snapshot
             ctx.verification_milestone = verification_milestone
             if self.app.db.setting("vision_enabled", False):
@@ -196,11 +249,15 @@ class AgentRuntime:
                     if a.id in (attachment_ids or []) and a.media_type.startswith("image/")
                 }
             executor = ToolExecutor(ctx, registry, compact_snapshots=compact_snapshots)
+            executor.max_calls = 16 if source_analysis else self.max_calls
             yield {
                 "type": "started",
                 "project_id": project_id,
                 "turn_id": turn_id,
                 "snapshot_mode": snapshot_mode,
+                # The question may already be consumed. Its resolved operation
+                # must survive a failed answer's explicit composer retry.
+                **({"source_analysis": True} if source_analysis else {}),
                 "project": self.app.projects.get(project_id),
             }
             round_number = 0
@@ -208,6 +265,19 @@ class AgentRuntime:
             repeated_rounds = 0
             while True:
                 round_number += 1
+                round_limit = 6 if source_analysis else self.max_rounds
+                if round_limit and round_number > round_limit:
+                    raise ValueError("已到达本轮生成预算，候选已保留待继续")
+                if self.max_calls and executor.calls_used >= self.max_calls:
+                    raise ValueError("已到达本轮工具预算，候选已保留待继续")
+                if round_number > 1 and self.synthesis_registry is not None:
+                    registry = self.synthesis_registry
+                    executor.registry = registry
+                    messages.append({"role": "system", "content":
+                        "The optional evidence phase has ended. The available tools now only submit "
+                        "the linked plan patch, request validation, or ask a genuine user-owned decision. "
+                        "Use the observed evidence and preserve unsupported facts as assumptions; "
+                        "do not request more searches or weaken the user outcome."})
                 calls, text = {}, ""
                 yield {"type": "thinking", "round": round_number + 1}
                 saved_message = None
@@ -222,6 +292,8 @@ class AgentRuntime:
                             kind = chunk["type"]
                             if kind == "usage":
                                 token_count += chunk["tokens"]
+                            elif kind == "request_started":
+                                yield {"type": "candidate_progress", "label": f"正在生成候选 · 第 {chunk['number']} 次模型请求"}
                             elif kind == "text":
                                 text += chunk["text"]
                                 # Streamed narration is deliberately not rendered in the main workspace.
@@ -309,7 +381,7 @@ class AgentRuntime:
                     break
                 if not calls:
                     current = self.app.db.get(project_id)
-                    if changed and not design_review_reminded:
+                    if changed and self.finish_review and not source_analysis and not design_review_reminded:
                         design_review_reminded = True
                         messages.append(
                             {
@@ -392,7 +464,7 @@ class AgentRuntime:
                     )
                     if ctx.paused:
                         break
-                if ctx.paused:
+                if ctx.paused or getattr(ctx, "candidate_ready", False):
                     break
             if ctx.paused:
                 status = "waiting"
@@ -406,10 +478,13 @@ class AgentRuntime:
             changed |= executor.changed if executor else False
             try:
                 try:
-                    if changed:
+                    planning_finalize = not source_analysis and not (
+                        routing_project.unified_planning and verification_milestone
+                    )
+                    if changed and planning_finalize:
                         reduced = self.app.graph.finalize(project_id)
                     p = self.app.db.get(project_id)
-                    if changed:
+                    if changed and planning_finalize:
                         self.app.db.save(
                             p,
                             "design_review",

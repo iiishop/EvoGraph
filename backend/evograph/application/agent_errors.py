@@ -2,6 +2,8 @@
 
 import httpx
 
+from .provider_output import ProviderOutputError
+
 # Order subclasses before their bases. Codes are fixed literals, not exception
 # names: a plugin-defined exception class can itself contain private information.
 _FAILURES = (
@@ -44,7 +46,10 @@ def agent_error_event(exc: Exception) -> dict:
     and validation. HTTPX errors must be classified before that legacy contract.
     No repr, traceback, request, URL, headers, body, or exception chain is read.
     """
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, ProviderOutputError):
+        code = "provider_output_limited" if exc.code == "provider_output_limited" else "provider_output_incomplete"
+        message = ProviderOutputError.MESSAGES[code]
+    elif isinstance(exc, httpx.HTTPStatusError):
         code = "httpx_http_status_error"
         status = exc.response.status_code
         # Only a standard status number is safe; never use response text/reason.

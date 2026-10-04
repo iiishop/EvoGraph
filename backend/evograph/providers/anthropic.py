@@ -74,6 +74,14 @@ class Anthropic:
             "system": "\n".join(m["content"] for m in messages if m["role"] == "system"),
             "messages": anthropic_messages(messages),
         }
+        controls = ("model", "stream", "max_tokens", "thinking", "tool_choice", "temperature", "top_p")
+        yield {
+            "type": "request_metadata", "provider": "anthropic",
+            "controls": {key: body[key] for key in controls if key in body},
+            "unset_controls": [key for key in controls if key not in body],
+            "completion_limit": {"state": "explicit", "field": "max_tokens", "value": body["max_tokens"]},
+            "tool_strict": [{"name": t["name"], "strict": t.get("strict")} for t in functions],
+        }
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=15)) as client:
             async with client.stream(
                 "POST",
@@ -81,8 +89,10 @@ class Anthropic:
                 headers={"x-api-key": secret, "anthropic-version": "2023-06-01"},
                 json=body,
             ) as response:
+                yield {"type": "response_started", "http_status": response.status_code}
                 if response.is_error:
                     raise ValueError(f"Provider 流式请求失败（HTTP {response.status_code}）")
+                received_message_stop = False
                 async for payload in sse_payloads(response):
                     kind = payload.get("type")
                     if kind == "error":
@@ -90,13 +100,22 @@ class Anthropic:
                     if kind == "message_start":
                         yield {
                             "type": "usage",
+                            "usage_counter": "anthropic_input",
+                            "usage_details": {k: v for k, v in payload.get("message", {}).get("usage", {}).items()
+                                              if isinstance(v, (int, float)) and not isinstance(v, bool)},
                             "tokens": payload.get("message", {})
                             .get("usage", {})
                             .get("input_tokens", 0),
                         }
                     if kind == "message_delta":
+                        if payload.get("delta", {}).get("stop_reason") is not None:
+                            yield {"type": "response_finish",
+                                   "stop_reason": payload["delta"]["stop_reason"]}
                         yield {
                             "type": "usage",
+                            "usage_counter": "anthropic_output",
+                            "usage_details": {k: v for k, v in payload.get("usage", {}).items()
+                                              if isinstance(v, (int, float)) and not isinstance(v, bool)},
                             "tokens": payload.get("usage", {}).get("output_tokens", 0),
                         }
                     if kind == "content_block_start":
@@ -121,3 +140,7 @@ class Anthropic:
                                 "id": "",
                                 "name": "",
                             }
+                    if kind == "message_stop":
+                        received_message_stop = True
+                yield {"type": "response_end", "normal_stream_end": True,
+                       "terminal_marker": "message_stop", "received_terminal_marker": received_message_stop}

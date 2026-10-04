@@ -1,0 +1,252 @@
+{
+  "description": "Manually authored offline evolution deltas; fake supported reviews validate workflow only, not plan quality or the pre-existing long-leading-zero defect.",
+  "batch_input": "现在改成批量换算：命令接受一个或多个十进制整数；每个仍在[-1000,1000]。全部参数有效时按输入顺序逐行输出原两位小数结果，退出0。先校验全部参数；只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空。参数多于一个不再是错误。原公式、3必验例、标准库/无数据文件网络UI数据库保持；沿用纯函数核心与CLI两个切片，不加新层。",
+  "batch_delta": {
+    "requirements": [
+      {
+        "id": "req-batch-arguments",
+        "quote": "命令接受一个或多个十进制整数；每个仍在[-1000,1000]",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-batch-stdout",
+        "quote": "全部参数有效时按输入顺序逐行输出原两位小数结果，退出0",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-batch-errors",
+        "quote": "先校验全部参数；只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空",
+        "kind": "outcome"
+      }
+    ],
+    "retire_requirements": [
+      {
+        "id": "req-arg-contract",
+        "quote": "参数多于一个不再是错误",
+        "reason": "本轮明确把单参数约束替换为一个或多个参数"
+      },
+      {
+        "id": "req-success-stdout",
+        "quote": "全部参数有效时按输入顺序逐行输出原两位小数结果，退出0",
+        "reason": "成功输出从单行替换为按参数顺序逐行"
+      },
+      {
+        "id": "req-error-path",
+        "quote": "先校验全部参数；只要缺参或任一参数非整数/越界，就stderr一行简短错误、退出2、stdout完全为空",
+        "reason": "失败集合改为缺参或任一无效值，并要求先全部校验与零stdout"
+      }
+    ],
+    "target": "纯Python标准库摄氏转华氏批量CLI：接受一个或多个十进制整数，每个在[-1000,1000]。先校验所有参数；全有效才按输入顺序逐行输出原两位小数结果、退出0。缺参或任一非整数/越界时stderr一行简短错误、退出2、stdout为空且无traceback。公式f=c*9/5+32与0/100/-40必验例保持；无数据文件、网络、UI或数据库；仍为纯函数核心与薄CLI两个切片。",
+    "contracts": [
+      {
+        "key": "format-two-decimals",
+        "owner": "slice-01-core",
+        "statement": "转换数值 v 的输出文本恰为 Python 格式说明符 '.2f' 的结果：32.0→'32.00'、212.0→'212.00'、-40.0→'-40.00'，无正号、单位、前导空格或额外字符。",
+        "requirement_ids": [
+          "req-batch-stdout",
+          "req-mandatory-cases"
+        ],
+        "mechanism": "纯函数 format_fahrenheit(v: float) -> str：`return f\"{v:.2f}\"`。这是本计划中唯一定义两位小数格式的位置，调用方只拼接其返回值与 '\\n'。输入域已被 c∈[-1000,1000] 限界，故输出文本长度有界；四舍五入沿用 Python 内建格式化语义，不额外实现舍入。"
+      },
+      {
+        "key": "argv-validation",
+        "owner": "slice-02-cli",
+        "statement": "成功路径要求至少一个参数，且每个都是[-1000,1000]内的十进制整数；缺参或任一非整数/越界均失败，多个有效参数不再是错误。",
+        "requirement_ids": [
+          "req-batch-arguments",
+          "req-batch-errors"
+        ],
+        "mechanism": "把数量条件改为 len(argv) >= 1。逐个沿用原可选前导正负号与ASCII数字白名单，再 int(s, 10) 和[-1000,1000]检查；在私有数值列表中完成全部校验后才进入输出阶段，校验期间不写stdout；遇任一无效参数立即走统一失败出口。"
+      },
+      {
+        "key": "success-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "全部参数有效时，stdout按输入顺序逐行输出每个转换值的原两位小数文本和换行，stderr为空，退出0。",
+        "requirement_ids": [
+          "req-batch-stdout"
+        ],
+        "mechanism": "仅在完整列表校验成功后，按原顺序调用既有celsius_to_fahrenheit与format_fahrenheit，用'\\n'.join(lines)+'\\n'生成结果并写stdout，随后返回0；不复制核心公式或格式实现。"
+      },
+      {
+        "key": "failure-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "缺参或任一参数非整数/越界时，stderr仅一行简短错误，退出2，stdout完全为空且无traceback；前面存在有效参数也不能输出部分结果。",
+        "requirement_ids": [
+          "req-batch-errors"
+        ],
+        "mechanism": "缺参、任一白名单/解析失败或越界共用原单一stderr错误出口并返回2；失败返回发生在任何stdout写入之前。保留原ValueError就地转错误出口，不引入新的解析实现。"
+      }
+    ],
+    "slices": [
+      {
+        "id": "slice-02-cli",
+        "intent": "沿用薄CLI边界，增加完整参数列表校验与顺序批量输出；继续依赖既有纯函数核心，无新层。",
+        "scope": [
+          "CLI参数列表校验及私有数值列表",
+          "校验结束后的批量stdout路径与统一stderr/退出码路径",
+          "CLI进程边界测试：多值顺序、缺参、首中末无效值、边界及原三个必验例"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "id": "comp-cli-entry",
+        "label": "CLI 进程边界",
+        "description": "拥有参数列表完整校验、批量有序stdout与单一stderr错误出口；所有校验先于任何结果输出。仅调用既有转换/格式化核心，不复制公式，不增加层。"
+      }
+    ],
+    "architecture_summary": "沿用两个组件与两个切片：纯函数转换/格式化核心保持原接口；薄CLI先完整校验一个或多个参数，全部有效后顺序调用核心并逐行输出，否则仅stderr一行、退出2且stdout为空。单向依赖CLI→核心，无额外层、框架、配置、持久化、网络或UI。",
+    "technologies": [
+      {
+        "area": "语言与运行时",
+        "choice": "Python 3，仅标准库",
+        "rationale": "满足“纯 Python 标准库”约束；单文件规模无需依赖管理与打包。"
+      },
+      {
+        "area": "参数解析",
+        "choice": "手写 sys.argv 校验，不使用 argparse",
+        "rationale": "先校验完整参数列表；缺参、任一非整数或越界统一用一行stderr与退出2，不让框架usage干扰边界。"
+      },
+      {
+        "area": "数值与格式化",
+        "choice": "int 解析 + `c * 9 / 5 + 32` 真除法 + f-string '.2f'",
+        "rationale": "公式与两位小数格式各自只有一个实现点，CLI 与测试共用，避免重复算式造成的漂移。"
+      },
+      {
+        "area": "调用形式",
+        "choice": "单文件脚本以 python3 <cli-module>.py <c> [<c> ...] 方式运行",
+        "rationale": "不引入 console_scripts/打包步骤，单人维护成本最低；具体文件名在实现阶段确定。"
+      },
+      {
+        "area": "测试",
+        "choice": "标准库 unittest：核心用纯函数单测，CLI 用子进程端到端断言",
+        "rationale": "零依赖，且每个切片都能用自身可运行的测试完成独立验收（核心只看函数返回值，CLI 看 stdout/stderr/returncode 三元组）。"
+      }
+    ]
+  },
+  "restore_input": "撤回批量换算，恢复单参数：命令接受且只接受一个十进制整数 c，范围仍为[-1000,1000]（含边界）。成功时stdout只输出一个两位小数结果和换行，退出0。缺参、多于一个参数、非整数或越界时stderr一行简短错误、退出2，stdout为空且无traceback。原公式、0→32.00、100→212.00、-40→-40.00、标准库及无数据文件/网络/UI/数据库约束保持；继续纯函数核心和CLI两个切片，不增加新层。",
+  "restore_delta": {
+    "requirements": [
+      {
+        "id": "req-single-v2-arguments",
+        "quote": "命令接受且只接受一个十进制整数 c，范围仍为[-1000,1000]（含边界）",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-single-v2-stdout",
+        "quote": "成功时stdout只输出一个两位小数结果和换行，退出0",
+        "kind": "outcome"
+      },
+      {
+        "id": "req-single-v2-errors",
+        "quote": "缺参、多于一个参数、非整数或越界时stderr一行简短错误、退出2，stdout为空且无traceback",
+        "kind": "outcome"
+      }
+    ],
+    "retire_requirements": [
+      {
+        "id": "req-batch-arguments",
+        "quote": "撤回批量换算，恢复单参数",
+        "reason": "当前输入明确撤销批量基数要求"
+      },
+      {
+        "id": "req-batch-stdout",
+        "quote": "成功时stdout只输出一个两位小数结果和换行，退出0",
+        "reason": "新输入把逐行批量输出替换为单结果"
+      },
+      {
+        "id": "req-batch-errors",
+        "quote": "缺参、多于一个参数、非整数或越界时stderr一行简短错误、退出2，stdout为空且无traceback",
+        "reason": "恢复多参数错误，并保留空stdout与错误边界"
+      }
+    ],
+    "target": "一个纯 Python 标准库、单文件核心 + 薄 CLI 的可维护小工具：命令只接受一个十进制整数 c∈[-1000,1000]（含边界），成功时标准输出恰为 f=c*9/5+32 的两位小数加一个换行、退出码 0；缺少参数、参数多于一个、非十进制整数、超出范围时标准错误输出一行简短错误、退出码 2、不输出 traceback；先交付可直接单测的纯函数核心切片，再交付在核心之上做进程边界的 CLI 切片，两个切片各自可合并、可独立验收。",
+    "contracts": [
+      {
+        "key": "format-two-decimals",
+        "owner": "slice-01-core",
+        "statement": "转换数值 v 的输出文本恰为 Python 格式说明符 '.2f' 的结果：32.0→'32.00'、212.0→'212.00'、-40.0→'-40.00'，无正号、单位、前导空格或额外字符。",
+        "requirement_ids": [
+          "req-single-v2-stdout",
+          "req-mandatory-cases"
+        ],
+        "mechanism": "纯函数 format_fahrenheit(v: float) -> str：`return f\"{v:.2f}\"`。这是本计划中唯一定义两位小数格式的位置，调用方只拼接其返回值与 '\\n'。输入域已被 c∈[-1000,1000] 限界，故输出文本长度有界；四舍五入沿用 Python 内建格式化语义，不额外实现舍入。"
+      },
+      {
+        "key": "argv-validation",
+        "owner": "slice-02-cli",
+        "statement": "进入成功路径当且仅当 argv 中恰好提供一个十进制整数字面量 c 且 -1000 ≤ c ≤ 1000（含边界）；缺少参数、多于一个参数、非十进制整数、超出范围这四类都必须走失败路径。",
+        "requirement_ids": [
+          "req-single-v2-arguments",
+          "req-single-v2-errors"
+        ],
+        "mechanism": "CLI 入口 `main(argv) -> int` 顺序执行三步校验：① `len(argv) == 1`，否则失败；② 按字符白名单判定十进制整数——可选一个前导 '-' 或 '+'，后跟至少一个 ASCII '0'-'9'，出现任何其他字符（下划线分组、空白、小数点、Unicode 数字等）即判为非整数，白名单通过后再用 `int(s, 10)` 取值；③ 检查 `-1000 <= c <= 1000`。三类校验全部通过后才调用 convert-formula。不使用 argparse，避免其 usage 文本与自带错误格式干扰“简短错误/退出码 2”的验收。"
+      },
+      {
+        "key": "success-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "成功路径下标准输出恰为 format-two-decimals 的文本加一个 '\\n'（无其他任何字符），标准错误为空，退出码为 0。",
+        "requirement_ids": [
+          "req-single-v2-stdout"
+        ],
+        "mechanism": "`sys.stdout.write(format_fahrenheit(celsius_to_fahrenheit(c)) + '\\n')`（等价于 print），随后返回 0；不额外打印 c、公式、提示语或调试信息。成功路径完全不写 stderr。入口以 `sys.exit(main(sys.argv[1:]))` 把返回值 0 传给进程。"
+      },
+      {
+        "key": "failure-output-exit",
+        "owner": "slice-02-cli",
+        "statement": "缺少参数、多于一个参数、非十进制整数、超出范围四类失败输入，均在标准错误输出一行简短错误信息并返回退出码 2，此时标准输出无任何内容，且任何失败输入都不产生 traceback。",
+        "requirement_ids": [
+          "req-single-v2-errors"
+        ],
+        "mechanism": "四类失败共用 CLI 内唯一的错误出口：`print(msg, file=sys.stderr)` 后 `return 2`。参数个数、整数字面量、范围三类判定都以返回值表达，异常不得从 main 逃逸（如需可用 try/except ValueError 就地转为该出口）。禁止裸 raise、禁止 `raise SystemExit(消息)` 之类的回溯写法、禁止把 usage 全量文本当作错误输出。每个失败类别的错误文本由实现选定，但必须是非空单行。"
+      }
+    ],
+    "slices": [
+      {
+        "id": "slice-02-cli",
+        "intent": "在已合并的纯函数核心之上加一层薄 CLI，拥有进程边界：参数数量/整数字面量/范围校验、成功输出、四类失败输出与退出码 2，自成可端到端验收的增量。",
+        "scope": [
+          "新增 CLI 入口模块，读取 sys.argv[1:]，实现参数数量、十进制整数字面量、区间 [-1000,1000] 三步校验",
+          "成功路径调用纯函数核心的转换与格式化，写 stdout 加换行，返回 0",
+          "失败路径统一写 stderr 一行简短错误并返回 2，不泄漏 traceback；stdout 保持为空",
+          "端到端测试（子进程）覆盖 0/100/-40、边界 ±1000，以及缺参、多参、非整数、超范围四类失败；不重复实现公式与两位小数格式"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "id": "comp-cli-entry",
+        "label": "CLI 进程边界",
+        "description": "拥有进程边界职责：解析 sys.argv、判定缺参/多参/非整数/超范围四类失败、写 stdout 或 stderr、返回退出码。不复制公式与格式规则，仅按 key 调用转换核心。"
+      }
+    ],
+    "architecture_summary": "最小两极架构，适配单人维护：① 无副作用的转换核心——只含 celsius_to_fahrenheit 与 format_fahrenheit 两个纯函数，无 import、无状态、无 I/O，可由纯函数单测直接验收；② 薄 CLI 适配层——把 sys.argv 映射为“成功（stdout 一行 + 退出码 0）”或“失败（stderr 一行 + 退出码 2）”，除了调用核心不做任何计算。依赖方向单向：CLI → 核心。没有框架、配置、持久化、网络或 UI 边界，也没有需要同步的额外层；两个组件按两个切片交付，切片 1 单独可验收，切片 2 只依赖切片 1 已合并，不依赖任何未来守卫。当前仓库未连接，模块文件命名与具体路径留待实现阶段确定。",
+    "technologies": [
+      {
+        "area": "语言与运行时",
+        "choice": "Python 3，仅标准库",
+        "rationale": "满足“纯 Python 标准库”约束；单文件规模无需依赖管理与打包。"
+      },
+      {
+        "area": "参数解析",
+        "choice": "手写 sys.argv 校验，不使用 argparse",
+        "rationale": "需求把四类失败固定为“stderr 一行简短错误 + 退出码 2 + 无 traceback”；手写解析把这些失败边界放在自有代码里，避免框架 usage 文本与错误格式影响该验收点。"
+      },
+      {
+        "area": "数值与格式化",
+        "choice": "int 解析 + `c * 9 / 5 + 32` 真除法 + f-string '.2f'",
+        "rationale": "公式与两位小数格式各自只有一个实现点，CLI 与测试共用，避免重复算式造成的漂移。"
+      },
+      {
+        "area": "调用形式",
+        "choice": "单文件脚本以 `python3 <core-or-cli-module>.py <c>` 方式运行",
+        "rationale": "不引入 console_scripts/打包步骤，单人维护成本最低；具体文件名在实现阶段确定。"
+      },
+      {
+        "area": "测试",
+        "choice": "标准库 unittest：核心用纯函数单测，CLI 用子进程端到端断言",
+        "rationale": "零依赖，且每个切片都能用自身可运行的测试完成独立验收（核心只看函数返回值，CLI 看 stdout/stderr/returncode 三元组）。"
+      }
+    ]
+  }
+}

@@ -23,6 +23,10 @@ class GraphEditor:
     def __init__(self, db):
         self.db = db
 
+    def _reusable_behavior_revision(self, active, latest):
+        """Legacy editors reuse the latest history; atomic compilers may pin active IDs."""
+        return latest
+
     def _check(self, project):
         if project.archived:
             raise ValueError("项目已删除")
@@ -184,13 +188,14 @@ class GraphEditor:
                 scope = previous_revisions[behavior.key].acceptance_scope
             versions = [b for b in p.behaviors if b.behavior_key == behavior.key]
             latest = versions[-1] if versions else None
+            reusable = self._reusable_behavior_revision(existing_behaviors.get(behavior.key), latest)
             if (
-                latest
-                and latest.owner == proposed.id
-                and latest.statement == behavior.statement
-                and latest.acceptance_scope == scope
+                reusable
+                and reusable.owner == proposed.id
+                and reusable.statement == behavior.statement
+                and reusable.acceptance_scope == scope
             ):
-                bids.append(latest.id)
+                bids.append(reusable.id)
             else:
                 if (
                     latest

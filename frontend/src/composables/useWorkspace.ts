@@ -4,6 +4,7 @@ import type {
   ArchivedProjectSummary,
   Message,
   Project,
+  PlanCandidate,
   ProjectOpenResult,
   ProjectSnapshot,
   ProjectSummary,
@@ -485,6 +486,30 @@ export function useWorkspace() {
         reconcileWorkflowDrafts(project);
         state.project = project;
       }
+    },
+    // Candidate payloads carry planning snapshots, but never become canonical
+    // workspace data. They only replace this isolated preview metadata.
+    applyPlanCandidate: (projectId: string, candidate: PlanCandidate) => {
+      if (
+        !candidate ||
+        !candidate.id ||
+        candidate.project?.id !== projectId ||
+        !Number.isInteger(candidate.revision) ||
+        candidate.revision < 0 ||
+        !Number.isInteger(candidate.base_revision) ||
+        candidate.base_revision < 0
+      )
+        return;
+      if (state.project?.id !== projectId) {
+        noteSelectionActivity(projectId);
+        return;
+      }
+      if (candidate.project.created_at !== state.project.created_at) return;
+      const current = state.project.plan_candidate;
+      if (current?.id === candidate.id && current.revision > candidate.revision) return;
+      if (current && current.base_revision > candidate.base_revision) return;
+      snapshotSequence++;
+      state.project = { ...state.project, plan_candidate: candidate };
     },
     appendMessage: (projectId: string, message: Message) => {
       if (

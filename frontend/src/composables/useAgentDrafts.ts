@@ -16,14 +16,16 @@ type DraftContent = {
   questionId?: string;
   question?: Pick<PendingQuestion, 'id' | 'prompt' | 'context' | 'verification_milestone'>;
   verificationMilestone?: string;
+  sourceAnalysis?: boolean;
 };
 export type DraftRequest = {
   text: string;
   composerDocument?: ComposerDocument;
   questionId?: string;
   verificationMilestone?: string;
+  sourceAnalysis?: boolean;
 };
-export type FailedDraft = DraftContent & { id: number; restoredRevision?: number };
+export type FailedDraft = DraftContent & { id: number; restoredRevision?: number; turnId?: string };
 type DraftEntry = {
   text: string;
   composerDocument?: ComposerDocument;
@@ -44,6 +46,7 @@ type DraftEntry = {
   } | null;
 };
 export type DraftAttempt = DraftContent & {
+  turnId?: string;
   id: number;
   projectId: string;
   entry: DraftEntry;
@@ -107,8 +110,13 @@ export function createAgentDraftStore() {
       draft.revision++;
     }
     draft.pending.add(id);
+    // A retry is a new admission. Never attach its outcome to the failed turn
+    // if transport stops before the new started frame arrives.
+    const { turnId: _previousTurn, ...freshContent } = content as DraftContent & {
+      turnId?: string;
+    };
     return {
-      ...content,
+      ...freshContent,
       ...(content.composerDocument
         ? { composerDocument: cloneComposerDocument(content.composerDocument) }
         : {}),
@@ -140,6 +148,7 @@ export function createAgentDraftStore() {
     if (delivered) return false;
     const failure: FailedDraft = {
       id: attempt.id,
+      ...(attempt.turnId ? { turnId: attempt.turnId } : {}),
       text: attempt.text,
       ...(attempt.composerDocument
         ? { composerDocument: cloneComposerDocument(attempt.composerDocument) }
@@ -148,6 +157,7 @@ export function createAgentDraftStore() {
       questionId: attempt.questionId,
       question: attempt.question ? { ...attempt.question } : undefined,
       verificationMilestone: attempt.verificationMilestone,
+      ...(attempt.sourceAnalysis ? { sourceAnalysis: true } : {}),
     };
     const restored = attempt.restoreRevision === draft.revision;
     if (restored) {

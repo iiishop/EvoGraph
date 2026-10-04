@@ -1,0 +1,524 @@
+{
+  "provenance": {
+    "name": "qa49-flat frozen v4 final-candidate project",
+    "project_sha256": "b5061c876360711e3be1e50f9761819188b250d873a569472cc57381ecfc46c0",
+    "limitation": "This is a frozen plan, not implemented code. The previously observed long-leading-zero parsing limitation is not repaired or validated by these manually authored evolution fixtures."
+  },
+  "project": {
+    "id": "66db10d07d944ce1",
+    "name": "qa49-flat",
+    "description": "",
+    "repository": "",
+    "is_demo": false,
+    "archived": false,
+    "creation_key": "c964ee87-9fa3-4528-b0c2-d7ec61888f2b",
+    "unified_planning": true,
+    "plan_contract": {
+      "sources": [
+        {
+          "id": "7d64356a4d72485c",
+          "text": "设计一个纯 Python 标准库的摄氏转华氏命令行小工具。规则全部给定：命令接受且只接受一个十进制整数 c，范围 -1000 到 1000（含边界），公式 f=c*9/5+32；成功时标准输出只打印两位小数和换行，退出码 0。缺少参数、参数多于一个、不是整数或超出范围时，标准错误输出简短错误，退出码 2，不输出 traceback。必须验证 0→32.00、100→212.00、-40→-40.00。业务逻辑不得读取或写入数据文件、访问网络、创建 UI 或数据库。请给出适合一个人维护的最小架构，以及先纯函数再 CLI 的两个可独立合并和验收的切片，关联目标与验收。这里不需要任何外部事实，不要联网调查；只规划，不实现。",
+          "origin": "user",
+          "message_id": "026fbae7fe294513",
+          "reference_context": {
+            "references": [],
+            "attachments": []
+          },
+          "evidence": [],
+          "activity": [
+            {
+              "id": 1,
+              "name": "submit_plan_delta",
+              "status": "succeeded"
+            }
+          ]
+        }
+      ],
+      "requirements": [
+        {
+          "id": "req-arg-contract",
+          "quote": "命令接受且只接受一个十进制整数 c，范围 -1000 到 1000（含边界）",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-formula",
+          "quote": "公式 f=c*9/5+32",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-success-stdout",
+          "quote": "成功时标准输出只打印两位小数和换行，退出码 0",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-error-path",
+          "quote": "缺少参数、参数多于一个、不是整数或超出范围时，标准错误输出简短错误，退出码 2，不输出 traceback",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-mandatory-cases",
+          "quote": "必须验证 0→32.00、100→212.00、-40→-40.00",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-stdlib-only",
+          "quote": "纯 Python 标准库的摄氏转华氏命令行小工具",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "constraint",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-no-io",
+          "quote": "业务逻辑不得读取或写入数据文件、访问网络、创建 UI 或数据库",
+          "source_id": "7d64356a4d72485c",
+          "origin": "user",
+          "kind": "exclusion",
+          "active": true,
+          "retired_by": null
+        }
+      ],
+      "bindings": [
+        {
+          "behavior_key": "convert-formula",
+          "behavior_revision_id": "964d30c8712e4db1",
+          "requirement_ids": [
+            "req-formula",
+            "req-mandatory-cases"
+          ],
+          "component_ids": [
+            "comp-core-converter"
+          ],
+          "mechanism": "纯函数 celsius_to_fahrenheit(c: int) -> float，函数体即 `return c * 9 / 5 + 32`；必须使用真除法 `/` 而非 `//`，保证 100 得到 212.0 而不是 212。函数只接收整数、只返回数值，不接收路径/连接/环境对象，不做任何 I/O。公式只在此处定义，CLI 与测试都调用它，不复制算式。",
+          "requires_behavior_keys": []
+        },
+        {
+          "behavior_key": "format-two-decimals",
+          "behavior_revision_id": "19213e1b2f434eee",
+          "requirement_ids": [
+            "req-success-stdout",
+            "req-mandatory-cases"
+          ],
+          "component_ids": [
+            "comp-core-converter"
+          ],
+          "mechanism": "纯函数 format_fahrenheit(v: float) -> str：`return f\"{v:.2f}\"`。这是本计划中唯一定义两位小数格式的位置，调用方只拼接其返回值与 '\\n'。输入域已被 c∈[-1000,1000] 限界，故输出文本长度有界；四舍五入沿用 Python 内建格式化语义，不额外实现舍入。",
+          "requires_behavior_keys": []
+        },
+        {
+          "behavior_key": "core-no-io-purity",
+          "behavior_revision_id": "c8206821209340f6",
+          "requirement_ids": [
+            "req-no-io"
+          ],
+          "component_ids": [
+            "comp-core-converter"
+          ],
+          "mechanism": "核心模块只有纯函数定义，输入经参数传入、输出经返回值传出；模块不引入/不使用文件、网络、UI、数据库相关设施（open、socket、tkinter、sqlite3 等）。验收证据：对核心模块源码的 import 与调用面做审计，加上纯函数单测（重复调用同一输入结果恒等），测试不依赖进程外资源。",
+          "requires_behavior_keys": []
+        },
+        {
+          "behavior_key": "argv-validation",
+          "behavior_revision_id": "5b398b3749544db0",
+          "requirement_ids": [
+            "req-arg-contract",
+            "req-error-path"
+          ],
+          "component_ids": [
+            "comp-cli-entry"
+          ],
+          "mechanism": "CLI 入口 `main(argv) -> int` 顺序执行三步校验：① `len(argv) == 1`，否则失败；② 按字符白名单判定十进制整数——可选一个前导 '-' 或 '+'，后跟至少一个 ASCII '0'-'9'，出现任何其他字符（下划线分组、空白、小数点、Unicode 数字等）即判为非整数，白名单通过后再用 `int(s, 10)` 取值；③ 检查 `-1000 <= c <= 1000`。三类校验全部通过后才调用 convert-formula。不使用 argparse，避免其 usage 文本与自带错误格式干扰“简短错误/退出码 2”的验收。",
+          "requires_behavior_keys": []
+        },
+        {
+          "behavior_key": "success-output-exit",
+          "behavior_revision_id": "864a43e9d0e94825",
+          "requirement_ids": [
+            "req-success-stdout"
+          ],
+          "component_ids": [
+            "comp-cli-entry"
+          ],
+          "mechanism": "`sys.stdout.write(format_fahrenheit(celsius_to_fahrenheit(c)) + '\\n')`（等价于 print），随后返回 0；不额外打印 c、公式、提示语或调试信息。成功路径完全不写 stderr。入口以 `sys.exit(main(sys.argv[1:]))` 把返回值 0 传给进程。",
+          "requires_behavior_keys": [
+            "convert-formula",
+            "format-two-decimals"
+          ]
+        },
+        {
+          "behavior_key": "failure-output-exit",
+          "behavior_revision_id": "95757aff5e9e4b7a",
+          "requirement_ids": [
+            "req-error-path"
+          ],
+          "component_ids": [
+            "comp-cli-entry"
+          ],
+          "mechanism": "四类失败共用 CLI 内唯一的错误出口：`print(msg, file=sys.stderr)` 后 `return 2`。参数个数、整数字面量、范围三类判定都以返回值表达，异常不得从 main 逃逸（如需可用 try/except ValueError 就地转为该出口）。禁止裸 raise、禁止 `raise SystemExit(消息)` 之类的回溯写法、禁止把 usage 全量文本当作错误输出。每个失败类别的错误文本由实现选定，但必须是非空单行。",
+          "requires_behavior_keys": []
+        },
+        {
+          "behavior_key": "cli-stdlib-and-io-boundary",
+          "behavior_revision_id": "dac20e8fb19145f6",
+          "requirement_ids": [
+            "req-stdlib-only",
+            "req-no-io"
+          ],
+          "component_ids": [
+            "comp-cli-entry"
+          ],
+          "mechanism": "CLI 模块仅 `import sys`，无第三方依赖清单；正常结果只写 stdout，错误只写 stderr。验收证据：模块 import 清单审计 + 端到端测试对子进程 stdout、stderr、returncode 三元组的断言。",
+          "requires_behavior_keys": []
+        }
+      ],
+      "process_constraints": [
+        {
+          "id": "pc-planning-only",
+          "source_id": "7d64356a4d72485c",
+          "quote": "只规划，不实现",
+          "rule": "planning_only"
+        },
+        {
+          "id": "pc-no-external-research",
+          "source_id": "7d64356a4d72485c",
+          "quote": "这里不需要任何外部事实，不要联网调查",
+          "rule": "no_external_research"
+        },
+        {
+          "id": "pc-delivery-shape",
+          "source_id": "7d64356a4d72485c",
+          "quote": "请给出适合一个人维护的最小架构，以及先纯函数再 CLI 的两个可独立合并和验收的切片，关联目标与验收",
+          "rule": "other"
+        }
+      ]
+    },
+    "target_draft": null,
+    "revision": 4,
+    "created_at": "2026-10-04T10:12:04.774309+00:00",
+    "updated_at": "2026-10-04T10:13:17.421244+00:00",
+    "targets": [
+      {
+        "number": 1,
+        "statement": "一个纯 Python 标准库、单文件核心 + 薄 CLI 的可维护小工具：命令只接受一个十进制整数 c∈[-1000,1000]（含边界），成功时标准输出恰为 f=c*9/5+32 的两位小数加一个换行、退出码 0；缺少参数、参数多于一个、非十进制整数、超出范围时标准错误输出一行简短错误、退出码 2、不输出 traceback；先交付可直接单测的纯函数核心切片，再交付在核心之上做进程边界的 CLI 切片，两个切片各自可合并、可独立验收。",
+        "required_behavior_ids": [
+          "964d30c8712e4db1",
+          "19213e1b2f434eee",
+          "c8206821209340f6",
+          "5b398b3749544db0",
+          "864a43e9d0e94825",
+          "95757aff5e9e4b7a",
+          "dac20e8fb19145f6"
+        ],
+        "created_at": "2026-10-04T10:13:17.361717+00:00"
+      }
+    ],
+    "plans": [
+      {
+        "number": 1,
+        "target_version": 1,
+        "summary": "为纯标准库摄氏转华氏 CLI 建立最小架构与两段可独立验收路线：先交付无副作用纯函数核心，再交付只做参数校验/输出/退出码的 CLI 适配层。",
+        "milestone_ids": [
+          "slice-01-core",
+          "slice-02-cli"
+        ],
+        "created_at": "2026-10-04T10:13:17.360779+00:00"
+      }
+    ],
+    "baselines": [],
+    "milestones": [
+      {
+        "id": "slice-01-core",
+        "title": "纯函数转换与格式化核心",
+        "intent": "先落地无副作用、可被直接导入和单测的核心能力：数值转换与两位小数文本，使 0/100/-40 与边界值在库层面即可独立验收，不含任何进程边界行为。",
+        "architecture_components": [
+          "comp-core-converter"
+        ],
+        "architecture_revision": 1,
+        "attachment_ids": [],
+        "scope": [
+          "新增单个核心模块文件（具体路径与命名在实现时确定），只包含摄氏度转华氏度的纯函数与两位小数格式化纯函数",
+          "以纯函数单测覆盖 0→32、100→212、-40→-40 的数值与文本，以及边界 -1000、1000 的数值与文本",
+          "明确不包含：读取 sys.argv、打印输出、进程退出码、错误信息措辞、argparse 或任何 CLI 框架"
+        ],
+        "dependencies": [],
+        "dependency_reasons": {},
+        "dependency_types": {},
+        "behavior_revision_ids": [
+          "964d30c8712e4db1",
+          "19213e1b2f434eee",
+          "c8206821209340f6"
+        ],
+        "resources": [],
+        "change_types": [],
+        "obligations": [
+          {
+            "id": "scope",
+            "label": "确认变更范围与验收方式",
+            "resolved": false,
+            "note": "",
+            "fingerprint": "",
+            "investigator": "human"
+          },
+          {
+            "id": "architecture",
+            "label": "审查架构 A1 与当前里程碑的一致性",
+            "resolved": false,
+            "note": "",
+            "fingerprint": "",
+            "investigator": "human"
+          }
+        ],
+        "status": "PLANNED",
+        "pinned_baseline": null,
+        "lease_active": false,
+        "position": null,
+        "origin": "plan",
+        "source_refs": [],
+        "source_behaviors": [],
+        "source_baseline_id": "",
+        "migration_steps": []
+      },
+      {
+        "id": "slice-02-cli",
+        "title": "CLI 入口：参数校验、输出与退出码",
+        "intent": "在已合并的纯函数核心之上加一层薄 CLI，拥有进程边界：参数数量/整数字面量/范围校验、成功输出、四类失败输出与退出码 2，自成可端到端验收的增量。",
+        "architecture_components": [
+          "comp-cli-entry"
+        ],
+        "architecture_revision": 1,
+        "attachment_ids": [],
+        "scope": [
+          "新增 CLI 入口模块，读取 sys.argv[1:]，实现参数数量、十进制整数字面量、区间 [-1000,1000] 三步校验",
+          "成功路径调用纯函数核心的转换与格式化，写 stdout 加换行，返回 0",
+          "失败路径统一写 stderr 一行简短错误并返回 2，不泄漏 traceback；stdout 保持为空",
+          "端到端测试（子进程）覆盖 0/100/-40、边界 ±1000，以及缺参、多参、非整数、超范围四类失败；不重复实现公式与两位小数格式"
+        ],
+        "dependencies": [
+          "slice-01-core"
+        ],
+        "dependency_reasons": {
+          "slice-01-core": "CLI 成功路径必须复用 convert-formula 与 format-two-decimals 的唯一实现，不能在 CLI 内重写公式或格式化，故 CLI 的可验收性以核心切片已合并为前提"
+        },
+        "dependency_types": {},
+        "behavior_revision_ids": [
+          "5b398b3749544db0",
+          "864a43e9d0e94825",
+          "95757aff5e9e4b7a",
+          "dac20e8fb19145f6"
+        ],
+        "resources": [],
+        "change_types": [],
+        "obligations": [
+          {
+            "id": "scope",
+            "label": "确认变更范围与验收方式",
+            "resolved": false,
+            "note": "",
+            "fingerprint": "",
+            "investigator": "human"
+          },
+          {
+            "id": "architecture",
+            "label": "审查架构 A1 与当前里程碑的一致性",
+            "resolved": false,
+            "note": "",
+            "fingerprint": "",
+            "investigator": "human"
+          }
+        ],
+        "status": "PLANNED",
+        "pinned_baseline": null,
+        "lease_active": false,
+        "position": null,
+        "origin": "plan",
+        "source_refs": [],
+        "source_behaviors": [],
+        "source_baseline_id": "",
+        "migration_steps": []
+      }
+    ],
+    "behaviors": [
+      {
+        "id": "964d30c8712e4db1",
+        "behavior_key": "convert-formula",
+        "version": 1,
+        "statement": "对任一十进制整数 c∈[-1000,1000]，转换结果是数值 c*9/5+32；必测点 0→32、100→212、-40→-40 全部由该函数产生。",
+        "acceptance_scope": "target",
+        "owner": "slice-01-core",
+        "supersedes": null
+      },
+      {
+        "id": "19213e1b2f434eee",
+        "behavior_key": "format-two-decimals",
+        "version": 1,
+        "statement": "转换数值 v 的输出文本恰为 Python 格式说明符 '.2f' 的结果：32.0→'32.00'、212.0→'212.00'、-40.0→'-40.00'，无正号、单位、前导空格或额外字符。",
+        "acceptance_scope": "target",
+        "owner": "slice-01-core",
+        "supersedes": null
+      },
+      {
+        "id": "c8206821209340f6",
+        "behavior_key": "core-no-io-purity",
+        "version": 1,
+        "statement": "核心转换与格式化函数在调用期间不读写任何数据文件、不访问网络、不创建 UI、不访问数据库，也不依赖全局可变状态或环境变量，同一输入重复调用得到相同结果。",
+        "acceptance_scope": "target",
+        "owner": "slice-01-core",
+        "supersedes": null
+      },
+      {
+        "id": "5b398b3749544db0",
+        "behavior_key": "argv-validation",
+        "version": 1,
+        "statement": "进入成功路径当且仅当 argv 中恰好提供一个十进制整数字面量 c 且 -1000 ≤ c ≤ 1000（含边界）；缺少参数、多于一个参数、非十进制整数、超出范围这四类都必须走失败路径。",
+        "acceptance_scope": "target",
+        "owner": "slice-02-cli",
+        "supersedes": null
+      },
+      {
+        "id": "864a43e9d0e94825",
+        "behavior_key": "success-output-exit",
+        "version": 1,
+        "statement": "成功路径下标准输出恰为 format-two-decimals 的文本加一个 '\\n'（无其他任何字符），标准错误为空，退出码为 0。",
+        "acceptance_scope": "target",
+        "owner": "slice-02-cli",
+        "supersedes": null
+      },
+      {
+        "id": "95757aff5e9e4b7a",
+        "behavior_key": "failure-output-exit",
+        "version": 1,
+        "statement": "缺少参数、多于一个参数、非十进制整数、超出范围四类失败输入，均在标准错误输出一行简短错误信息并返回退出码 2，此时标准输出无任何内容，且任何失败输入都不产生 traceback。",
+        "acceptance_scope": "target",
+        "owner": "slice-02-cli",
+        "supersedes": null
+      },
+      {
+        "id": "dac20e8fb19145f6",
+        "behavior_key": "cli-stdlib-and-io-boundary",
+        "version": 1,
+        "statement": "整个工具只用 Python 标准库实现，CLI 的外部交互面仅限 sys.argv、sys.stdout、sys.stderr 与进程退出码；不引入第三方依赖，也不读写数据文件、访问网络、创建 UI 或数据库。",
+        "acceptance_scope": "target",
+        "owner": "slice-02-cli",
+        "supersedes": null
+      }
+    ],
+    "evidence": [],
+    "proposal": null,
+    "proposal_revision": null,
+    "question": null,
+    "attachments": [],
+    "diagrams": [],
+    "architectures": [
+      {
+        "quality_scenarios": [],
+        "risks": [
+          "Python 的 int() 会顺带接受下划线分组、前后空白与部分 Unicode 数字；若直接用 int(s) 判定，则“不是整数”的失败边界会随解释器宽容度漂移，实现时必须以字符白名单固定可接受形式并由 CLI 端到端测试验证。"
+        ],
+        "summary": "最小两极架构，适配单人维护：① 无副作用的转换核心——只含 celsius_to_fahrenheit 与 format_fahrenheit 两个纯函数，无 import、无状态、无 I/O，可由纯函数单测直接验收；② 薄 CLI 适配层——把 sys.argv 映射为“成功（stdout 一行 + 退出码 0）”或“失败（stderr 一行 + 退出码 2）”，除了调用核心不做任何计算。依赖方向单向：CLI → 核心。没有框架、配置、持久化、网络或 UI 边界，也没有需要同步的额外层；两个组件按两个切片交付，切片 1 单独可验收，切片 2 只依赖切片 1 已合并，不依赖任何未来守卫。当前仓库未连接，模块文件命名与具体路径留待实现阶段确定。",
+        "technologies": [
+          {
+            "area": "语言与运行时",
+            "choice": "Python 3，仅标准库",
+            "rationale": "满足“纯 Python 标准库”约束；单文件规模无需依赖管理与打包。"
+          },
+          {
+            "area": "参数解析",
+            "choice": "手写 sys.argv 校验，不使用 argparse",
+            "rationale": "需求把四类失败固定为“stderr 一行简短错误 + 退出码 2 + 无 traceback”；手写解析把这些失败边界放在自有代码里，避免框架 usage 文本与错误格式影响该验收点。"
+          },
+          {
+            "area": "数值与格式化",
+            "choice": "int 解析 + `c * 9 / 5 + 32` 真除法 + f-string '.2f'",
+            "rationale": "公式与两位小数格式各自只有一个实现点，CLI 与测试共用，避免重复算式造成的漂移。"
+          },
+          {
+            "area": "调用形式",
+            "choice": "单文件脚本以 `python3 <core-or-cli-module>.py <c>` 方式运行",
+            "rationale": "不引入 console_scripts/打包步骤，单人维护成本最低；具体文件名在实现阶段确定。"
+          },
+          {
+            "area": "测试",
+            "choice": "标准库 unittest：核心用纯函数单测，CLI 用子进程端到端断言",
+            "rationale": "零依赖，且每个切片都能用自身可运行的测试完成独立验收（核心只看函数返回值，CLI 看 stdout/stderr/returncode 三元组）。"
+          }
+        ],
+        "decisions": [],
+        "diagram": {
+          "id": "architecture",
+          "title": "系统架构",
+          "kind": "architecture",
+          "nodes": [
+            {
+              "id": "comp-core-converter",
+              "label": "转换核心（纯函数）",
+              "description": "拥有摄氏度→华氏度数值转换与两位小数格式化的唯一实现。无 I/O、无状态、不解析 argv、不打印不退出进程；只暴露两个纯函数给上层调用。",
+              "role": "backend",
+              "source_refs": [],
+              "source_ref_count": 0
+            },
+            {
+              "id": "comp-cli-entry",
+              "label": "CLI 进程边界",
+              "description": "拥有进程边界职责：解析 sys.argv、判定缺参/多参/非整数/超范围四类失败、写 stdout 或 stderr、返回退出码。不复制公式与格式规则，仅按 key 调用转换核心。",
+              "role": "backend",
+              "source_refs": [],
+              "source_ref_count": 0
+            }
+          ],
+          "edges": [
+            {
+              "source": "comp-cli-entry",
+              "target": "comp-core-converter",
+              "label": "单向调用：CLI 依赖核心，核心不反向依赖"
+            }
+          ],
+          "groups": [],
+          "milestone_ids": [],
+          "attachment_ids": []
+        },
+        "research_ids": [],
+        "retirements": [],
+        "number": 1,
+        "created_at": "2026-10-04T10:13:17.354859+00:00"
+      }
+    ],
+    "source_milestones": [],
+    "source_diagram": null,
+    "source_summary": "",
+    "source_fingerprint": "",
+    "source_file_fingerprints": {},
+    "source_analysis_baseline_id": "",
+    "source_analysis_summary": "",
+    "light_checks": [],
+    "research": [],
+    "acceptance_requests": [],
+    "uml_diagrams": [],
+    "metrics": {
+      "planning_seconds": 54.79244564000692,
+      "verification_seconds": 0.0,
+      "model_tokens": 16846.0,
+      "blocked_attempts": 0.0
+    }
+  }
+}

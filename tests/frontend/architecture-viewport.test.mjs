@@ -49,7 +49,7 @@ const imports = {
   ),
   '../../lib/architectureRoles': url('export const architectureRole = () => ({ color: "blue" });'),
   '../../composables/useAgent': url(
-    'export const useAgent = () => ({ state: { follow: { P1: false }, pulse: 0 }, freeView() {} });',
+    `import { reactive } from ${JSON.stringify(vue)}; export const agent = { state: reactive({ follow: { P1: false }, pulse: 0 }), free: [], freeView(id) { this.free.push(id); } }; export const useAgent = () => agent;`,
   ),
   '../../composables/useWorkspace': url(
     'export const useWorkspace = () => ({ state: { project: { id: "P1" } } });',
@@ -74,6 +74,7 @@ const compiled = ts
 const DiagramView = (await import(url(compiled))).default;
 const { calls, fittedBounds, centers, internals, captured, ready } = await import(flow);
 const { layoutState } = await import(layoutUrl);
+const { agent } = await import(imports['../../composables/useAgent']);
 const element = (tag = 'root') => ({
   tag,
   children: [],
@@ -703,5 +704,24 @@ test('semantic group wrappers cannot shield the relation paths beneath their bou
     assert.equal(captured.attrs.nodes.filter((node) => node.data.previewed).length, 2);
   } finally {
     h.dispose();
+  }
+});
+
+test('isolated candidate diagrams do not change canonical following or react to canonical pulses', async () => {
+  const ui = await harness({ isolated: true });
+  try {
+    await ui.flush();
+    agent.free.length = 0;
+    agent.state.follow.P1 = true;
+    calls.length = 0;
+    captured.attrs.onMoveStart({ event: {} });
+    agent.state.pulse++;
+    await ui.flush();
+    assert.deepEqual(agent.free, []);
+    assert.equal(calls.length, 0);
+    assert.equal(agent.state.follow.P1, true);
+  } finally {
+    agent.state.follow.P1 = false;
+    ui.dispose();
   }
 });

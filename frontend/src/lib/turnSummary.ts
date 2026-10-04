@@ -44,6 +44,25 @@ const contractDetails = (value: unknown) =>
       typeof item.restored === 'boolean',
   );
 
+const candidateOutcome = (value: unknown) =>
+  record(value) &&
+  (value.id === null || (text(value.id) && Boolean(value.id))) &&
+  text(value.status) &&
+  [
+    'generating',
+    'reviewing',
+    'needs_resolution',
+    'ready',
+    'applied',
+    'stopped',
+    'failed',
+    'stale',
+    'discarded',
+    'not_admitted',
+  ].includes(value.status) &&
+  value.canonical_unchanged === true &&
+  text(value.note);
+
 /** Only the versioned, persisted contract can produce a factual turn receipt. */
 export function parseTurnSummary(detail: string): TurnSummary | null {
   try {
@@ -57,6 +76,7 @@ export function parseTurnSummary(detail: string): TurnSummary | null {
       !['completed', 'waiting', 'stopped', 'failed'].includes(value.status) ||
       typeof value.changed !== 'boolean' ||
       (value.history_warning !== undefined && !text(value.history_warning)) ||
+      (value.candidate_outcome !== undefined && !candidateOutcome(value.candidate_outcome)) ||
       (value.contract_details !== undefined && !contractDetails(value.contract_details)) ||
       !revision(value.before_revision) ||
       !revision(value.after_revision) ||
@@ -230,13 +250,29 @@ export const dependencyTypeLabels: Record<string, string> = {
   migration: '迁移',
   verification: '验证',
 };
-export const turnSummaryStatus = (summary: TurnSummary) =>
-  ({
+export function turnSummaryStatus(summary: TurnSummary): string {
+  const candidate = summary.candidate_outcome;
+  if (candidate) {
+    if (!candidate.id || candidate.status === 'not_admitted') return '候选尚未生成';
+    return {
+      generating: '候选已保留',
+      reviewing: '候选待评审',
+      needs_resolution: '候选待解决',
+      ready: '候选待提交',
+      applied: '候选已保留',
+      stopped: '候选已停止',
+      failed: '候选未完成',
+      stale: '候选基于旧版本',
+      discarded: '候选已放弃',
+    }[candidate.status];
+  }
+  return {
     completed: turnSummaryHasChanges(summary) ? '变更已保存' : '本轮已结束',
     waiting: '等待你的回答',
     stopped: '已停止',
     failed: '本轮未完成',
-  })[summary.status];
+  }[summary.status];
+}
 
 export function turnSummaryHasChanges(summary: TurnSummary): boolean {
   // The backend's before/after comparison excludes transient edits and revision churn.
@@ -262,6 +298,11 @@ export function turnSummaryHasChanges(summary: TurnSummary): boolean {
 }
 
 export function turnSummaryHeadline(summary: TurnSummary): string {
+  if (summary.candidate_outcome)
+    return summary.candidate_outcome.id &&
+      !['discarded', 'not_admitted'].includes(summary.candidate_outcome.status)
+      ? '候选已保留，正式方案未应用'
+      : '正式方案未应用';
   if (!turnSummaryHasChanges(summary)) return '无净变更';
   const { milestones, dependencies, target, architecture, other } = summary.changes;
   const parts: string[] = [];
@@ -286,6 +327,10 @@ export function turnSummaryHeadline(summary: TurnSummary): string {
 }
 
 export function turnSummaryNotice(summary: TurnSummary): string {
+  if (summary.candidate_outcome) {
+    const outcome = summary.candidate_outcome;
+    return outcome.note || turnSummaryHeadline(summary);
+  }
   if (summary.status === 'stopped' || summary.status === 'failed') {
     return turnSummaryHasChanges(summary)
       ? '已保存的部分变更保留，本轮未完成'

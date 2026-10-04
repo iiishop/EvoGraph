@@ -172,6 +172,8 @@ async function harness(realViews = false) {
     '../../composables/useWorkspace': workspaceUrl,
     '../../lib/workspaceViews': viewsUrl,
     './WorkspaceHeader.vue': stub,
+    './UnifiedPlanBar.vue': stub,
+    './PlanCandidatePanel.vue': stub,
     '../graph/MilestoneGraph.vue': stub,
     '../graph/MilestoneFinder.vue': stub,
     '../graph/MilestoneInspector.vue': stub,

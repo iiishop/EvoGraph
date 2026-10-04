@@ -4,6 +4,19 @@ from .base import check_url, register
 from .streaming import sse_payloads
 
 
+class _DoneObservedResponse:
+    """Observe the SSE sentinel without changing the shared JSON framing parser."""
+    def __init__(self, response):
+        self.response = response
+        self.received_done_marker = False
+
+    async def aiter_lines(self):
+        async for line in self.response.aiter_lines():
+            if line.startswith("data:") and line[5:].strip() == "[DONE]":
+                self.received_done_marker = True
+            yield line
+
+
 @register
 class OpenAICompatible:
     descriptor = {
@@ -54,35 +67,64 @@ class OpenAICompatible:
     async def stream(self, config, secret, messages, tools):
         check_url(config["base_url"])
         headers = {"Authorization": f"Bearer {secret}"} if secret else {}
+        body = {"model": config["model"], "messages": messages, "tools": tools, "stream": True}
+        # Derive diagnostics from the outgoing body, never from arbitrary config,
+        # headers, credentials or an assumed provider/model default.
+        controls = ("model", "stream", "max_tokens", "max_completion_tokens", "reasoning_effort",
+                    "stream_options", "tool_choice", "parallel_tool_calls", "n")
+        limits = {key: body[key] for key in ("max_completion_tokens", "max_tokens") if key in body}
+        yield {
+            "type": "request_metadata", "provider": "openai_compatible",
+            "controls": {key: body[key] for key in controls if key in body},
+            "unset_controls": [key for key in controls if key not in body],
+            "completion_limit": ({"state": "explicit", "fields": limits} if limits else
+                                 {"state": "unset", "server_default": "unknown"}),
+            "tool_strict": [{"name": t["function"]["name"],
+                             "strict": t["function"].get("strict")} for t in tools],
+        }
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=15)) as client:
             async with client.stream(
                 "POST",
                 config["base_url"].rstrip("/") + "/chat/completions",
                 headers=headers,
-                json={
-                    "model": config["model"],
-                    "messages": messages,
-                    "tools": tools,
-                    "stream": True,
-                },
+                json=body,
             ) as response:
+                yield {"type": "response_started", "http_status": response.status_code}
                 if response.is_error:
                     raise ValueError(f"Provider 流式请求失败（HTTP {response.status_code}）")
-                async for payload in sse_payloads(response):
+                observed = _DoneObservedResponse(response)
+                async for payload in sse_payloads(observed):
                     if payload.get("error"):
                         raise ValueError("Provider 返回流式错误，请检查模型是否支持工具调用")
                     if payload.get("usage"):
-                        yield {"type": "usage", "tokens": payload["usage"].get("total_tokens", 0)}
+                        usage = payload["usage"]
+                        allowed = {k: v for k, v in usage.items() if k in {
+                            "prompt_tokens", "completion_tokens", "total_tokens",
+                            "prompt_cache_hit_tokens", "prompt_cache_miss_tokens",
+                        } and isinstance(v, (int, float)) and not isinstance(v, bool)}
+                        for key in ("prompt_tokens_details", "completion_tokens_details"):
+                            if isinstance(usage.get(key), dict):
+                                allowed[key] = {k: v for k, v in usage[key].items()
+                                                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                        yield {"type": "usage", "tokens": usage.get("total_tokens", 0),
+                               "usage_counter": "openai_total", "usage_details": allowed}
                     for choice in payload.get("choices", []):
                         delta = choice.get("delta", {})
                         if delta.get("content"):
-                            yield {"type": "text", "text": delta["content"]}
+                            yield {"type": "text", "text": delta["content"],
+                                   "choice_index": choice.get("index", 0)}
                         for call in delta.get("tool_calls", []):
                             function = call.get("function", {})
                             yield {
                                 "type": "tool_delta",
                                 "index": call.get("index", 0),
+                                "choice_index": choice.get("index", 0),
                                 "id": call.get("id", ""),
                                 "name": function.get("name", ""),
                                 "arguments": function.get("arguments", ""),
                             }
+                        if choice.get("finish_reason") is not None:
+                            yield {"type": "response_finish", "choice_index": choice.get("index", 0),
+                                   "finish_reason": choice["finish_reason"]}
+                yield {"type": "response_end", "normal_stream_end": True,
+                       "terminal_marker": "[DONE]", "received_terminal_marker": observed.received_done_marker}

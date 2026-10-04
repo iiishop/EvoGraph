@@ -1,0 +1,172 @@
+{
+  "target": "标准库摄氏转华氏 CLI",
+  "requirements": [
+    {
+      "id": "R1",
+      "quote": "命令接受且只接受一个十进制整数 c，范围 -1000 到 1000（含边界）",
+      "kind": "constraint"
+    },
+    {
+      "id": "R2",
+      "quote": "公式 f=c*9/5+32",
+      "kind": "outcome"
+    },
+    {
+      "id": "R3",
+      "quote": "成功时标准输出只打印两位小数和换行，退出码 0",
+      "kind": "outcome"
+    },
+    {
+      "id": "R4",
+      "quote": "缺少参数、参数多于一个、不是整数或超出范围时，标准错误输出简短错误，退出码 2，不输出 traceback",
+      "kind": "outcome"
+    },
+    {
+      "id": "R5",
+      "quote": "必须验证 0→32.00、100→212.00、-40→-40.00",
+      "kind": "outcome"
+    },
+    {
+      "id": "R6",
+      "quote": "业务逻辑不得读取或写入数据文件、访问网络、创建 UI 或数据库",
+      "kind": "exclusion"
+    },
+    {
+      "id": "R7",
+      "quote": "纯 Python 标准库",
+      "kind": "constraint"
+    }
+  ],
+  "process_constraints": [
+    {
+      "id": "P1",
+      "quote": "只规划，不实现",
+      "rule": "planning_only"
+    },
+    {
+      "id": "P2",
+      "quote": "不需要任何外部事实，不要联网调查",
+      "rule": "no_external_research"
+    },
+    {
+      "id": "P3",
+      "quote": "先纯函数再 CLI 的两个可独立合并和验收的切片",
+      "rule": "other"
+    }
+  ],
+  "components": [
+    {
+      "id": "core",
+      "label": "纯函数核心",
+      "description": "拥有整数解析、范围守卫、定点换算和格式化；无 I/O"
+    },
+    {
+      "id": "cli",
+      "label": "命令行边界",
+      "description": "拥有参数数量、标准流与进程退出码；只调用核心"
+    }
+  ],
+  "relations": [
+    {
+      "source": "cli",
+      "target": "core",
+      "label": "调用解析与换算"
+    }
+  ],
+  "architecture_summary": "一个包、两个模块，无持久状态；标准库直接运行",
+  "technologies": [
+    {
+      "area": "运行与测试",
+      "choice": "Python 标准库",
+      "rationale": "满足给定约束，无外部依赖"
+    }
+  ],
+  "slices": [
+    {
+      "id": "CORE",
+      "title": "纯函数核心",
+      "intent": "直接调用即可独立验证规则",
+      "scope": [
+        "core.py 与核心 unittest 用例"
+      ]
+    },
+    {
+      "id": "CLI",
+      "title": "CLI 进程入口",
+      "intent": "复用核心交付命令行",
+      "scope": [
+        "__main__.py 与 subprocess 端到端用例"
+      ],
+      "dependencies": [
+        "CORE"
+      ],
+      "dependency_reasons": {
+        "CORE": "消费已有解析与换算契约"
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "key": "parse",
+      "owner": "CORE",
+      "statement": "解析函数接受十进制整数文本且值在 [-1000,1000]，否则抛 ValueError；覆盖边界、空串、小数、超范围，以及5000个前导零的合法输入。词法采用可选正负号加 ASCII 数字。",
+      "requirement_ids": [
+        "R1"
+      ],
+      "mechanism": "词法通过后去符号并去前导零（空则为0）；按有效数字长度/字典序与1000比较范围，之后仅转换至多4位的短串并恢复符号。长零串返回0，长非零越界，不受int长字符串位数限制影响。",
+      "component_ids": [
+        "core"
+      ]
+    },
+    {
+      "key": "convert",
+      "owner": "CORE",
+      "statement": "对范围内整数返回 f=c*9/5+32 的两位小数字符串；直接调用断言 0→32.00、100→212.00、-40→-40.00 及两端边界。",
+      "requirement_ids": [
+        "R2",
+        "R5"
+      ],
+      "mechanism": "以 c*180+3200 得到百分之一度整数，符号与绝对值 divmod(100) 格式化，不用浮点；unittest 直接调用。",
+      "component_ids": [
+        "core"
+      ]
+    },
+    {
+      "key": "pure",
+      "owner": "CORE",
+      "statement": "业务核心只使用标准库纯计算，不读写数据文件、访问网络或创建 UI/数据库。",
+      "requirement_ids": [
+        "R6",
+        "R7"
+      ],
+      "mechanism": "无状态函数不接收文件、网络或数据库资源；源码检查 I/O 调用，单元测试直接调用。",
+      "component_ids": [
+        "core"
+      ]
+    },
+    {
+      "key": "terminal",
+      "owner": "CLI",
+      "statement": "仅一个有效参数时 stdout 是核心结果加换行、stderr 空、退出码0；缺参、多参、非整数或超范围时 stdout 空、stderr 一行简短错误、退出码2且无 traceback。子进程覆盖三指定成功例与四类错误。",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "mechanism": "main 首先检查参数数量；调用 parse/convert，捕获 ValueError 输出固定短错误；入口 sys.exit(main(...))。仅标准流 I/O，业务路径无其它资源访问。",
+      "component_ids": [
+        "cli",
+        "core"
+      ],
+      "requires_behavior_keys": [
+        "parse",
+        "convert",
+        "pure"
+      ]
+    }
+  ]
+}

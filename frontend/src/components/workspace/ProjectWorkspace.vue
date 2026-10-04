@@ -2,6 +2,8 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useAgent } from '../../composables/useAgent';
 import WorkspaceHeader from './WorkspaceHeader.vue';
+import UnifiedPlanBar from './UnifiedPlanBar.vue';
+import PlanCandidatePanel from './PlanCandidatePanel.vue';
 import GraphToolbar from '../graph/GraphToolbar.vue';
 import MilestoneGraph from '../graph/MilestoneGraph.vue';
 import MilestoneFinder from '../graph/MilestoneFinder.vue';
@@ -14,6 +16,28 @@ import { useWorkspace, type WorkspaceFollowBoundary } from '../../composables/us
 import type { Project } from '../../types';
 const props = defineProps<{ project: Project }>();
 const agent = useAgent();
+const candidatePreview = ref(false);
+const candidate = computed(() => props.project.plan_candidate);
+watch(
+  () => `${props.project.id}:${props.project.created_at}:${candidate.value?.id ?? ''}`,
+  () => {
+    candidatePreview.value = Boolean(
+      candidate.value && !['applied', 'discarded'].includes(candidate.value.status),
+    );
+  },
+  { immediate: true },
+);
+watch(
+  () => [candidate.value?.status, props.project.revision],
+  () => {
+    if (
+      candidate.value?.status === 'applied' &&
+      props.project.revision > candidate.value.base_revision
+    )
+      candidatePreview.value = false;
+  },
+);
+const showingCandidate = computed(() => candidatePreview.value && Boolean(candidate.value));
 function followPage() {
   if (
     mounted &&
@@ -93,7 +117,9 @@ watch(
   { flush: 'post' },
 );
 const inspectorLeaving = ref(false);
-const inspectorOpen = computed(() => Boolean(selected.value && tab.value === 'graph'));
+const inspectorOpen = computed(() =>
+  Boolean(!showingCandidate.value && selected.value && tab.value === 'graph'),
+);
 watch(tab, () => viewMotion.reveal(planningContent.value), { flush: 'post' });
 const planningContent = ref<HTMLElement>();
 const composer = ref<InstanceType<typeof AgentDock>>();
@@ -113,6 +139,7 @@ onBeforeUnmount(() => {
 });
 async function locate(id: string) {
   if (!mounted || !milestones.value.some((item) => item.id === id)) return;
+  candidatePreview.value = false;
   const sequence = ++locateSequence;
   const projectId = props.project.id;
   const tabKey = tabSession.value.key;
@@ -143,7 +170,13 @@ watch(tab, (value) => {
   <main class="project-workspace">
     <div class="workspace-chrome">
       <WorkspaceHeader :project="project" @edit="$emit('edit')" />
+      <UnifiedPlanBar
+        :project="project"
+        :preview="showingCandidate"
+        @preview="candidatePreview = $event"
+      />
       <GraphToolbar
+        v-show="!showingCandidate"
         :tab="tab"
         :count="project.milestones.length + (project.source_milestones?.length ?? 0)"
         @tab="viewActions.select"
@@ -155,7 +188,7 @@ watch(tab, (value) => {
     <section
       class="workspace-body"
       :class="{
-        'architecture-active': tab === 'architecture',
+        'architecture-active': !showingCandidate && tab === 'architecture',
         'workspace-detail-open': inspectorOpen || inspectorLeaving,
         'question-active': Boolean(project.question),
       }"
@@ -164,9 +197,18 @@ watch(tab, (value) => {
         <div
           ref="planningContent"
           class="planning-content"
-          :class="{ 'graph-detail-open': selected && tab === 'graph' }"
+          :class="{
+            'graph-detail-open': !showingCandidate && selected && tab === 'graph',
+            'candidate-preview-active': showingCandidate,
+          }"
         >
+          <PlanCandidatePanel
+            v-if="showingCandidate && candidate"
+            :candidate="candidate"
+            :canonical="project"
+          />
           <component
+            v-show="!showingCandidate"
             :is="activeView.component"
             :key="`${project.id}:${tabSession.key}:${tab}`"
             ref="graph"
@@ -189,7 +231,11 @@ watch(tab, (value) => {
         @before-leave="inspectorLeaving = true"
         @after-leave="inspectorLeaving = false"
       >
-        <div v-if="selected && tab === 'graph'" ref="inspectorSurface" class="inspector-surface">
+        <div
+          v-if="!showingCandidate && selected && tab === 'graph'"
+          ref="inspectorSurface"
+          class="inspector-surface"
+        >
           <component
             :is="selected.origin === 'source' ? SourceInspector : MilestoneInspector"
             :key="selected.id"
@@ -204,13 +250,15 @@ watch(tab, (value) => {
         :project="project"
         :review-owner="tabSession.key"
         :view="tab"
-        :compact="tab === 'architecture' || (tab === 'graph' && Boolean(selected))"
+        :compact="
+          showingCandidate || tab === 'architecture' || (tab === 'graph' && Boolean(selected))
+        "
         @resume="viewActions.resume"
         @locate="viewActions.locate"
       />
     </section>
     <MilestoneFinder
-      v-if="finderOpen && tab === 'graph'"
+      v-if="!showingCandidate && finderOpen && tab === 'graph'"
       :milestones="milestones"
       @select="viewActions.locate"
       @close="finderOpen = false"
@@ -219,6 +267,11 @@ watch(tab, (value) => {
 </template>
 
 <style scoped>
+.candidate-preview-active {
+  display: block;
+  overflow-y: auto;
+}
+
 .inspector-surface {
   grid-area: detail;
   min-width: 0;

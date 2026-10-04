@@ -63,13 +63,19 @@ function version(value: number | null, prefix: string): string {
     :data-status="summary.status"
   >
     <summary>
-      <span class="turn-summary-title">本轮变更</span>
+      <span class="turn-summary-title">{{
+        summary.candidate_outcome ? '本轮候选' : '本轮变更'
+      }}</span>
       <span class="turn-summary-status">{{ turnSummaryStatus(summary) }}</span>
       <span class="turn-summary-preview">{{ turnSummaryHeadline(summary) }}</span>
       <span v-if="summary.history_warning" class="turn-history-warning">对话未完整保存</span>
       <span class="turn-summary-disclosure" aria-hidden="true">详情</span>
     </summary>
-    <div class="turn-summary-scroll" aria-label="本轮已保存的规划变更" tabindex="0">
+    <div
+      class="turn-summary-scroll"
+      :aria-label="summary.candidate_outcome ? '本轮候选保留情况' : '本轮已保存的规划变更'"
+      tabindex="0"
+    >
       <p class="turn-summary-notice">{{ turnSummaryNotice(summary) }}</p>
       <p class="turn-summary-notice">保存与结构检查不代表目标已验收或语义一致。</p>
       <p v-if="summary.history_warning" class="turn-summary-notice" role="status">

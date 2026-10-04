@@ -8,6 +8,7 @@ export async function agentStream(
     question_id?: string;
     attachment_ids?: string[];
     verification_milestone?: string;
+    source_analysis?: boolean;
   },
   receive: (event: AgentEvent) => void,
   signal: AbortSignal,

@@ -71,7 +71,11 @@ function reconcileReceipts(project: Project | null) {
     if (!workspace.state.error || workspace.state.error === receipt.error)
       workspace.setError(
         summary.history_warning ||
-          (summary.status === 'failed' ? '本轮未完成，已提交的修改保留' : ''),
+          (summary.status === 'failed'
+            ? summary.candidate_outcome
+              ? `正式方案未应用。${summary.candidate_outcome.note}`
+              : '本轮未完成，已提交的修改保留'
+            : ''),
       );
   }
 }
@@ -79,6 +83,20 @@ function reconcileReceipts(project: Project | null) {
 function receive(event: AgentEvent) {
   const workspace = useWorkspace();
   if (event.type === 'started') state.turnId = event.turn_id ?? '';
+  if (event.type === 'candidate_changed') {
+    // Even a malformed frame with an accidental top-level project must not
+    // overwrite the accepted plan. Preview events have their own route.
+    if (
+      event.candidate &&
+      event.candidate.project?.id === state.projectId &&
+      (!event.project_id || event.project_id === state.projectId) &&
+      (!event.turn_id || event.turn_id === state.turnId)
+    ) {
+      workspace.applyPlanCandidate(state.projectId, event.candidate);
+      if (event.label) state.label = event.label;
+    }
+    return;
+  }
   const previous = workspace.state.project;
   if (event.project) workspace.applyProject(event.project);
   if (
@@ -161,9 +179,11 @@ async function send(
   verificationMilestone?: string,
   composerDocument?: ComposerDocument,
   submission?: DraftAttempt,
+  sourceAnalysis = false,
 ): Promise<boolean> {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return false;
+  if (submission && sourceAnalysis) submission.sourceAnalysis = true;
   // This session-level watcher outlives a dock unmount and observes only project
   // snapshots the workspace has accepted through its existing ordering guards.
   if (!receiptWatcherStarted) {
@@ -194,7 +214,15 @@ async function send(
   workspace.setBusy(true);
   controller = new AbortController();
   const receiveForRun = (event: AgentEvent) => {
-    if (event.type === 'started') receipt.turnId = event.turn_id ?? '';
+    if (event.type === 'candidate_changed' && (latestRun !== receipt.owner || !receipt.isCurrent()))
+      return;
+    if (event.type === 'started') {
+      receipt.turnId = event.turn_id ?? '';
+      if (receipt.submission) {
+        receipt.submission.turnId = receipt.turnId;
+        if (event.source_analysis === true) receipt.submission.sourceAnalysis = true;
+      }
+    }
     // A factual terminal may lack a project snapshot after a stream loss or
     // failed snapshot lookup. Invalidate only this exact admitted incarnation.
     if (
@@ -217,6 +245,7 @@ async function send(
         attachment_ids: attachmentIds,
         ...(composerDocument ? { composer_document: composerDocument } : {}),
         verification_milestone: verificationMilestone,
+        ...(sourceAnalysis ? { source_analysis: true } : {}),
         ...(questionId ? { question_id: questionId } : {}),
       },
       receiveForRun,

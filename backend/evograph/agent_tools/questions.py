@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 from pydantic import Field
@@ -40,7 +41,12 @@ def ask_user(ctx, args):
         prompt=prompt, category=args.category, options=options, context=args.context.strip(),
         verification_milestone=ctx.verification_milestone
     )
-    ctx.application.db.save(p, "agent_question", p.question.prompt)
+    if getattr(ctx, "source_analysis", False):
+        ctx.application.db.save(p, "source_analysis_question", json.dumps({
+            "question_id": p.question.id, "prompt": p.question.prompt,
+        }, ensure_ascii=False))
+    else:
+        ctx.application.db.save(p, "agent_question", p.question.prompt)
     ctx.application.db.message(p.id, "assistant", p.question.prompt)
     ctx.paused = True
     return {"question": p.question.model_dump()}

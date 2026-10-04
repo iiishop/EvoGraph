@@ -460,7 +460,7 @@ test('selecting a milestone gives detail space without unmounting the conversati
   );
   assert.match(
     source,
-    /:compact="tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)"/,
+    /:compact="\s*showingCandidate \|\| tab === 'architecture' \|\| \(tab === 'graph' && Boolean\(selected\)\)\s*"/,
   );
   assert.equal((source.match(/<AgentDock/g) || []).length, 1);
 });

@@ -82,6 +82,8 @@ def read_repository_file(ctx, args):
     if lexical.is_symlink() or any(parent.is_symlink() for parent in lexical.parents):
         raise ValueError("不能通过符号链接读取文件")
     key = str(path)
+    if (getattr(ctx.application.db, "is_candidate", False) or getattr(ctx, "source_analysis", False)) and key not in ctx.inspected and len(ctx.inspected) >= 6:
+        raise ValueError("本候选生成轮最多读取六个不同源码文件，请聚焦范围")
     if path.stat().st_size > 100000:
         raise ValueError("文件过大")
     data = path.read_bytes()

@@ -51,6 +51,7 @@ export function planAgentRetry(
     verificationMilestone: question
       ? (question.verification_milestone ?? undefined)
       : (failure.verificationMilestone ?? failure.question?.verification_milestone ?? undefined),
+    ...(failure.sourceAnalysis ? { sourceAnalysis: true } : {}),
   };
   if (
     request.verificationMilestone &&

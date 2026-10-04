@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .plan_contracts import PlanContract
+
 
 def uid() -> str:
     return uuid4().hex[:16]
@@ -396,6 +398,8 @@ class Project(Model):
     is_demo: bool = False
     archived: bool = False
     creation_key: str = ""
+    unified_planning: bool = False
+    plan_contract: PlanContract = Field(default_factory=PlanContract)
     target_draft: str | None = None
     revision: int = 0
     created_at: str = Field(default_factory=now)
