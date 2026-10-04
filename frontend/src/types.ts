@@ -323,6 +323,13 @@ export interface PlanValidationReceipt {
   };
   harness?: PlanHarnessDisclosure;
 }
+export interface PlanSemanticIssue {
+  id: string;
+  subjects: string[];
+  verdict: 'contradicted' | 'unknown';
+  reason: string;
+  counterexample: string;
+}
 export interface PlanCandidate {
   id: string;
   generation_progress?: {
@@ -348,8 +355,15 @@ export interface PlanCandidate {
   current_harness_policy_version?: string;
   applied_revision?: number;
   turn_summary?: TurnSummary;
+  inherited_semantic_findings?: {
+    source_candidate_id: string;
+    candidate_hash: string;
+    applicability: 'historical_needs_recheck';
+    issues: PlanSemanticIssue[];
+  } | null;
   report: {
     findings: { code: string; subject: string; message: string; severity?: 'error' | 'review' }[];
+    semantic_batch?: { candidate_hash: string; issues: PlanSemanticIssue[] };
     semantic?: {
       candidate_hash?: string;
       checks: {

@@ -1,4 +1,10 @@
-import type { PlanCandidate, PlanHarnessDisclosure, PlanRequirement, Project } from '../types';
+import type {
+  PlanCandidate,
+  PlanHarnessDisclosure,
+  PlanRequirement,
+  PlanSemanticIssue,
+  Project,
+} from '../types';
 
 export const candidateStatus: Record<PlanCandidate['status'], string> = {
   generating: '正在生成',
@@ -83,6 +89,47 @@ function harnessCheckDisclosure(check: PlanHarnessDisclosure['checks'][number]) 
   };
 }
 
+function historicalModelOpinion(candidate: PlanCandidate) {
+  const review = candidate.report?.semantic;
+  const inherited = candidate.inherited_semantic_findings;
+  if (review?.candidate_hash && review.candidate_hash === candidate.candidate_hash) return;
+  if (!review && inherited?.applicability !== 'historical_needs_recheck') return;
+  const batch = candidate.report?.semantic_batch;
+  // Structured batch IDs avoid repeating one issue for every affected review subject.
+  // Legacy normalized rows have no issue IDs; group identical opinions without parsing model prose.
+  const rows: PlanSemanticIssue[] = review
+    ? batch && batch.candidate_hash === review.candidate_hash
+      ? batch.issues
+      : review.checks
+          .filter((check) => check.verdict === 'contradicted' || check.verdict === 'unknown')
+          .map((check) => ({
+            id: '',
+            subjects: [check.subject],
+            verdict: check.verdict as PlanSemanticIssue['verdict'],
+            reason: check.reason,
+            counterexample: check.counterexample,
+          }))
+    : inherited!.issues;
+  const unique = new Map<string, PlanSemanticIssue>();
+  for (const issue of rows) {
+    if (issue.verdict !== 'contradicted' && issue.verdict !== 'unknown') continue;
+    const key = issue.id || JSON.stringify([issue.verdict, issue.reason, issue.counterexample]);
+    const previous = unique.get(key);
+    unique.set(
+      key,
+      previous
+        ? { ...previous, subjects: [...new Set([...previous.subjects, ...issue.subjects])] }
+        : { ...issue, subjects: [...new Set(issue.subjects)] },
+    );
+  }
+  if (!unique.size) return;
+  return {
+    sourceCandidateId: review ? candidate.id : inherited!.source_candidate_id,
+    fingerprint: review ? (review.candidate_hash ?? '') : inherited!.candidate_hash,
+    issues: [...unique.entries()].map(([key, issue]) => ({ ...issue, key })),
+  };
+}
+
 export function planReviewDisclosure(candidate?: PlanCandidate | null, canonicalRevision?: number) {
   const application = candidate ? candidateApplication(candidate) : 'unknown';
   const matchesView = Boolean(
@@ -116,8 +163,15 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
       review.candidate_hash === candidate?.candidate_hash &&
       review.checks.length,
     );
+  const history =
+    candidate &&
+    canonicalRevision === undefined &&
+    application !== 'noop' &&
+    !['no_issue_found', 'issues'].includes(receipt?.model.status ?? '')
+      ? historicalModelOpinion(candidate)
+      : undefined;
   let structural = '未提供与此版本对应的独立结构检查记录；状态未知';
-  if (receipt?.structural.status === 'not_run') structural = '本轮尚未进行结构检查';
+  if (receipt?.structural.status === 'not_run') structural = '当前候选尚未进行结构检查';
   if (receipt?.structural.status === 'clear')
     structural = '结构检查未发现问题；不代表语义正确或实现已验证';
   if (receipt?.structural.status === 'issues')
@@ -130,12 +184,16 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
   if (receipt?.model.kind === 'model_opinion') {
     if (receipt.model.status === 'not_run') {
       const pending = candidate && ['generating', 'reviewing'].includes(candidate.status);
-      label = pending ? '尚无模型评审结果' : '模型评审未运行';
-      semantic = pending ? '本轮尚无模型评审结果，不能据此判断方案正确性' : '本轮未进行模型评审';
+      label = history ? '当前候选待复核' : pending ? '当前候选尚无模型结论' : '当前候选尚未评审';
+      semantic = history
+        ? '当前候选尚无模型评审结论；此前意见需结合当前版本重新核对'
+        : pending
+          ? '当前候选尚无模型评审结果，不能据此判断方案正确性'
+          : '当前候选尚未进行模型评审';
     }
     if (receipt.model.status === 'unavailable') {
       label = '模型评审未完成';
-      semantic = '本轮模型评审不可用，不能据此判断方案正确性';
+      semantic = '当前候选模型评审未完成，不能据此判断方案正确性';
     }
     if (application !== 'noop' && ['no_issue_found', 'issues'].includes(receipt.model.status)) {
       label = '模型评审，可能遗漏问题';
@@ -173,6 +231,7 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
   return {
     label: harness ? (previousPolicy ? '历史检查记录 · 策略已更新' : '程序检查 · 模型意见') : label,
     harness,
+    history,
     structural,
     semantic,
     legacyNotice,

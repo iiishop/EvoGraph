@@ -353,7 +353,7 @@ class UnifiedPlanningService:
             ))
             metrics = {"provider_calls": 0, "tokens": 0, "elapsed_seconds": 0, "usage_reported": False,
                 "budget": {"max_calls": 5, "max_request_bytes": 131072,
-                           "max_review_request_bytes": 147456,
+                           "max_review_request_bytes": 163840,
                            "max_total_input_bytes": 393216, "max_output_bytes": 98304,
                            "call_timeout_seconds": 180}}
             record = {

@@ -233,7 +233,32 @@ onBeforeUnmount(() => {
         <p v-if="evidence.harness" class="plan-review-policy">
           {{ evidence.harness.decisionLabel }}
         </p>
-        <p v-if="evidence.legacyNotice" class="plan-review-legacy">{{ evidence.legacyNotice }}</p>
+        <p v-if="evidence.legacyNotice && !evidence.history" class="plan-review-legacy">
+          {{ evidence.legacyNotice }}
+        </p>
+        <details
+          v-if="evidence.history"
+          :key="`${evidence.history.sourceCandidateId}:${evidence.history.fingerprint}`"
+          class="plan-review-history"
+        >
+          <summary>此前模型意见 · {{ evidence.history.issues.length }} 项待复核</summary>
+          <p>以下是历史意见，尚未针对当前候选复核，不代表当前版本仍有这些问题或已通过检查。</p>
+          <p>
+            来源候选 {{ evidence.history.sourceCandidateId }} · 原评审指纹
+            {{ evidence.history.fingerprint || '未记录' }}
+          </p>
+          <ul>
+            <li v-for="issue in evidence.history.issues" :key="issue.key">
+              <strong
+                >{{ issue.id ? `${issue.id} · ` : ''
+                }}{{ issue.verdict === 'contradicted' ? '当时发现矛盾' : '当时尚无法判断' }}</strong
+              >
+              <p>{{ issue.subjects.join(' · ') }}</p>
+              <p>{{ issue.reason }}</p>
+              <p v-if="issue.counterexample">反例：{{ issue.counterexample }}</p>
+            </li>
+          </ul>
+        </details>
         <p class="plan-review-source">
           {{ evidence.source
           }}<span v-if="evidence.fingerprint" :title="evidence.fingerprint">
@@ -342,6 +367,26 @@ onBeforeUnmount(() => {
 }
 .plan-review-policy {
   margin: 10px 0 0;
+}
+.plan-review-history {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+.plan-review-history > summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.plan-review-history p {
+  margin: 5px 0 0;
+}
+.plan-review-history ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+.plan-review-history li + li {
+  margin-top: 10px;
 }
 .plan-review-identity {
   margin-top: 6px;

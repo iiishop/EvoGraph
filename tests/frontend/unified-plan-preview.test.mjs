@@ -716,7 +716,7 @@ test('in-flight candidates distinguish pending model results from terminal not-r
   candidate.validation_receipt.model.status = 'not_run';
   for (const status of ['generating', 'reviewing']) {
     const info = planReviewDisclosure({ ...candidate, status });
-    assert.equal(info.label, '尚无模型评审结果');
+    assert.equal(info.label, '当前候选尚无模型结论');
     assert.match(info.semantic, /尚无模型评审结果/);
     assert.doesNotMatch(info.semantic, /未进行模型评审/);
   }
@@ -726,8 +726,8 @@ test('in-flight candidates distinguish pending model results from terminal not-r
     applied_revision: candidate.base_revision,
     turn_summary: { changed: false },
   });
-  assert.equal(noop.label, '模型评审未运行');
-  assert.equal(noop.semantic, '本轮未进行模型评审');
+  assert.equal(noop.label, '当前候选尚未评审');
+  assert.equal(noop.semantic, '当前候选尚未进行模型评审');
 });
 
 test('formal view always exposes a compact review disclosure and candidate changes close old details', async () => {
@@ -788,7 +788,7 @@ test('version-bound receipt distinguishes checks, model opinions and this-turn e
   assert.match(planReviewDisclosure(stale, 6).structural, /状态未知/);
   assert.match(planReviewDisclosure(stale, 6).implementation, /运行状态未知/);
   for (const [status, expected] of [
-    ['not_run', '模型评审未运行'],
+    ['not_run', '当前候选尚未评审'],
     ['unavailable', '模型评审未完成'],
     ['issues', '模型评审，可能遗漏问题'],
   ]) {

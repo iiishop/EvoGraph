@@ -527,6 +527,20 @@ def carry_review_findings(previous):
     }
 
 
+def _context_sources(project):
+    """Transmit each exact source text once; keep every source's own metadata."""
+    sources, first = [], {}
+    for source in project.plan_contract.sources:
+        row = source.model_dump(exclude={"activity"})
+        if source.text in first:
+            row.pop("text")
+            row["same_text_as_source_id"] = first[source.text]
+        else:
+            first[source.text] = source.id
+        sources.append(row)
+    return sources
+
+
 def _initial_unit_context(db, project, objects):
     inactive = {}
     active_keys = {key.split(":", 1)[1] for key in objects if key.startswith("contract:")}
@@ -558,7 +572,9 @@ def _initial_unit_context(db, project, objects):
     return {"project_id": project.id, "revision": project.revision, "candidate_hash": candidate_hash(project),
             "manifest_field_catalog": manifest_field_catalog(),
             "manifest_field_note": "Use only this PlanDelta catalog, not rich Project/UI fields. Required_new applies only to new IDs; existing omissions retain data. source_id is an exact source anchor, not a uses graph reference.",
-            "sources": [s.model_dump(exclude={"activity"}) for s in project.plan_contract.sources],
+            "sources": _context_sources(project),
+            "source_text_note": "same_text_as_source_id reuses the exact literal text of that earlier source in this snapshot. "
+                                "Resolve it before quoting; IDs and all other metadata remain independent. No source text is omitted.",
             "requirements": [r.model_dump() for r in project.plan_contract.requirements],
             "process_constraints": [c.model_dump() for c in project.plan_contract.process_constraints],
             "target": project.targets[-1].model_dump() if project.targets else None,
@@ -604,6 +620,15 @@ def current_unit_context(db):
                                   "instruction": "Submit exactly these record identities as one complete PlanDelta. Listed fields are intent/size hints: update any necessary canonical field on those records, including a mechanism contradicted by the new acceptance. Preserve unchanged fields. Uses guides ordering and context, not reference authorization; existing legal objects may be linked, while all references still require compiler validation. Do not add records assigned to later units. Never submit the whole manifest as a full plan."}
         result["completed_contract_mechanisms"] = [item for item in result["completed_contract_mechanisms"]
                                                   if _key("contract", item["key"]) not in keys]
+        architecture = result["current_unit"]["objects"].get("architecture:architecture")
+        if architecture is not None:
+            nodes = {node["id"]: node for node in architecture["diagram"]["nodes"]}
+            if all(all(nodes.get(c["id"], {}).get(k) == v for k, v in c.items())
+                   for c in result["components"]):
+                # The complete current architecture already contains these
+                # exact node facts. Keep the directory without repeating them.
+                result["components"] = [{"id": c["id"], "label": c["label"]} for c in result["components"]]
+                result["components_note"] = "Complete current component facts are in current_unit.objects['architecture:architecture'].diagram.nodes, joined by id. Directory text is not a replacement for those exact nodes."
     else:
         result["current_unit"] = None
     result["completed_unit_facts"] = deepcopy(schedule["checkpoints"])

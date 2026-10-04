@@ -417,7 +417,12 @@ async function discard() {
     <footer class="candidate-footer">
       <span>{{ candidate.id }}</span
       ><span
-        >请求尝试 {{ candidate.metrics?.provider_calls ?? 0 }} 次 ·
+        >{{
+          live && candidate.status === 'reviewing'
+            ? '检查进行中 · 请求次数待更新'
+            : `请求尝试 ${candidate.metrics?.provider_calls ?? 0} 次`
+        }}
+        ·
         {{
           candidate.metrics?.usage_reported
             ? `已报告 ${candidate.metrics.tokens} tokens`
