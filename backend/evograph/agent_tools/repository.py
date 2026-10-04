@@ -2,6 +2,7 @@ import hashlib
 
 from pydantic import Field
 
+from ..domain.behavior_lifecycle import behavior_lifecycle
 from ..domain.models import Model
 from ..infrastructure.repository import EXCLUDED, context, readable, root_path
 from .base import tool
@@ -22,13 +23,13 @@ class ReadFile(Model):
 
 @tool(
     "read_project",
-    "Read current target, milestones, behavior revisions and baseline. Each milestone's dependencies lists the prerequisites it needs first, not its dependents: B.dependencies=[A] means B needs A, drawn A -> B. Always use actual stable IDs when editing.",
+    "Read current milestones and baseline plus target and behavior revision histories. behavior_lifecycle identifies revisions active by current milestone references and historical-only keys independently of acceptance_scope or past targets. Historical records are not current requirements. Each milestone's dependencies lists the prerequisites it needs first, not its dependents: B.dependencies=[A] means B needs A, drawn A -> B. Always use actual stable IDs when editing.",
     Empty,
     label="读取当前规划",
 )
 def read_project(ctx, args):
     p = ctx.application.db.get(ctx.project_id)
-    return p.model_dump(
+    result = p.model_dump(
         include={
             "name",
             "description",
@@ -47,6 +48,8 @@ def read_project(ctx, args):
             "research",
         }
     )
+    result["behavior_lifecycle"] = behavior_lifecycle(p)
+    return result
 
 
 @tool(

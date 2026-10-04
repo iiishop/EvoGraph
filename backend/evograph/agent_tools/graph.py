@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -47,28 +47,67 @@ class Target(Model):
     statement: str = Field(min_length=1, max_length=4000)
 
 
+class MilestoneEdit(ProposedMilestone):
+    restore_inactive_behavior_keys: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+        default_factory=list, max_length=12,
+        description=(
+            "Explicitly acknowledge reintroducing these historical-only behavior keys. "
+            "Use only when the CURRENT user goal or an explicit re-enable request supports "
+            "restoration, never merely to clear a validation error. This is not proof of user "
+            "authorization. Preserving current scope means retaining active behaviors, not "
+            "restoring historical ones. No automatic user question is required. Specify the "
+            "intended acceptance_scope to change it when restoring; omission preserves the "
+            "latest historical revision's scope. Submitted already-active historical keys "
+            "are allowed for safe retries and do not count as another restoration."
+        ),
+    )
+
+    def definition(self):
+        # Preserve nested field presence, especially omitted active scopes and
+        # prerequisites. This tool-only acknowledgment is never persisted.
+        return ProposedMilestone.model_validate(self.model_dump(
+            exclude={"restore_inactive_behavior_keys"}, exclude_unset=True,
+        ))
+
+
+RESTORATION_GUIDANCE = (
+    " Only revisions referenced by current milestones are active; the behaviors collection "
+    "also contains history. Historical-only keys require restore_inactive_behavior_keys when "
+    "the current user goal or explicit re-enable supports restoration. Do not mechanically "
+    "add keys after an error or restore history while merely preserving current scope. "
+    "The acknowledgment is not proof of user authorization. Check the factual "
+    "restored_inactive_behaviors receipt and its saved scopes."
+)
+
+
 @tool(
     "create_milestone",
-    "Create one independently verifiable milestone in the current graph. Dependencies must already exist. Behavior keys must be unique across active nodes. Set behavior acceptance_scope to target for requirements at completion of the current user-approved goal, including its exclusions, or milestone for local/transitional checks outside that goal's final contract. Deferred features stay excluded unless the user adds them. Both remain mandatory milestone acceptance; new behaviors default to target.",
-    ProposedMilestone,
+    "Create one independently verifiable milestone in the current graph. Dependencies must already exist. Behavior keys must be unique across active nodes. Set behavior acceptance_scope to target for requirements at completion of the current user-approved goal, including its exclusions, or milestone for local/transitional checks outside that goal's final contract. Deferred features stay excluded unless the user adds them. Both remain mandatory milestone acceptance; new behaviors default to target." + RESTORATION_GUIDANCE,
+    MilestoneEdit,
     label="创建里程碑",
     effect="created",
     focus_field="id",
 )
 def create_milestone(ctx, args):
-    return ctx.application.graph.upsert(ctx.project_id, args, create=True)
+    return ctx.application.graph.upsert(
+        ctx.project_id, args.definition(), create=True,
+        restore_inactive_behavior_keys=args.restore_inactive_behavior_keys,
+    )
 
 
 @tool(
     "update_milestone",
-    "Update an existing milestone in place. Supply the node's required definition fields. Omit dependencies to retain its current prerequisites; an explicit list replaces them, including [] to clear. Omit dependency_reasons to retain reasons for surviving edges; an explicit map replaces all reasons and must cover every prerequisite. New prerequisites need reasons. Existing edge types are retained. Check the receipt's saved prerequisites; turn finalization may remove transitively redundant edges. Preserve stable id and unchanged behavior keys; changed statements or acceptance_scope create revisions. Preserve existing scopes: omitted acceptance_scope retains the active behavior's scope, while new behaviors default to target. Both scopes remain mandatory milestone acceptance.",
-    ProposedMilestone,
+    "Update an existing milestone in place. Supply the node's required definition fields. Omit dependencies to retain its current prerequisites; an explicit list replaces them, including [] to clear. Omit dependency_reasons to retain reasons for surviving edges; an explicit map replaces all reasons and must cover every prerequisite. New prerequisites need reasons. Existing edge types are retained. Check the receipt's saved prerequisites; turn finalization may remove transitively redundant edges. Preserve stable id and unchanged behavior keys; changed statements or acceptance_scope create revisions. Preserve existing scopes: omitted acceptance_scope retains the active behavior's scope, while new behaviors default to target. Both scopes remain mandatory milestone acceptance." + RESTORATION_GUIDANCE,
+    MilestoneEdit,
     label="更新里程碑",
     effect="updated",
     focus_field="id",
 )
 def update_milestone(ctx, args):
-    return ctx.application.graph.upsert(ctx.project_id, args, create=False)
+    return ctx.application.graph.upsert(
+        ctx.project_id, args.definition(), create=False,
+        restore_inactive_behavior_keys=args.restore_inactive_behavior_keys,
+    )
 
 
 @tool(

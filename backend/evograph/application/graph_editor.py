@@ -1,5 +1,6 @@
 """Incremental graph edits, checked and persisted before broadcasting to the UI."""
 
+from ..domain.behavior_lifecycle import behavior_lifecycle
 from ..domain.dependencies import ancestor_sets, reduce_dependencies
 from ..domain.models import (
     BehaviorRevision,
@@ -109,7 +110,10 @@ class GraphEditor:
             ),
         )
 
-    def upsert(self, project_id: str, proposed: ProposedMilestone, create: bool):
+    def upsert(
+        self, project_id: str, proposed: ProposedMilestone, create: bool,
+        *, restore_inactive_behavior_keys: list[str] | None = None,
+    ):
         if proposed.id.startswith("SRC_"):
             raise ValueError("SRC_ 是源码观察节点的保留命名空间，请为交付节点使用独立 ID")
         p = self.db.get(project_id)
@@ -122,6 +126,30 @@ class GraphEditor:
             )
         if old and old.lease_active:
             raise ValueError("该节点已领取，请先释放后修改")
+        inactive_keys = set(behavior_lifecycle(p)["inactive_behavior_keys"])
+        restoring = [b.key for b in proposed.behaviors if b.key in inactive_keys]
+        # The model-facing tools require explicit lifecycle intent. None preserves
+        # the existing lower-level API; the separate full-plan route is unchanged.
+        if restore_inactive_behavior_keys is not None:
+            submitted_keys = {b.key for b in proposed.behaviors}
+            historical_keys = {b.behavior_key for b in p.behaviors}
+            if len(restore_inactive_behavior_keys) != len(set(restore_inactive_behavior_keys)):
+                raise ValueError("restore_inactive_behavior_keys 不能重复")
+            if set(restore_inactive_behavior_keys) - submitted_keys:
+                raise ValueError("restore_inactive_behavior_keys 只能引用本次提交的行为 key")
+            if set(restore_inactive_behavior_keys) - historical_keys:
+                raise ValueError("restore_inactive_behavior_keys 只能引用已有历史的行为 key")
+            missing = set(restoring) - set(restore_inactive_behavior_keys)
+            if missing:
+                raise ValueError(
+                    "这些行为仅在历史中，当前没有活跃引用：" + ", ".join(sorted(missing))
+                    + "。保留当前范围时请从 behaviors 中省略它们；只有当前用户目标或明确重新启用"
+                    "要求支持恢复时，才将对应 key 加入 restore_inactive_behavior_keys。"
+                    "不要为消除报错机械添加标记；该标记不是用户授权证明，也不要求自动询问用户。"
+                )
+        previous_revisions = {
+            b.behavior_key: b for b in p.behaviors if b.behavior_key in restoring
+        }
         architecture = p.architectures[-1] if p.architectures else None
         architecture_components = resolve_architecture_components(p, proposed, old)
         if set(proposed.attachment_ids) - {a.id for a in p.attachments}:
@@ -148,6 +176,12 @@ class GraphEditor:
                 and behavior.key in existing_behaviors
             ):
                 scope = existing_behaviors[behavior.key].acceptance_scope
+            elif (
+                "acceptance_scope" not in behavior.model_fields_set
+                and behavior.key in previous_revisions
+                and restore_inactive_behavior_keys is not None
+            ):
+                scope = previous_revisions[behavior.key].acceptance_scope
             versions = [b for b in p.behaviors if b.behavior_key == behavior.key]
             latest = versions[-1] if versions else None
             if (
@@ -225,6 +259,17 @@ class GraphEditor:
         return {
             "node_ids": [node.id],
             "effect": "created" if create else "updated",
+            "restored_inactive_behaviors": [
+                {
+                    "behavior_key": b.behavior_key,
+                    "previous_revision_id": previous_revisions[b.behavior_key].id,
+                    "saved_revision_id": b.id,
+                    "previous_acceptance_scope": previous_revisions[b.behavior_key].acceptance_scope,
+                    "saved_acceptance_scope": b.acceptance_scope,
+                    "state": "saved_active",
+                }
+                for b in p.behaviors if b.id in bids and b.behavior_key in previous_revisions
+            ],
             "dependency": {
                 "dependent_id": node.id,
                 "dependent_title": node.title,
