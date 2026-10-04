@@ -16,7 +16,7 @@ from ..domain.policies import (
     resolve_architecture_components,
     validate_milestones,
 )
-from ..domain.target_contract import required_target_behavior_ids
+from ..domain.target_contract import target_finalization
 
 
 class GraphEditor:
@@ -367,27 +367,21 @@ class GraphEditor:
     def finalize(self, project_id: str):
         removed = self.normalize(project_id)
         p = self.db.get(project_id)
-        if not p.milestones and not p.targets and not p.target_draft:
+        decision = target_finalization(p)
+        if decision is None:
             return removed
-        required = required_target_behavior_ids(p.milestones, p.behaviors)
-        statement = p.target_draft or (
-            p.targets[-1].statement if p.targets else p.description or p.name
-        )
-        if (
-            not p.targets
-            or required != p.targets[-1].required_behavior_ids
-            or statement != p.targets[-1].statement
-        ):
+        if decision.creates_version:
             p.targets.append(
                 TargetVersion(
-                    number=len(p.targets) + 1, statement=statement, required_behavior_ids=required
+                    number=decision.number, statement=decision.statement,
+                    required_behavior_ids=decision.required_behavior_ids,
                 )
             )
             if p.plans:
                 p.plans[-1].target_version = p.targets[-1].number
             p.target_draft = None
-            self.db.save(p, "target_committed", statement)
+            self.db.save(p, "target_committed", decision.statement)
         elif p.target_draft is not None:
             p.target_draft = None
-            self.db.save(p, "target_unchanged", statement)
+            self.db.save(p, "target_unchanged", decision.statement)
         return removed

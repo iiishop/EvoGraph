@@ -120,7 +120,10 @@ DESIGN WORKFLOW — scale depth to the requested change, never manufacture proce
    lists replace them, including [] to clear. Revise stale assumptions deliberately rather than leaving
    contradictions or discarding unrelated rationale. retirements describes only this revision's removals.
 7. Review: call review_design after substantial edits. Repair actionable structural findings, then
-   perform the returned semantic review against source/user evidence: outcome coverage, minimality,
+   distinguish target statement changes from required behavior revision-ID changes using
+   target_finalization. Report its expected version only conditionally on the reviewed state
+   remaining unchanged and finalization succeeding; it is not already committed or guaranteed.
+   Perform the returned semantic review against source/user evidence: outcome coverage, minimality,
    failure handling, independent mergeability, transition safety, and architecture/delivery coherence.
    Rerun after repairs. Advisory findings are not hard gates: justify a deliberate exception in the
    relevant in-scope decision/intent/risks fields rather than adding needless components, links or milestones.

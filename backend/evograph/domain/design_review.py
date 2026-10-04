@@ -3,6 +3,7 @@
 from collections.abc import Callable
 
 from .models import Project
+from .target_contract import target_finalization_preview
 
 RULES: list[Callable] = []
 
@@ -217,6 +218,7 @@ def review_design(project: Project):
         "status": "needs_review" if findings else "structural_checks_clear",
         "findings": findings,
         "semantic_review": SEMANTIC_REVIEW,
+        "target_finalization": target_finalization_preview(project),
         "prospective_target_membership": {
             "basis": "当前活跃行为的 acceptance_scope；本轮收尾据此生成当前用户确认目标的最终契约，已推迟的功能除非用户加入否则仍在范围外；不依据叶子节点或可选文字标签。",
             "target_behavior_count": sum(row["target_behavior_count"] for row in membership),
