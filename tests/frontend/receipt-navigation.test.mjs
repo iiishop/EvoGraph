@@ -25,15 +25,15 @@ const compile = (source) =>
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
 const envUrl = url(`import { reactive, computed, h } from ${JSON.stringify(vue)};
-export const env = { state: reactive({ page: 'projects', project: { id: 'P', milestones: [{ id: 'A', origin: 'plan' }, { id: 'B', origin: 'plan' }], source_milestones: [] }, selectedId: null }), locates: [], free: [], target: 'A' };
-export const Graph = { setup(_, { expose }) { expose({ locate: id => env.locates.push(id), fit() {}, reset() {} }); return () => h('div', { class: 'test-graph' }); } };
+export const env = { state: reactive({ page: 'projects', project: { id: 'P', milestones: [{ id: 'A', origin: 'plan' }, { id: 'B', origin: 'plan' }], source_milestones: [] }, selectedId: null }), locates: [], free: [], receipts: [], receiptCallback: null, target: 'A' };
+export const Graph = { emits: ['receipt'], setup(_, { expose, emit }) { expose({ locate: id => env.locates.push(id), fit() {}, reset() {} }); env.receiptCallback = (id, trigger) => emit('receipt', id, trigger); return () => h('div', { class: 'test-graph' }); } };
 export const workspaceViews = [{ id: 'graph', component: Graph }, { id: 'architecture', component: { render() { return h('div', { class: 'test-architecture' }); } } }];
 const tab = reactive({ value: 'graph' });
 export const useWorkspace = () => ({ bindWorkspaceTab: () => ({ key: 'P', tab: computed({ get: () => tab.value, set: value => { tab.value = value; } }) }), state: env.state, selected: computed(() => env.state.project.milestones.find(m => m.id === env.state.selectedId)), selectNode: id => env.state.selectedId = id });
 export const useAgent = () => ({ state: reactive({ projectId: '', follow: {}, navigationTick: 0 }), freeView: id => env.free.push(id), resumeFollow() {} });
 export const useEntrance = () => {};
 export const Toolbar = { emits: ['tab'], setup(_, { emit }) { return () => h('button', { class: 'tab-other', onClick: () => emit('tab', 'architecture') }, 'architecture'); } };
-export const Dock = { emits: ['locate'], setup(_, { emit }) { return () => h('button', { class: 'receipt-link', onClick: () => emit('locate', env.target) }, 'locate'); } };
+export const Dock = { emits: ['locate'], setup(_, { emit, expose }) { expose({ openReceipt: (id, trigger) => env.receipts.push({ id, trigger }) }); return () => h('button', { class: 'receipt-link', onClick: () => emit('locate', env.target) }, 'locate'); } };
 export const Inspector = { emits: ['locate'], setup(_, { emit }) { return () => h('button', { class: 'dependency-link', onClick: () => emit('locate', 'B') }, 'dependency'); } };`);
 const { env } = await import(envUrl);
 const stub = url('export default { render() { return null; } };');
@@ -179,4 +179,36 @@ test('a newer receipt or node selection supersedes an awaiting locate tick', asy
   await flush();
   assert.deepEqual(env.locates, ['B']);
   view.dispose();
+});
+
+test('workspace routes historical event identity and origin to its existing dock, rejecting stale project actions', async () => {
+  env.state.selectedId = null;
+  env.state.page = 'projects';
+  env.receipts = [];
+  const originalProject = env.state.project;
+  const view = mount(Workspace, { project: originalProject });
+  try {
+    const origin = view.root.querySelector('.test-graph');
+    const callback = env.receiptCallback;
+    callback('chosen-terminal-event', origin);
+    await flush();
+    assert.deepEqual(env.receipts, [{ id: 'chosen-terminal-event', trigger: origin }]);
+    env.state.project = { ...originalProject, id: 'other' };
+    callback('late-foreign-event', origin);
+    await flush();
+    assert.equal(env.receipts.length, 1);
+    env.state.project = { ...originalProject, created_at: 'recreated' };
+    callback('late-incarnation-event', origin);
+    await flush();
+    assert.equal(env.receipts.length, 1);
+    env.state.project = originalProject;
+    env.state.page = 'settings';
+    callback('late-settings-event', origin);
+    await flush();
+    assert.equal(env.receipts.length, 1);
+  } finally {
+    view.dispose();
+    env.state.project = originalProject;
+    env.state.page = 'projects';
+  }
 });

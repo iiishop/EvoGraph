@@ -330,14 +330,14 @@ test('saved-change trigger sits above composer and remains unavailable during a 
   Object.assign(agent.state, { running: true, projectId: 'P1' });
   try {
     html = await render(AgentDock, { project: project() });
-    assert.doesNotMatch(html, /最近变更/);
+    assert.doesNotMatch(html, /<button\b[^>]*id="[^"]*-receipt-trigger"/);
   } finally {
     Object.assign(agent.state, { running: false, projectId: '' });
   }
   html = await render(AgentDock, {
     project: project({ events: [event(undefined, { detail: 'old format' })] }),
   });
-  assert.doesNotMatch(html, /最近变更/);
+  assert.doesNotMatch(html, /<button\b[^>]*id="[^"]*-receipt-trigger"/);
 });
 
 test('receipt content is escaped, bounded, focus-neutral and reduced-motion safe', async () => {

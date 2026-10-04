@@ -109,6 +109,59 @@ export function parseTurnSummary(detail: string): TurnSummary | null {
   }
 }
 
+export interface TurnReceiptSelection {
+  projectId: string;
+  projectCreatedAt: string;
+  eventId: string;
+  createdAt: string;
+  detail: string;
+}
+type ReceiptProject = Pick<Project, 'id' | 'created_at' | 'events'>;
+
+/** Capture the chosen persisted event, never an index or the latest turn. */
+export function selectTurnReceipt(
+  project: ReceiptProject,
+  eventId: string,
+): TurnReceiptSelection | null {
+  const matches = (project.events ?? []).filter(
+    (event) => event.id === eventId && event.kind === 'agent_turn_finished',
+  );
+  if (matches.length !== 1) return null;
+  const event = matches[0];
+  return {
+    projectId: project.id,
+    projectCreatedAt: project.created_at,
+    eventId: event.id,
+    createdAt: event.created_at,
+    detail: event.detail,
+  };
+}
+
+/** Refresh may trim history. Keep that selection unavailable rather than substituting another. */
+export function readTurnReceipt(project: ReceiptProject, selected: TurnReceiptSelection) {
+  const unavailable = (message: string) => ({ summary: null, unavailable: message });
+  if (project.id !== selected.projectId || project.created_at !== selected.projectCreatedAt)
+    return unavailable('项目已切换，无法读取此历史回执');
+  const matches = (project.events ?? []).filter((event) => event.id === selected.eventId);
+  const event = matches.length === 1 ? matches[0] : undefined;
+  if (
+    !event ||
+    event.kind !== 'agent_turn_finished' ||
+    event.created_at !== selected.createdAt ||
+    event.detail !== selected.detail
+  )
+    return unavailable('所选历史回执已不在当前记录中，无法读取');
+  const summary = parseTurnSummary(event.detail);
+  if (!summary) return unavailable('这条历史记录未保存可读取的完整回执');
+  const identity = summary.contract_details;
+  if (
+    identity &&
+    (identity.project_id !== project.id || identity.project_created_at !== project.created_at)
+  )
+    return unavailable('回执与当前项目历史不匹配，无法读取');
+  return { summary, unavailable: '' };
+}
+
 /** Events are newest first. Never substitute an older successful turn. */
 export function latestTurnSummary(
   source: Pick<Project, 'events' | 'messages'> | ProjectEvent[],

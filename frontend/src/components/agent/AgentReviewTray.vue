@@ -4,7 +4,14 @@ import { ChevronUp, X } from 'lucide-vue-next';
 import MessageContent from './MessageContent.vue';
 import { markdownTextPreview } from './MarkdownContent';
 import AgentTurnSummary from './AgentTurnSummary.vue';
-import { turnSummaryHeadline, turnSummaryStatus } from '../../lib/turnSummary';
+import {
+  parseTurnSummary,
+  readTurnReceipt,
+  selectTurnReceipt,
+  turnSummaryHeadline,
+  turnSummaryStatus,
+  type TurnReceiptSelection,
+} from '../../lib/turnSummary';
 import type { Project, TurnSummary } from '../../types';
 
 const props = defineProps<{
@@ -25,6 +32,7 @@ const receiptTrigger = ref<HTMLButtonElement>();
 const layer = ref<HTMLElement>();
 const surface = ref<HTMLElement>();
 const history = ref<HTMLElement>();
+const receiptReader = ref<HTMLElement>();
 const surfaceFill = ref<HTMLElement>();
 const surfaceContent = ref<HTMLElement>();
 const surfaceHeading = ref<HTMLElement>();
@@ -34,8 +42,35 @@ const active = ref<Review | null>(null);
 const shown = ref<Review | null>(null);
 const tileShown = ref<Review | null>(null);
 const placement = ref<Placement | null>(null);
+const selectedReceipt = ref<TurnReceiptSelection | null>(null);
+let receiptOrigin: HTMLElement | undefined;
+let resetReceiptScroll = false;
+const selectedRead = computed(() =>
+  selectedReceipt.value ? readTurnReceipt(props.project, selectedReceipt.value) : null,
+);
+const readingSummary = computed(() =>
+  selectedRead.value ? selectedRead.value.summary : props.running ? null : props.summary,
+);
+const receiptTitle = computed(() => (selectedReceipt.value ? '历史变更' : '最近变更'));
+const receiptContext = computed(() => {
+  const selected = selectedReceipt.value;
+  if (!selected) return '';
+  const saved = parseTurnSummary(selected.detail);
+  const date = new Date(selected.createdAt);
+  const time = Number.isNaN(date.valueOf())
+    ? '时间未记录'
+    : `${date
+        .toISOString()
+        .replace('T', ' ')
+        .replace(/\.\d{3}Z$/, '')} UTC`;
+  return saved
+    ? `${time} · 回合 ${saved.turn_id} · 版本 ${saved.before_revision} → ${saved.after_revision}`
+    : `${time} · 事件 ${selected.eventId} · 回合与版本信息不可用`;
+});
 const hasReply = computed(() => props.project.messages.length > 0);
-const hasReceipt = computed(() => Boolean(props.summary && !props.running));
+const hasReceipt = computed(() =>
+  Boolean(selectedReceipt.value || (props.summary && !props.running)),
+);
 const latestReply = computed(() =>
   props.project.messages.filter((message) => message.role === 'assistant').at(-1),
 );
@@ -47,6 +82,47 @@ const replyPreview = computed(() => {
   return text ? `已保存 · ${text.slice(0, 160)}` : '查看已发送的请求';
 });
 const trigger = (kind: Review) => (kind === 'reply' ? replyTrigger.value : receiptTrigger.value);
+function composerControl() {
+  return strip.value
+    ?.closest('.agent-dock')
+    ?.querySelector<HTMLElement>('[contenteditable="true"], textarea, input');
+}
+function focusTrigger(kind: Review) {
+  const origin = kind === 'receipt' ? receiptOrigin : undefined;
+  const controls = [origin, trigger(kind), replyTrigger.value, composerControl()];
+  const control = controls.find(
+    (candidate) =>
+      candidate?.isConnected &&
+      !candidate.matches(':disabled') &&
+      !candidate.closest('[inert]') &&
+      // A history-only tile disappears as soon as this selection is released.
+      !(
+        candidate === receiptTrigger.value &&
+        selectedReceipt.value &&
+        (!props.summary || props.running)
+      ),
+  );
+  control?.focus({ preventScroll: true });
+}
+function releaseSelection() {
+  if (active.value || shown.value) return;
+  if (selectedReceipt.value) resetReceiptScroll = true;
+  selectedReceipt.value = null;
+  receiptOrigin = undefined;
+}
+async function openReceipt(eventId: string, origin: HTMLElement) {
+  const selected = selectTurnReceipt(props.project, eventId);
+  if (!mounted || !selected || props.disabled) return;
+  reset();
+  selectedReceipt.value = selected;
+  receiptOrigin = origin;
+  const token = sequence;
+  await nextTick();
+  if (!mounted || token !== sequence || !selectedReceipt.value) return;
+  // History rows share this single reader, without morphing the unrelated latest tile.
+  await change('receipt', false, false);
+}
+defineExpose({ openReceipt });
 const available = (kind: Review) =>
   !props.disabled && (kind === 'reply' ? hasReply.value : hasReceipt.value);
 const layerStyle = computed(() => ({
@@ -119,6 +195,7 @@ function settleNow() {
   cancelMotion();
   shown.value = active.value;
   tileShown.value = active.value;
+  releaseSelection();
 }
 function clip(rect: Box, base: Box) {
   const top = Math.max(0, rect.top - base.top);
@@ -128,6 +205,7 @@ function clip(rect: Box, base: Box) {
   return `inset(${top}px ${right}px ${bottom}px ${left}px round 13px)`;
 }
 async function change(next: Review | null, animate: boolean, restoreFocus: boolean) {
+  if (selectedReceipt.value) animate = false;
   const previous = active.value ?? tileShown.value;
   const kind = next ?? previous;
   if (!kind || (next && !available(next))) return;
@@ -156,6 +234,8 @@ async function change(next: Review | null, animate: boolean, restoreFocus: boole
     active.value = null;
     shown.value = null;
     tileShown.value = null;
+    if (restoreFocus && previous) focusTrigger(previous);
+    releaseSelection();
     return;
   }
   const focusAtRequest = document.activeElement;
@@ -163,12 +243,14 @@ async function change(next: Review | null, animate: boolean, restoreFocus: boole
   tileShown.value = kind;
   if (next) shown.value = next;
   placement.value = measured;
-  if (restoreFocus && previous) {
-    const control = trigger(previous);
-    if (control?.isConnected && !control.disabled) control.focus({ preventScroll: true });
-  }
+  if (restoreFocus && previous) focusTrigger(previous);
   await nextTick();
   if (!mounted || token !== sequence) return;
+  if (next === 'receipt' && resetReceiptScroll && receiptReader.value) {
+    // A hidden reader has no scroll box in browsers; reset only after it is visible.
+    receiptReader.value.scrollTop = 0;
+    resetReceiptScroll = false;
+  }
   if (next && document.activeElement === focusAtRequest)
     closeButton.value?.focus({ preventScroll: true });
   const fill = surfaceFill.value;
@@ -177,6 +259,7 @@ async function change(next: Review | null, animate: boolean, restoreFocus: boole
   if (!animate || media?.matches || !fill?.animate || !content || !heading) {
     shown.value = next;
     tileShown.value = next;
+    releaseSelection();
     return;
   }
   const options = {
@@ -259,6 +342,7 @@ async function change(next: Review | null, animate: boolean, restoreFocus: boole
     if (token !== sequence) return;
     shown.value = active.value;
     tileShown.value = active.value;
+    releaseSelection();
     motions = [];
     void nextTick(() => {
       for (const animation of owned) animation.cancel();
@@ -309,10 +393,8 @@ function reposition() {
     placement.value = measured;
   } else {
     const restore = surface.value?.contains(document.activeElement);
-    const button = trigger(kind);
+    if (restore && available(kind)) focusTrigger(kind);
     reset();
-    if (restore && available(kind) && button?.isConnected && !button.disabled)
-      button.focus({ preventScroll: true });
   }
 }
 function schedulePosition(event?: Event) {
@@ -321,16 +403,25 @@ function schedulePosition(event?: Event) {
   frame = requestAnimationFrame(reposition);
 }
 function reset() {
+  resetReceiptScroll = true;
+  if (frame) cancelAnimationFrame(frame);
+  frame = 0;
   active.value = null;
   settleNow();
 }
 function reduceMotion(event: MediaQueryListEvent) {
   if (event.matches) settleNow();
 }
-watch([() => props.project.id, () => props.project.created_at, () => props.owner], () => {
+watch([() => props.project.id, () => props.project.created_at, () => props.owner], async () => {
+  const focus = document.activeElement;
+  const ownedFocus = selectedReceipt.value && surface.value?.contains(focus);
   reset();
   for (const reader of surface.value?.querySelectorAll<HTMLElement>('.review-reader') ?? [])
     reader.scrollTop = 0;
+  const token = sequence;
+  await nextTick();
+  if (mounted && token === sequence && ownedFocus && document.activeElement === focus)
+    composerControl()?.focus({ preventScroll: true });
 });
 // A persisted snapshot replaces the Project object even when its identity is
 // unchanged. Only actual identity changes above own the reader's open/scroll state.
@@ -356,7 +447,7 @@ watch(
   () => [props.disabled, hasReply.value, hasReceipt.value],
   () => {
     const kind = active.value ?? tileShown.value;
-    if (kind && !available(kind)) reset();
+    if (props.disabled || (kind && !available(kind))) reset();
   },
   { flush: 'sync' },
 );
@@ -447,20 +538,22 @@ onUnmounted(() => {
         <span class="review-tile-fill" aria-hidden="true"></span>
         <span class="review-tile-copy">
           <span class="review-tile-title"
-            ><span>最近变更</span
-            ><span class="review-tile-status">{{ summary ? turnSummaryStatus(summary) : '' }}</span
+            ><span>{{ receiptTitle }}</span
+            ><span class="review-tile-status">{{
+              readingSummary ? turnSummaryStatus(readingSummary) : ''
+            }}</span
             ><ChevronUp :size="13" aria-hidden="true"
           /></span>
           <span
             class="review-tile-preview"
-            :class="{ 'has-warning': summary?.history_warning }"
-            :title="summary?.history_warning"
+            :class="{ 'has-warning': readingSummary?.history_warning }"
+            :title="readingSummary?.history_warning"
             >{{
-              summary?.history_warning
+              readingSummary?.history_warning
                 ? '对话未完整保存'
-                : summary
-                  ? turnSummaryHeadline(summary)
-                  : ''
+                : readingSummary
+                  ? turnSummaryHeadline(readingSummary)
+                  : (selectedRead?.unavailable ?? '')
             }}</span
           >
         </span>
@@ -476,7 +569,7 @@ onUnmounted(() => {
         :style="surfaceStyle"
         role="dialog"
         aria-modal="false"
-        :aria-labelledby="`${uid}-${shown ?? 'reply'}-trigger`"
+        :aria-labelledby="selectedReceipt ? `${uid}-heading` : `${uid}-${shown ?? 'reply'}-trigger`"
         :aria-hidden="!active"
         :inert="active ? undefined : true"
       >
@@ -484,10 +577,14 @@ onUnmounted(() => {
         <div ref="surfaceContent" class="review-surface-content">
           <header ref="surfaceHeading" class="review-surface-heading">
             <div>
-              <strong>{{ shown === 'receipt' ? '最近变更' : '对话记录' }}</strong>
+              <strong :id="`${uid}-heading`">{{
+                shown === 'receipt' ? receiptTitle : '对话记录'
+              }}</strong>
               <span>{{
-                shown === 'receipt' && summary
-                  ? turnSummaryStatus(summary)
+                shown === 'receipt'
+                  ? readingSummary
+                    ? turnSummaryStatus(readingSummary)
+                    : '回执不可用'
                   : `${project.name} · ${project.messages.length} 条已保存的请求与回复`
               }}</span>
             </div>
@@ -519,14 +616,17 @@ onUnmounted(() => {
           </div>
           <div
             v-show="shown === 'receipt'"
+            ref="receiptReader"
             class="review-reader review-receipt"
             tabindex="0"
-            aria-label="最近已保存的规划变更"
+            :aria-label="selectedReceipt ? '所选历史规划回执' : '最近已保存的规划变更'"
           >
+            <p v-if="selectedReceipt" class="review-receipt-context">{{ receiptContext }}</p>
+            <p v-if="selectedRead?.unavailable" role="status">{{ selectedRead.unavailable }}</p>
             <AgentTurnSummary
-              v-if="summary && !running"
-              :key="`${project.id}:${project.created_at}:${summary.turn_id}`"
-              :summary="summary"
+              v-if="readingSummary"
+              :key="`${project.id}:${project.created_at}:${selectedReceipt?.eventId ?? 'latest'}:${readingSummary.turn_id}`"
+              :summary="readingSummary"
               :project="project"
               :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
               :open="true"
@@ -748,6 +848,12 @@ onUnmounted(() => {
   padding: 8px 10px;
   border-radius: 8px;
   background: #f4f7f9;
+}
+.review-receipt-context {
+  margin: 10px 0 0;
+  color: var(--text-secondary, #617383);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .review-receipt :deep(.agent-turn-summary) {
   margin: 0;

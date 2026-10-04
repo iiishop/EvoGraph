@@ -233,7 +233,7 @@ const composerModule = url(transpile(source('lib/composerDocument.ts')));
 async function component(name, imports) {
   const path = `components/agent/${name}.vue`;
   const { descriptor } = parse(source(path));
-  const id = `data-v-${name.toLowerCase()}`;
+  const id = `data-v-${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
   const moduleUrl = url(
     transpile(compileScript(descriptor, { id, inlineTemplate: true }).content).replace(
       /from (['"])([^'"]+)\1/g,
@@ -314,7 +314,18 @@ const project = () => ({
     { id: '3', role: 'assistant', content: 'Latest saved answer', created_at: '2026-10-02' },
   ],
 });
-async function mount(overrides = {}) {
+const presentationModule = url(
+  transpile(source('lib/presentation.ts')).replace(
+    "'./turnSummary'",
+    JSON.stringify(summaryModule),
+  ),
+);
+const { value: ActivityPanel } = await component('../workspace/ActivityPanel', {
+  'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
+  vue,
+  '../../lib/presentation': presentationModule,
+});
+async function mount(overrides = {}, activity = false) {
   viewport = { width: 1050, height: 720 };
   geometry = baseline();
   animations.length = 0;
@@ -328,15 +339,28 @@ async function mount(overrides = {}) {
     ...overrides,
   });
   const locates = [];
+  let tray;
   const root = document.createElement('div');
   document.body.append(root);
   const app = createApp({
     render: () =>
       h('main', [
         h('div', { class: 'canvas' }, 'Canvas'),
+        activity
+          ? h(ActivityPanel, {
+              project: props.project,
+              onReceipt: (id, origin) => tray.openReceipt(id, origin),
+            })
+          : null,
         h('section', { class: 'agent-dock' }, [
           h('button', { class: 'question' }, 'Question'),
-          h(Tray, { ...props, onLocate: (id) => locates.push(id) }),
+          h(Tray, {
+            ...props,
+            ref: (value) => {
+              tray = value;
+            },
+            onLocate: (id) => locates.push(id),
+          }),
           h('input', { class: 'composer' }),
           h('button', { class: 'stop' }, 'Stop'),
         ]),
@@ -349,6 +373,7 @@ async function mount(overrides = {}) {
     root,
     props,
     locates,
+    openReceipt: (id, origin) => tray.openReceipt(id, origin),
     tiles: () => [...root.querySelectorAll('.review-tile')],
     surface: () => document.querySelector('.agent-review-surface'),
     layer: () => document.querySelector('.agent-review-layer'),
@@ -1257,6 +1282,382 @@ test('compact reply preview uses parsed text without changing saved Markdown or 
       view.surface().querySelector('strong + .message-content code').textContent,
       'a_b **literal**',
     );
+  } finally {
+    view.dispose();
+  }
+});
+
+const historicalSummary = (turn, status = 'failed', changed = true) => ({
+  ...summary(),
+  turn_id: turn,
+  status,
+  changed,
+  history_warning: undefined,
+  before_revision: 33,
+  after_revision: changed ? 38 : 33,
+  changes: {
+    milestones: { added: [], updated: [], removed: [] },
+    dependencies: { added: [], updated: [], removed: [] },
+    target: null,
+    architecture: null,
+    other: changed ? ['project'] : [],
+  },
+});
+const historicalEvent = (id, saved = historicalSummary(id)) => ({
+  id,
+  kind: 'agent_turn_finished',
+  detail: typeof saved === 'string' ? saved : JSON.stringify(saved),
+  created_at: '2026-10-04T00:47:04Z',
+});
+const historicalProject = (events) => ({
+  ...project(),
+  created_at: '2026-10-01T00:00:00Z',
+  metrics: {},
+  events,
+});
+const eventButtons = (view) => [...view.root.querySelectorAll('.timeline-receipt-trigger')];
+const receiptText = (view) => view.surface().querySelector('.review-receipt').textContent;
+
+test('real activity titles open each exact failed/stopped/recovered receipt, with historical context and predictable latest return', async () => {
+  const latest = historicalSummary('LATEST', 'completed');
+  const events = [
+    historicalEvent('latest', latest),
+    historicalEvent('partial', historicalSummary('PARTIAL')),
+    historicalEvent('zero', historicalSummary('ZERO', 'failed', false)),
+    historicalEvent('cancelled', historicalSummary('CANCELLED', 'stopped')),
+    historicalEvent('recovered', historicalSummary('RECOVERED', 'completed')),
+    { id: 'ordinary', kind: 'project_updated', created_at: '2026-10-04', detail: 'ordinary' },
+  ];
+  const view = await mount({ project: historicalProject(events), summary: latest }, true);
+  const original = JSON.stringify(view.props.project);
+  try {
+    assert.equal(eventButtons(view).length, 5, 'only terminal titles are controls');
+    assert.equal(
+      view.root.querySelectorAll('.timeline article button').length,
+      5,
+      'no extra row action',
+    );
+    for (const [index, turn, notice] of [
+      [1, 'PARTIAL', /已保存的部分变更保留/],
+      [2, 'ZERO', /没有净变更/],
+      [3, 'CANCELLED', /已保存的部分变更保留/],
+      [4, 'RECOVERED', /本轮规划变更已保存/],
+      [1, 'PARTIAL', /已保存的部分变更保留/],
+    ]) {
+      const origin = eventButtons(view)[index];
+      assert.equal(origin.type, 'button');
+      assert.equal(origin.getAttribute('aria-haspopup'), 'dialog');
+      assert.match(origin.getAttribute('aria-label'), /查看.*规划回执/);
+      await click(origin); // Keyboard-equivalent native button activation (detail 0).
+      await flush();
+      assert.equal(visible(view), true);
+      assert.equal(document.querySelectorAll('.agent-review-layer').length, 1);
+      assert.equal(
+        view.surface().querySelector('.review-surface-heading strong').textContent,
+        '历史变更',
+      );
+      assert.match(receiptText(view), new RegExp(`回合 ${turn}`));
+      assert.match(receiptText(view), /2026-10-04 00:47:04 UTC/);
+      assert.match(
+        receiptText(view),
+        new RegExp(turn === 'ZERO' ? '版本 33 → 33' : '版本 33 → 38'),
+      );
+      assert.match(receiptText(view), notice);
+      assert.doesNotMatch(receiptText(view), /LATEST/);
+      assert.equal(document.activeElement, close(view));
+      view.surface().querySelector('.review-receipt').scrollTop = 135;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await flush();
+      assert.equal(visible(view), false);
+      assert.equal(document.activeElement, origin);
+      assert.match(view.tiles()[1].textContent, /最近变更/);
+      assert.doesNotMatch(view.tiles()[1].textContent, /历史变更/);
+      await click(view.tiles()[1]);
+      assert.equal(view.surface().querySelector('.review-receipt').scrollTop, 0);
+      assert.equal(view.surface().querySelector('.review-receipt-context'), null);
+      assert.equal(
+        view.surface().querySelector('.review-surface-heading strong').textContent,
+        '最近变更',
+      );
+      await click(close(view));
+    }
+    assert.equal(
+      JSON.stringify(view.props.project),
+      original,
+      'read-only: stored history unchanged',
+    );
+  } finally {
+    view.dispose();
+  }
+});
+
+test('legacy malformed/missing receipts and trimmed selected history stay explicitly unavailable, never latest', async () => {
+  const latest = historicalSummary('LATEST');
+  const events = [
+    historicalEvent('latest', latest),
+    historicalEvent('legacy', ''),
+    historicalEvent('malformed', '{broken'),
+    historicalEvent('old'),
+  ];
+  const view = await mount({ project: historicalProject(events), summary: latest }, true);
+  try {
+    for (const index of [1, 2]) {
+      await click(eventButtons(view)[index]);
+      await flush();
+      assert.equal(visible(view), true);
+      assert.match(receiptText(view), /未保存可读取的完整回执/);
+      assert.match(receiptText(view), /回合与版本信息不可用/);
+      assert.equal(view.surface().querySelector('.agent-turn-summary'), null);
+      await click(close(view));
+    }
+    await click(eventButtons(view)[3]);
+    await flush();
+    const reader = view.surface().querySelector('.review-receipt');
+    reader.scrollTop = 90;
+    view.props.project = { ...view.props.project, events: [events[0]] };
+    await flush();
+    assert.equal(visible(view), true);
+    assert.match(receiptText(view), /所选历史回执已不在当前记录中/);
+    assert.match(receiptText(view), /回合 old/);
+    assert.doesNotMatch(receiptText(view), /LATEST/);
+    assert.equal(view.surface().querySelector('.agent-turn-summary'), null);
+    assert.equal(document.activeElement, close(view));
+    await click(close(view));
+    assert.equal(
+      document.activeElement,
+      view.tiles()[1],
+      'removed origin falls back to surviving latest tile',
+    );
+    await click(view.tiles()[1]);
+    assert.equal(reader.scrollTop, 0);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('historical reader supports no latest receipt and a newer running turn without hiding its saved outcome', async () => {
+  const view = await mount(
+    {
+      project: { ...historicalProject([historicalEvent('only')]), messages: [] },
+      summary: null,
+      running: true,
+    },
+    true,
+  );
+  try {
+    assert.equal(view.tiles().length, 0);
+    await click(eventButtons(view)[0]);
+    await flush();
+    assert.equal(visible(view), true);
+    assert.match(receiptText(view), /回合 only/);
+    assert.match(receiptText(view), /本轮未完成/);
+    const reader = view.surface().querySelector('.review-receipt');
+    reader.scrollTop = 120;
+    view.props.summary = historicalSummary('NEWER', 'completed');
+    view.props.running = false;
+    view.props.project.events.unshift(historicalEvent('newer', view.props.summary));
+    await flush();
+    assert.match(receiptText(view), /回合 only/);
+    assert.doesNotMatch(receiptText(view), /NEWER/);
+    assert.equal(reader.scrollTop, 120);
+    await click(close(view));
+    assert.equal(document.activeElement, eventButtons(view)[1]);
+    await click(view.tiles()[0]);
+    assert.doesNotMatch(receiptText(view), /回合 only/);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('rapid event selections, outside dismissal, scope replacement and unmount cancel pending opens/scroll work', async () => {
+  const events = [historicalEvent('one'), historicalEvent('two')];
+  const view = await mount({ project: historicalProject(events), owner: 1 }, true);
+  try {
+    let buttons = eventButtons(view);
+    const first = view.openReceipt('one', buttons[0]);
+    const second = view.openReceipt('two', buttons[1]);
+    await Promise.all([first, second]);
+    assert.equal(visible(view), true);
+    assert.match(receiptText(view), /回合 two/);
+    assert.doesNotMatch(receiptText(view), /回合 one/);
+    document.dispatchEvent(new Event('scroll'));
+    assert.equal(frames.size, 1);
+    const composer = view.root.querySelector('.composer');
+    composer.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    composer.focus();
+    await flush();
+    assert.equal(visible(view), false);
+    assert.equal(document.activeElement, composer);
+    for (const mutate of [
+      () => {
+        view.props.project.id = 'P2';
+      },
+      () => {
+        view.props.project.created_at = 'new-incarnation';
+      },
+      () => {
+        view.props.owner++;
+      },
+      () => {
+        view.props.disabled = true;
+      },
+    ]) {
+      buttons = eventButtons(view);
+      const pending = view.openReceipt('one', buttons[0]);
+      mutate();
+      await pending;
+      await flush();
+      assert.equal(visible(view), false);
+      assert.equal(view.surface().querySelector('.review-receipt-context'), null);
+      assert.equal(document.activeElement, composer);
+      assert.equal(frames.size, 0);
+      view.props.disabled = false;
+      await flush();
+    }
+    await view.openReceipt('two', eventButtons(view)[1]);
+    document.dispatchEvent(new Event('scroll'));
+    assert.equal(frames.size, 1);
+  } finally {
+    view.dispose();
+  }
+  assert.equal(frames.size, 0);
+  assert.equal(mediaListeners.size, 0);
+  assert.equal(observers.size, 0);
+  assert.equal(document.querySelector('.agent-review-layer'), null);
+});
+
+test('trimmed history-only origin closes to a surviving composer and repeated opens reset reading scroll', async () => {
+  const view = await mount(
+    { project: historicalProject([historicalEvent('one'), historicalEvent('two')]), summary: null },
+    true,
+  );
+  try {
+    await click(eventButtons(view)[0]);
+    await flush();
+    const reader = view.surface().querySelector('.review-receipt');
+    reader.scrollTop = 180;
+    await click(eventButtons(view)[1]);
+    await flush();
+    assert.match(receiptText(view), /回合 two/);
+    assert.equal(reader.scrollTop, 0);
+    reader.scrollTop = 150;
+    view.props.project.events = [];
+    await flush();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flush();
+    assert.equal(visible(view), false);
+    assert.equal(document.activeElement, view.root.querySelector('.composer'));
+    assert.equal(view.surface().contains(document.activeElement), false);
+    view.props.project.events = [historicalEvent('one')];
+    await flush();
+    await click(eventButtons(view)[0]);
+    await flush();
+    assert.equal(reader.scrollTop, 0);
+  } finally {
+    view.dispose();
+  }
+});
+
+// Optional read-only validation against an explicitly supplied saved-project witness.
+// It is not required by the deterministic suite and never invokes a provider or reads app state.
+if (process.env.EVOGRAPH_RECEIPT_FIXTURE) {
+  test('supplied saved terminal events open their own exact revisions and acceptance histories', async () => {
+    const fixture = JSON.parse(readFileSync(process.env.EVOGRAPH_RECEIPT_FIXTURE, 'utf8'));
+    const events = fixture.events.map((event) => ({
+      ...event,
+      detail: typeof event.detail === 'string' ? event.detail : JSON.stringify(event.detail),
+    }));
+    const summaries = events.map((event) => JSON.parse(event.detail));
+    const latest = summaries.reduce((a, b) => (a.after_revision > b.after_revision ? a : b));
+    const p = { ...fixture.project, events, metrics: {}, messages: [] };
+    const view = await mount({ project: p, summary: latest }, true);
+    const original = JSON.stringify(view.props.project);
+    try {
+      for (const [index, saved] of summaries.entries()) {
+        await click(eventButtons(view)[index]);
+        await flush();
+        assert.equal(visible(view), true);
+        assert.match(receiptText(view), new RegExp(`回合 ${saved.turn_id}`));
+        assert.match(
+          receiptText(view),
+          new RegExp(`版本 ${saved.before_revision} → ${saved.after_revision}`),
+        );
+        assert.equal(
+          view.surface().querySelector('.agent-turn-summary').dataset.status,
+          saved.status,
+        );
+        const detail = saved.contract_details;
+        const target = saved.changes.target;
+        const behaviorIds = detail
+          ? detail.behaviors.flatMap((item) => [
+              item.before.active_id ?? item.before.required_id,
+              item.after.active_id ?? item.after.required_id,
+            ])
+          : (target?.required_behavior_changes ?? []).flatMap((item) => [
+              item.before_id,
+              item.after_id,
+            ]);
+        for (const id of behaviorIds) {
+          const behavior = p.behaviors.find((item) => item.id === id);
+          if (behavior) {
+            assert.ok(
+              receiptText(view).includes(id),
+              `${saved.turn_id}: missing exact historical identity ${id}`,
+            );
+            assert.ok(
+              receiptText(view).includes(behavior.statement),
+              `${saved.turn_id}: missing exact historical behavior ${id}`,
+            );
+          }
+        }
+        const before = detail?.before_target_version ?? target?.before_version;
+        const after = detail?.after_target_version ?? target?.after_version;
+        for (const number of [before, after]) {
+          const savedTarget = p.targets.find((item) => item.number === number);
+          if (savedTarget)
+            assert.ok(
+              receiptText(view).includes(savedTarget.statement),
+              `${saved.turn_id}: missing target T${number}`,
+            );
+        }
+        console.log(
+          `saved witness ${events[index].id}: ${saved.turn_id}, ${saved.status}, revision ${saved.before_revision}→${saved.after_revision}, target ${before ?? 'none'}→${after ?? 'none'}, ${behaviorIds.filter(Boolean).length} exact behavior references`,
+        );
+        await click(close(view));
+      }
+      assert.equal(JSON.stringify(view.props.project), original);
+    } finally {
+      view.dispose();
+    }
+  });
+}
+
+test('switching project/incarnation/owner closes historical reader without leaving focus in its hidden surface', async () => {
+  const view = await mount(
+    { project: historicalProject([historicalEvent('old')]), owner: 1 },
+    true,
+  );
+  try {
+    for (const mutate of [
+      () => {
+        view.props.project.id = 'P2';
+      },
+      () => {
+        view.props.project.created_at = 'recreated';
+      },
+      () => {
+        view.props.owner++;
+      },
+    ]) {
+      await click(eventButtons(view)[0]);
+      await flush();
+      assert.equal(document.activeElement, close(view));
+      mutate();
+      await flush();
+      assert.equal(visible(view), false);
+      assert.equal(view.surface().querySelector('.review-receipt-context'), null);
+      assert.equal(document.activeElement, view.root.querySelector('.composer'));
+    }
   } finally {
     view.dispose();
   }

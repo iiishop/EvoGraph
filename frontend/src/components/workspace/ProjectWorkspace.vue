@@ -77,6 +77,9 @@ const viewActions = computed(() => {
     locate: (id: string) => {
       if (current()) void locate(id);
     },
+    receipt: (eventId: string, trigger: HTMLElement) => {
+      if (current()) void composer.value?.openReceipt(eventId, trigger);
+    },
   };
 });
 const viewMotion = useSurfaceMotion();
@@ -170,6 +173,7 @@ watch(tab, (value) => {
             :project="project"
             v-bind="tab === 'graph' || tab === 'architecture' ? { followBoundary } : {}"
             @compose="composer?.focus()"
+            @receipt="viewActions.receipt"
           />
         </div>
       </div>

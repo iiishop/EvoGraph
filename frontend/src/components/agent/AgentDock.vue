@@ -67,8 +67,23 @@ onUnmounted(() => {
   mounted = false;
 });
 const message = ref<InstanceType<typeof ComposerEditor>>();
+const reviewTray = ref<InstanceType<typeof AgentReviewTray>>();
 // Entry hints focus the existing editor; they never populate or send a draft.
 defineExpose({
+  openReceipt: async (eventId: string, trigger: HTMLElement) => {
+    const projectId = props.project.id;
+    const incarnation = props.project.created_at;
+    const owner = props.reviewOwner;
+    dockCollapsed.value = false;
+    await nextTick();
+    if (
+      mounted &&
+      props.project.id === projectId &&
+      props.project.created_at === incarnation &&
+      props.reviewOwner === owner
+    )
+      await reviewTray.value?.openReceipt(eventId, trigger);
+  },
   focus: async () => {
     dockCollapsed.value = false;
     await nextTick();
@@ -466,7 +481,7 @@ function choose(option: string) {
       @choose="choose"
     />
     <AgentReviewTray
-      v-if="hasReview"
+      ref="reviewTray"
       :project="project"
       :summary="turnSummary"
       :owner="reviewOwner"
