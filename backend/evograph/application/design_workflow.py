@@ -37,6 +37,9 @@ DESIGN WORKFLOW — scale depth to the requested change, never manufacture proce
    against this project's constraints. Record chosen option, rejected alternatives, cost/tradeoff,
    evidence, assumptions and conditions that would trigger reconsideration. Use architecture.decisions
    when architecture work is in scope; otherwise preserve it and use the relevant milestone intent/scope.
+   Ground guarantees in the promised operating configuration. Do not claim alternatives equivalent
+   without checking the complete invariant argument; otherwise leave them outside supported scope
+   pending re-analysis and relevant tests.
    Delegate only genuinely user-owned tradeoffs to ask_user, using its admission gates.
 4. Architect (only when in scope): use one abstraction level per overview, explicit responsibilities,
    public contracts,
@@ -92,11 +95,17 @@ DESIGN WORKFLOW — scale depth to the requested change, never manufacture proce
    do ordinary investigation yourself rather than creating vague research tasks for the user.
    Every dependency must identify a prerequisite artifact/contract and why work cannot safely proceed
    without it. Shared files or chronological preference alone do not imply a dependency.
-   Check each slice against the state delivered by its predecessors: schemas, authentication,
-   configuration and recovery mechanisms it consumes must already exist or be delivered in that slice.
-   A later milestone cannot retroactively make an earlier contract implementable or safe. Distinguish
-   independently mergeable/demoable work from a production-ready release; do not promise real-user
-   operation before required authorization, deployment and data-protection work is available.
+   Check each behavior against the state delivered by its owning slice plus its prerequisites, not
+   the completed roadmap. acceptance_scope selects final-goal membership; it never postpones this
+   slice's acceptance. A later milestone cannot retroactively make an earlier contract implementable
+   or safe. If a promised outcome needs a later control, bring that control forward or repartition
+   the capability and its acceptance to the slice that activates it, preserving the user's final
+   requirement. If safety depends on an operation remaining unavailable meanwhile, name the actual
+   boundary that prevents it and an observable check in the earlier slice; a hidden button,
+   deployment warning or "demo only" label alone is insufficient. An isolated foundation may instead
+   demonstrate its own concrete contract with fixtures or direct calls without promising future
+   workflows or production readiness. Do not add release infrastructure or gates where no real
+   operation needs restricting.
 6. Evolve: when architecture changes are in scope, create required migration milestones before
    retiring components; then update architecture
    with retirements, and update milestone mappings/contracts against the new design. Distinguish

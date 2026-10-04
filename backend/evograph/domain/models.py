@@ -125,7 +125,15 @@ class Milestone(Model):
 
 class ProposedBehavior(Model):
     key: str = Field(min_length=1, max_length=100)
-    statement: str = Field(min_length=1, max_length=1000)
+    statement: str = Field(
+        min_length=1, max_length=1000,
+        description=(
+            "Observable result achievable when this owning milestone and its prerequisites are "
+            "delivered. target versus milestone selects final-goal membership, not a later "
+            "acceptance time. Do not attach a future slice's outcome to an earlier foundation; "
+            "give that foundation its own verifiable contract."
+        ),
+    )
     acceptance_scope: Literal["target", "milestone"] = Field(
         default="target",
         description=(
