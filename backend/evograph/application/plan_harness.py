@@ -43,7 +43,7 @@ from ..domain.plan_harness import (
     execution_satisfied,
     policy_decision,
 )
-from ..domain.policies import MAX_WORKING_MILESTONES
+from ..domain.policies import DECLARED_SUPPORTING_CHANGE_TYPES, MAX_WORKING_MILESTONES
 from ..domain.target_contract import required_target_behavior_ids
 from ..domain.typed_capabilities import typed_capability_report
 from .attachments import MAX_EXCERPT_CHARS
@@ -262,9 +262,39 @@ def _contract_source_history(snapshot):
 
 
 def _design_consistency(snapshot):
-    findings = [_finding(f["code"], f["subject"], f["message"], severity=f["severity"])
-                for f in review_design(snapshot.candidate_project())["findings"]]
-    return _result(snapshot, "design_consistency", ("current_design",), findings)
+    candidate = snapshot.candidate_project()
+    milestones = {m.id: m for m in candidate.milestones}
+    behaviors = {b.id: b for b in candidate.behaviors}
+    findings, missing, covered = [], [], ["current_design"]
+    for finding in review_design(candidate)["findings"]:
+        code, subject, message, severity = (finding[k] for k in ("code", "subject", "message", "severity"))
+        if code == "unmapped_delivery":
+            milestone = milestones[subject]
+            owned = [behaviors.get(bid) for bid in milestone.behavior_revision_ids]
+            tags = set(milestone.change_types)
+            supporting = (bool(tags) and tags <= DECLARED_SUPPORTING_CHANGE_TYPES
+                          and bool(owned) and all(b is not None and b.owner == subject
+                                                  and b.acceptance_scope == "milestone" for b in owned))
+            if supporting:
+                code = "delivery_mapping_declared_not_applicable"
+                message = ("已声明仅文档/测试类辅助交付且均为本步验收，组件映射不适用；"
+                           "这是待语义复核的适用性声明，不证明没有产品影响或实现已通过")
+                covered.append("delivery_mapping_not_applicable:" + subject)
+            else:
+                code, severity = "delivery_component_mapping_unknown", "error"
+                missing.append(subject)
+                keys = [b.behavior_key for b in owned if b is not None]
+                message = ("交付缺少受影响组件引用。为这些契约的 component_ids 关联实际组件即可自动同步切片："
+                           + ", ".join(keys) + "。允许复用现有组件，不需要新增专属组件；不要虚构映射")
+        else:
+            covered.append("design:" + code + ":" + subject)
+        findings.append(_finding(code, subject, message, severity=severity))
+    # A known invalid reference still blocks. Missing declarations are unknown,
+    # so complete partial candidates can persist while publication stays held.
+    invalid = any(f.severity == "error" and f.code != "delivery_component_mapping_unknown" for f in findings)
+    verdict = "block" if invalid else "unknown" if missing else "pass"
+    return _result(snapshot, "design_consistency", (*covered, *("delivery_mapping:" + mid for mid in missing)),
+                   findings, verdict=verdict)
 
 
 def _declared_availability(snapshot):
@@ -313,9 +343,9 @@ BUILTIN_REGISTRY = (
     BuiltinPlugin(PluginManifest(id="contract_source_history", version="2", kind="deterministic",
                                 prerequisites=("graph_identity",),
                                 scope="contracts_sources_process_history"), _contract_source_history),
-    BuiltinPlugin(PluginManifest(id="design_consistency", version="1", kind="deterministic",
+    BuiltinPlugin(PluginManifest(id="design_consistency", version="2", kind="deterministic",
                                 prerequisites=("graph_identity",),
-                                scope="existing_design_diagnostics"), _design_consistency),
+                                scope="design_diagnostics_and_declared_component_mapping"), _design_consistency),
     BuiltinPlugin(PluginManifest(id="declared_availability", version="1", kind="deterministic",
                                 prerequisites=("graph_identity",),
                                 scope="declared_owner_prerequisite_capabilities"), _declared_availability),

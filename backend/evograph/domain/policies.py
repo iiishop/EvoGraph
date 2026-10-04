@@ -2,6 +2,10 @@
 
 from .models import Milestone, Obligation, PlanProposal, Project, ProposedMilestone
 
+# Explicit non-product declarations, still subject to semantic review. Data or
+# operational migration uses "data"; only its runbook may be "documentation".
+DECLARED_SUPPORTING_CHANGE_TYPES = frozenset({"documentation", "test"})
+
 # One registry is the extension point for investigation obligations.
 CHANGE_POLICIES = {
     "general": [("scope", "确认变更范围与验收方式")],
@@ -11,6 +15,7 @@ CHANGE_POLICIES = {
         ("credentials", "检查凭据存储与认证边界"),
         ("negative_paths", "检查失败路径与权限隔离"),
     ],
+    **{kind: [] for kind in sorted(DECLARED_SUPPORTING_CHANGE_TYPES)},
 }
 
 STRUCTURAL_RELATIONS = {"imports", "calls", "reads_schema", "consumes_api"}

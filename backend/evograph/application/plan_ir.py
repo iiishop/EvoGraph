@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..agent_tools.base import ToolSpec
 from ..domain.models import ArchitectureSpec, Project
 from ..domain.plan_contracts import AcceptanceStep, ProvidedCapability, candidate_hash
+from ..domain.policies import CHANGE_POLICIES
 from .design import validate_diagram
 from .plan_contracts import AddProcessConstraint, AddRequirement, RetireRequirement
 from .plan_patch import PlanPatch, compiled_plan_hash, propose_plan_patch
@@ -92,6 +93,18 @@ class SliceDelta(IRModel):
     dependencies: list[str] | None = Field(default=None, max_length=24,
         json_schema_extra={"references": [{"kind": "slice"}]})
     dependency_reasons: dict[str, str] | None = None
+    change_types: list[str] = Field(default_factory=list, max_length=12,
+        description="Optional existing change metadata. A declared non-product supporting delivery may use only "
+                    "documentation/test and milestone-scoped acceptance. Data or operational migration uses data. "
+                    "This declaration never permits relabeling product guarantees or inventing components.",
+        json_schema_extra={"items": {"type": "string", "enum": sorted(CHANGE_POLICIES)}})
+
+    @field_validator("change_types")
+    @classmethod
+    def known_change_types(cls, value):
+        if value is not None and set(value) - CHANGE_POLICIES.keys():
+            raise ValueError("Unknown change_types; use " + ", ".join(sorted(CHANGE_POLICIES)))
+        return value
 
 
 class ComponentDelta(IRModel):

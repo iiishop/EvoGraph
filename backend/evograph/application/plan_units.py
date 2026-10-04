@@ -84,8 +84,9 @@ class SchedulePlanChanges(Model):
             fields = {"type": "array", "uniqueItems": True,
                       "maxItems": min(24, len(spec["fields"])),
                       "items": {"type": "string"},
-                      "description": "Required for existing: " + ",".join(spec["required_existing"])
-                      + "; required for new: " + ",".join(spec["required_new"])}
+                      "description": "Changed fields only for existing IDs. Later patch payload requires: "
+                      + ",".join(spec["required_existing"])
+                      + "; manifest required for new: " + ",".join(spec["required_new"])}
             if spec["fields"]:
                 fields.update(minItems=1, items={"type": "string", "enum": spec["fields"]})
             uses = {"type": "array", "maxItems": 100 if spec["references"] else 0,
@@ -148,7 +149,10 @@ def _validate_manifest_change(row, *, new=False):
     kind, identity = row["kind"], row["id"]
     spec = manifest_field_catalog()[kind]
     fields = set(row["fields"])
-    required = set(spec["required_new" if new else "required_existing"])
+    # Existing unchanged required payload fields are supplied to the unit from
+    # its current object; a short scheduling intent need not call them changes.
+    # Actual PlanDelta required fields remain enforced at compilation.
+    required = set(spec["required_new"]) if new else set()
     invalid, missing = fields - set(spec["fields"]), required - fields
     if invalid or missing or (not fields and spec["fields"]):
         raise ValueError(f"{kind}:{identity} fields invalid={sorted(invalid)} missing={sorted(missing)}; "
@@ -157,9 +161,9 @@ def _validate_manifest_change(row, *, new=False):
     if kind in {"target", "architecture"} and identity != kind:
         raise ValueError(f"{kind} manifest id must be {kind}")
     for use in row["uses"]:
-        if use["field"] not in fields or use["kind"] not in spec["references"].get(use["field"], []):
+        if use["kind"] not in spec["references"].get(use["field"], []):
             raise ValueError(f"{kind}:{identity} invalid uses={use}; allowed reference slots={spec['references']}; "
-                             "uses must refer to a declared field; source_id is a source anchor, not a graph use")
+                             "source_id is a source anchor, not a graph use")
 
 
 def _objects(project):
@@ -498,6 +502,31 @@ def initial_unit_context(db):
     return _initial_unit_context(db, project, objects)
 
 
+def carry_review_findings(previous):
+    """Carry historical issue text, never a pass or reusable certificate.
+
+    Interrupted repair can have no accepted schedule. Its next router still
+    needs the exact problems that caused repair, without copying all supported
+    statuses or treating old packet pointers as references into a new snapshot.
+    """
+    batch = previous.get("report", {}).get("semantic_batch")
+    if not isinstance(batch, dict):
+        batch = next((item["batch"] for item in reversed(previous.get("batch_reviews", []))
+                      if isinstance(item.get("batch"), dict)), None)
+    if not isinstance(batch, dict):
+        return deepcopy(previous.get("inherited_semantic_findings"))
+    return {
+        "source_candidate_id": previous["id"], "candidate_hash": batch["candidate_hash"],
+        "review_scope_hash": batch["review_scope_hash"],
+        "applicability": "historical_needs_recheck",
+        "issues": [{k: deepcopy(issue[k]) for k in
+                    ("id", "subjects", "verdict", "reason", "counterexample") if k in issue}
+                   for issue in batch.get("issues", [])],
+        "evidence_note": "Original evidence refs remain in the source candidate's exact review packet. "
+                         "These historical issue descriptions are not current proof; recheck against current facts and user changes.",
+    }
+
+
 def _initial_unit_context(db, project, objects):
     inactive = {}
     active_keys = {key.split(":", 1)[1] for key in objects if key.startswith("contract:")}
@@ -549,6 +578,7 @@ def _initial_unit_context(db, project, objects):
             "reference_context": deepcopy(db.record.get("reference_context", {})),
             "findings": deepcopy(db.record.get("report", {}).get("findings", [])),
             "inherited_findings": deepcopy(db.record.get("inherited_findings", [])),
+            "inherited_semantic_findings": deepcopy(db.record.get("inherited_semantic_findings")),
             "findings_note": "Inherited findings have historical/unknown applicability; neither they nor this context are a pass certificate.",
             "prior_work_units": (_schedule_view(db.record["prior_work_units"])
                                  if isinstance(db.record.get("prior_work_units"), dict)
@@ -778,6 +808,7 @@ MANIFEST_TOOL = ToolSpec(
     "schedule_plan_changes",
     "Schedule a SHORT manifest, not a full plan. Each change gives kind, stable id, changed field names, "
     "uses={field,kind,id} guides dependency ordering and read context, not reference authorization. "
+    "uses may name unchanged reference fields for read context; fields lists only intended changes. "
     "Existing candidate objects may be linked; declare genuinely new targets for definition ordering. "
     "fields are intent/size hints, not a lock against necessary same-record repairs; intent <=120 chars. Never include statements, "
     "mechanisms, quotes or other field values. kind names match singular PlanDelta collections; remove_* "

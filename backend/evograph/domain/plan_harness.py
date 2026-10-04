@@ -154,7 +154,7 @@ class HarnessPolicy(FrozenRecord):
         return self.deterministic_required + (("semantic_review",) if self.require_model_opinion else ())
 
 
-CURRENT_POLICY = HarnessPolicy(version="plan-harness-policy/v4",
+CURRENT_POLICY = HarnessPolicy(version="plan-harness-policy/v5",
                                deterministic_required=DETERMINISTIC_REQUIRED,
                                require_model_opinion=True,
                                not_applicable_reasons=(("typed_capability_flow",

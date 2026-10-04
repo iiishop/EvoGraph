@@ -3,11 +3,13 @@
 import hashlib
 import json
 import re
+from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.dependencies import ancestor_sets
+from ..domain.models import Project
 from ..domain.plan_contracts import (
     SemanticReview,
     candidate_hash,
@@ -19,7 +21,7 @@ from ..domain.plan_contracts import (
 from ..domain.typed_capabilities import capability_changes
 from .plan_patch import contract_changes
 
-CHECKER_VERSION = "unified-contract-challenge-v9"
+CHECKER_VERSION = "unified-contract-challenge-v11"
 BATCH_VERSION = "semantic-batch/v1"
 _ALIAS_KEY = "$packet_ref"
 _RECORD_LISTS = (
@@ -43,6 +45,30 @@ _RECORD_ENCODING = {
                "statement/mechanism string for the same behavior_key, at its local pointer. "
                "Keep before/candidate identity when citing evidence. Expand aliases before comparing "
                "facts; shared bytes do not establish semantic support.",
+}
+_TEXT_KEY = "$t"
+_TEXT_ENCODING = {
+    "version": "typed-string-pool/v1", "ref": _TEXT_KEY, "minimum_utf8_bytes": 32,
+    "meaning": "Schema-declared before/candidate string leaves and current_input only: {$t:i} "
+               "is the complete raw text_table[i]. Decode text before before-record aliases. "
+               "Source identities and paths stay distinct; shared text is not semantic proof.",
+}
+_CATALOGUE_ENCODING = {
+    "version": "ordered-pointer-runs/v1",
+    "meaning": "[prefix,n] expands to prefix/0 through prefix/(n-1), in order; strings are "
+               "exact pointers. Cite expanded pointers.",
+}
+REVIEW_PACKET_INSTRUCTIONS = """Transport: {$t:i} at a declared snapshot/current_input string leaf
+means the complete literal text_table[i], never another reference. Decode text before the one-way
+before-to-candidate record aliases. In evidence_catalog, [prefix,n] means prefix/0 through prefix/(n-1).
+Cite those expanded exact pointers, retaining before/candidate identity. Sharing is not semantic proof.
+"""
+_PROJECT_SCHEMA = Project.model_json_schema()
+_SNAPSHOT_FIELDS = {
+    "target": ("targets", "0"), "target_draft": ("target_draft",),
+    "milestones": ("milestones",), "behaviors": ("behaviors",),
+    "architecture": ("architectures", "0"), "source_milestones": ("source_milestones",),
+    "plan_contract": ("plan_contract",), "research": ("research",),
 }
 
 
@@ -111,13 +137,74 @@ def _record_group(tokens):
     return None
 
 
+def _string_schema_position(schema, tokens):
+    if "$ref" in schema:
+        schema = _PROJECT_SCHEMA["$defs"][schema["$ref"].rsplit("/", 1)[1]]
+    for union in ("anyOf", "oneOf"):
+        if union in schema:
+            return any(_string_schema_position(item, tokens) for item in schema[union])
+    if not tokens:
+        return schema.get("type") == "string"
+    token, *rest = tokens
+    if schema.get("type") == "array":
+        return (bool(re.fullmatch(r"0|[1-9][0-9]*", token))
+                and _string_schema_position(schema["items"], rest))
+    if schema.get("type") == "object":
+        child = schema.get("properties", {}).get(token, schema.get("additionalProperties"))
+        # An untyped dict (source activity/evidence/context) is opaque data.
+        return isinstance(child, dict) and _string_schema_position(child, rest)
+    return False
+
+
+def _text_position(location):
+    if location == ("current_input",):
+        return True
+    if (len(location) < 2 or location[0] not in {"before", "candidate"}
+            or location[1] not in _SNAPSHOT_FIELDS):
+        return False
+    return _string_schema_position(
+        _PROJECT_SCHEMA, (*_SNAPSHOT_FIELDS[location[1]], *location[2:]))
+
+
+def _decode_packet_text(packet):
+    if "text_encoding" not in packet and "text_table" not in packet:
+        return packet
+    table = packet.get("text_table")
+    if (packet.get("text_encoding") != _TEXT_ENCODING or not isinstance(table, list)
+            or any(not isinstance(item, str) or len(item.encode()) < 32 for item in table)
+            or table != sorted(set(table))):
+        raise ValueError("评审文本池版本或完整字符串表非法")
+
+    def decode(value, location):
+        if _text_position(location) and isinstance(value, dict):
+            if _ALIAS_KEY in value and _record_group(location) in _RECORD_FIELDS:
+                # This distinct first-layer reference is checked by the record
+                # resolver below, including identity, physical path and cycles.
+                return value
+            index = value.get(_TEXT_KEY)
+            if set(value) != {_TEXT_KEY} or type(index) is not int or not 0 <= index < len(table):
+                raise ValueError("评审文本引用必须是有效的终止字符串索引")
+            return table[index]
+        if isinstance(value, dict):
+            return {key: decode(item, (*location, key)) for key, item in value.items()}
+        if isinstance(value, list):
+            return [decode(item, (*location, str(i))) for i, item in enumerate(value)]
+        return value
+
+    return {key: decode(value, (key,)) for key, value in packet.items()
+            if key not in {"text_encoding", "text_table"}}
+
+
 def resolve_packet_pointer(packet, pointer):
     """Resolve evidence paths, expanding only explicitly allowed before aliases.
 
-    Candidate records stay inline. One-way, same-kind links forbid chains/cycles;
-    arbitrary JSON inside a source record is data, never an alias instruction.
+    The terminal typed text layer is decoded first. One-way, same-kind record
+    links still forbid chains/cycles; arbitrary source JSON is never executable.
     """
+    packet = _decode_packet_text(packet)
     def dereference(value, location):
+        if _text_position(location) and isinstance(value, dict) and _TEXT_KEY in value:
+            raise ValueError("评审文本引用缺少有效的文本池编码")
         group = _record_group(location)
         if group is None or not isinstance(value, dict) or _ALIAS_KEY not in value:
             return value, location
@@ -167,6 +254,75 @@ def resolve_packet_pointer(packet, pointer):
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _pool_review_text(packet):
+    """Share only equal complete typed strings, with canonical table ordering."""
+    original = _json(packet)
+    counts = Counter()
+
+    def visit(value, location=(), indices=None):
+        if _text_position(location) and isinstance(value, str):
+            if indices is not None:
+                return {_TEXT_KEY: indices[value]} if value in indices else value
+            if len(value.encode()) >= 32:
+                counts[value] += 1
+        if isinstance(value, dict):
+            return {key: visit(item, (*location, key), indices) for key, item in value.items()}
+        if isinstance(value, list):
+            return [visit(item, (*location, str(i)), indices) for i, item in enumerate(value)]
+        return value
+
+    visit(packet)
+    table = sorted(value for value, count in counts.items() if count > 1)
+    encoded = visit(packet, indices={value: i for i, value in enumerate(table)})
+    encoded["text_table"] = table
+    encoded["text_encoding"] = dict(_TEXT_ENCODING)
+    if _json(_decode_packet_text(encoded)) != original:
+        raise ValueError("评审文本共享未完整保留原始包")
+    packet.clear()
+    packet.update(encoded)
+
+
+def _compact_catalogue(refs):
+    result, index = [], 0
+    while index < len(refs):
+        match = re.fullmatch(r"(.+)/0", refs[index])
+        end = index + 1
+        if match:
+            while end < len(refs) and refs[end] == f"{match[1]}/{end - index}":
+                end += 1
+        if end - index >= 2:
+            result.append([match[1], end - index])
+        else:
+            result.append(refs[index])
+        index = end
+    return result
+
+
+def _expanded_evidence_catalog(packet):
+    catalog = packet.get("evidence_catalog")
+    encoding = packet.get("evidence_catalog_encoding")
+    if not isinstance(catalog, list) or (encoding is not None and encoding != _CATALOGUE_ENCODING):
+        raise ValueError("评审依据目录编码非法")
+    decoded, refs = _decode_packet_text(packet), []
+    for item in catalog:
+        if isinstance(item, str):
+            _pointer_tokens(item)
+            refs.append(item)
+        elif (encoding == _CATALOGUE_ENCODING and isinstance(item, list) and len(item) == 2
+              and isinstance(item[0], str) and type(item[1]) is int and item[1] >= 2):
+            records = resolve_packet_pointer(decoded, item[0])
+            if not isinstance(records, list) or len(records) != item[1]:
+                raise ValueError("评审依据目录范围不对应完整包内列表")
+            refs.extend(f"{item[0]}/{i}" for i in range(item[1]))
+        else:
+            raise ValueError("评审依据目录项非法")
+    if len(refs) != len(set(refs)) or (encoding is not None and _compact_catalogue(refs) != catalog):
+        raise ValueError("评审依据目录重复或不是规范编码")
+    for pointer in refs:
+        resolve_packet_pointer(decoded, pointer)
+    return refs
 
 
 def _deduplicate_before_records(packet):
@@ -422,8 +578,12 @@ def batch_review_packet(before, candidate, record):
     packet["slice_availability"] = _slice_availability(candidate, packet)
     packet["evidence_catalog"] = _evidence_catalog(packet)
     _deduplicate_before_records(packet)
-    for pointer in packet["evidence_catalog"]:
-        resolve_packet_pointer(packet, pointer)
+    _pool_review_text(packet)
+    refs = packet["evidence_catalog"]
+    packet["evidence_catalog"] = _compact_catalogue(refs)
+    packet["evidence_catalog_encoding"] = dict(_CATALOGUE_ENCODING)
+    if _expanded_evidence_catalog(packet) != refs:
+        raise ValueError("评审依据目录未完整保留原始指针")
     # Bind all review inputs, including execution evidence/baseline and source
     # context that the planning-only candidate hash intentionally does not cover.
     packet["review_scope_hash"] = hashlib.sha256(json.dumps(
@@ -446,7 +606,7 @@ def normalize_batch_review(candidate, packet, batch):
     if len(required) != len(set(required)) or set(statuses) != set(required) or required != review_subjects(candidate):
         raise ValueError("批量评审未精确覆盖所有要求的检查项")
     issues, ids = {}, set()
-    catalog = set(packet["evidence_catalog"])
+    catalog = set(_expanded_evidence_catalog(packet))
     for issue in batch.issues:
         if issue.id in ids or len(issue.evidence_refs) != len(set(issue.evidence_refs)):
             raise ValueError("批量评审的问题身份或依据重复")

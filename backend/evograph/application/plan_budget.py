@@ -76,10 +76,13 @@ def _capture_output(audit, event, remaining_bytes):
 
 
 class BudgetedSettings:
-    def __init__(self, settings, metrics, checkpoint=None, *, request_controls=None):
+    def __init__(self, settings, metrics, checkpoint=None, *, request_controls=None, purpose="generation"):
+        if purpose not in {"generation", "semantic_review"}:
+            raise ValueError("Unknown planning request purpose")
         self.settings, self.metrics, self.checkpoint = settings, metrics, checkpoint
         self.secrets = settings.secrets
         self.request_controls = dict(request_controls) if request_controls is not None else None
+        self.purpose = purpose
 
     async def stream(self, messages, tools):
         tools = [compact_schema(t) for t in tools]
@@ -90,19 +93,43 @@ class BudgetedSettings:
             options["request_controls"] = self.request_controls
         request_bytes = encoded_size(request)
         budget = self.metrics.get("budget", {})
+        request_limit = budget.get("max_request_bytes", 98304)
+        if self.purpose == "semantic_review":
+            request_limit = budget.get("max_review_request_bytes", request_limit)
+        request_hash = hashlib.sha256(json.dumps(request, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        rejection = None
         if self.metrics["provider_calls"] >= budget.get("max_calls", 5):
-            raise BudgetExceededError("已到达统一规划的总模型调用上限，候选保留，未自动重试")
-        if request_bytes > budget.get("max_request_bytes", 98304):
-            raise BudgetExceededError("完整模型输入超过本次上下文预算，未截断或发送；请缩小本轮变更")
-        if self.metrics.get("input_bytes", 0) + request_bytes > budget.get("max_total_input_bytes", 262144):
-            raise BudgetExceededError("累计输入已达到本轮预算，候选保留，未发送额外模型请求")
+            rejection = ("call_limit", "已到达统一规划的总模型调用上限，候选保留，未自动重试")
+        elif request_bytes > request_limit:
+            label = "评审" if self.purpose == "semantic_review" else "生成"
+            rejection = ("request_input_limit", f"完整{label}输入 {request_bytes} B 超过单请求预算 {request_limit} B；候选保留，未截断或发送")
+        elif self.metrics.get("input_bytes", 0) + request_bytes > budget.get("max_total_input_bytes", 262144):
+            rejection = ("total_input_limit", "累计输入已达到本轮预算，候选保留，未发送额外模型请求")
+        if rejection:
+            self.metrics.setdefault("admission_rejections", []).append({
+                "purpose": self.purpose, "input_bytes": request_bytes,
+                "request_limit_bytes": request_limit, "request_sha256": request_hash,
+                "reason": rejection[0], "dispatched": False,
+                "admitted_input_bytes": self.metrics.get("input_bytes", 0),
+                "admitted_calls": self.metrics["provider_calls"],
+            })
+            if self.checkpoint:
+                try:
+                    self.checkpoint()
+                except Exception as checkpoint_error:
+                    # A terminal race must not replace this admission outcome.
+                    # The coordinator retains late metrics without reviving a
+                    # discarded candidate, as with post-dispatch audit errors.
+                    self.metrics["admission_rejections"][-1]["audit_checkpoint_error_type"] = type(checkpoint_error).__name__
+            raise BudgetExceededError(rejection[1])
         call = {
             "number": self.metrics["provider_calls"] + 1,
+            "purpose": self.purpose, "request_limit_bytes": request_limit,
             "input_bytes": request_bytes, "schema_bytes": encoded_size(tools),
             "message_bytes": encoded_size(messages),
             "roles_bytes": {role: sum(encoded_size(m) for m in messages if m["role"] == role)
                             for role in {m["role"] for m in messages}},
-            "request_sha256": hashlib.sha256(json.dumps(request, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+            "request_sha256": request_hash,
             "output_bytes": 0, "usage_events": [], "status": "admitted", "dispatched": False,
             "request_metadata": None, "response_finish": [], "provider_response_received": False,
             "received_finish_marker": False, "received_terminal_marker": False,

@@ -625,14 +625,18 @@ test('three-layer review disclosure is compact by default and attributes reviewe
       [...disclosure.querySelectorAll('dt')].map((node) => node.textContent),
       ['结构检查', '模型评审', '未运行实现'],
     );
+    summary.getBoundingClientRect = () => ({ left: 20, right: 160, top: 20, bottom: 40 });
+    summary.getClientRects = () => [summary.getBoundingClientRect()];
     summary.click();
+    disclosure.dispatchEvent(new dom.window.Event('toggle'));
     await tick();
     assert.equal(disclosure.open, true);
-    assert.match(disclosure.textContent, /已自动应用 · 模型评审未发现问题，仍可能有错误/);
-    assert.match(disclosure.textContent, /结构检查未发现问题/);
-    assert.match(disclosure.textContent, /2 条既有验收记录不代表本轮运行/);
-    assert.match(disclosure.textContent, /不代表实现已验证/);
-    assert.match(disclosure.textContent, /候选 PC1 · 基于 R5/);
+    const reader = document.getElementById(summary.getAttribute('aria-controls'));
+    assert.match(reader.textContent, /已自动应用 · 模型评审未发现问题，仍可能有错误/);
+    assert.match(reader.textContent, /结构检查未发现问题/);
+    assert.match(reader.textContent, /2 条既有验收记录不代表本轮运行/);
+    assert.match(reader.textContent, /不代表实现已验证/);
+    assert.match(reader.textContent, /候选 PC1 · 基于 R5/);
     disclosure.dispatchEvent(
       new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
     );
