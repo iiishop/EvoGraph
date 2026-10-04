@@ -35,7 +35,12 @@ class BehaviorRevision(Model):
     statement: str
     acceptance_scope: Literal["target", "milestone"] = Field(
         default="target",
-        description="Both scopes require milestone acceptance; only target counts toward the final goal.",
+        description=(
+            "target must hold when the current user-approved goal is complete, including its "
+            "exclusions; milestone is a local or transitional check outside that goal's final "
+            "contract. Deferred features stay excluded unless the user adds them. "
+            "Both scopes require milestone acceptance."
+        ),
     )
     owner: str
     supersedes: str | None = None
@@ -124,8 +129,10 @@ class ProposedBehavior(Model):
     acceptance_scope: Literal["target", "milestone"] = Field(
         default="target",
         description=(
-            "target is a lasting final-state requirement; milestone is a local or transitional "
-            "step check. Both are mandatory for milestone acceptance. Omit on incremental updates "
+            "target must hold when the current user-approved goal is complete, including its "
+            "exclusions; milestone is a local or transitional check outside that goal's final "
+            "contract. Deferred features stay excluded unless the user adds them. "
+            "Both scopes require milestone acceptance. Omit on incremental updates "
             "to preserve an existing behavior's scope; new behaviors default to target."
         ),
     )

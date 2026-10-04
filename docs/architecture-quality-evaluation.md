@@ -136,3 +136,45 @@ layering, future extensibility, runtime safety or useful model judgement.
 The normal review tool reports structural diagnostics plus semantic prompts.
 Neither a model's self-assessment nor this rubric is production acceptance; actual
 implementation still needs external verification against the user's contracts.
+
+During an agent turn, the existing review tool and automatic review also receive
+a read-only `change_context` comparing the turn-start and current saved milestone
+contracts. It includes eligible prerequisites across both snapshots, including
+detached ancestors, and affected downstream consumers. Planned behaviors retain
+their actual active revision IDs, owners and acceptance scopes; SRC observations
+remain separate source inferences. Changed or removed contracts and edge reasons
+are labeled as before-state facts, not current requirements.
+
+This preview is limited to 16 node summaries, 32 changes per kind, 128 contract
+or field details per kind, and 32 KiB of UTF-8 JSON. Summaries and stable active
+revision references are admitted before details. Existing before summaries use
+exact overrides plus explicitly absent fields, avoiding repeated unchanged
+values. Added/deleted nodes retain explicit absence. Whole behavior records keep
+their actual statements, owners and acceptance scopes; SRC observations stay
+separate. One contract is offered per included node before further changed
+acceptance/statements and node fields, then remaining unchanged details.
+
+Coverage reports omitted nodes, contract counts and exact omitted field names;
+summaries alone do not claim complete semantic context. A detail can be omitted
+even when its node summary is present. Field-presence flags distinguish absence
+from a saved null value. Use `read_project` for full current state; it cannot
+recover omitted before-state records. Large summaries can be omitted even before
+the node limit is reached. Changed edge reasons are prioritized; unchanged edge
+reasons may be among omitted prerequisite-field details. Malformed duplicate SRC
+keys preserve multiplicity but do not provide unique occurrence identity/order.
+Repeated review of the same saved revision references
+the already-emitted context rather than duplicating it. No extra model round,
+semantic verdict, persisted review cache or acceptance result is introduced.
+These limits and factual coverage are regression-testable; improved semantic
+judgement still requires the paired real-provider evaluation described above.
+
+The same existing review also previews dependency finalization on copied nodes
+using the actual transitive-reduction algorithm. For affected dependents it shows
+saved direct prerequisites, projected final direct prerequisites, and the direct
+shortcuts that would be removed while preserving prerequisite reachability.
+This is a conditional projection, not a saved edit: later graph edits or a failed
+finalization can change the outcome. The preview is limited to 32 dependents and
+8 KiB of UTF-8 JSON, with omitted-row counts; invalid graphs report an unavailable
+preview rather than inventing a canonical result. Repeated review of the same
+revision reuses the previous preview. The final saved turn receipt remains
+authoritative; model narration is neither rewritten nor mechanically guaranteed.

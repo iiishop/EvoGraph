@@ -4,6 +4,8 @@ import json
 import pytest
 from conftest import accept_external, apply_proposal, external_report, proposal
 from evograph.agent_tools import tools
+from evograph.agent_tools.base import ToolContext
+from evograph.domain.design_review import review_design
 from evograph.domain.models import (
     BehaviorRevision,
     PlanProposal,
@@ -318,12 +320,118 @@ def test_milestone_only_prerequisite_still_requires_current_complete_acceptance(
 
 def test_scope_guidance_is_exposed_in_agent_tool_contracts():
     registry = tools()
+    proposed = ProposedBehavior.model_json_schema()["properties"]["acceptance_scope"]
+    persisted = BehaviorRevision.model_json_schema()["properties"]["acceptance_scope"]
+    assert proposed["description"].startswith(persisted["description"])
+    for phrase in (
+        "current user-approved goal is complete, including its exclusions",
+        "local or transitional check outside that goal's final contract",
+        "Deferred features stay excluded unless the user adds them",
+        "Both scopes require milestone acceptance",
+    ):
+        assert phrase in proposed["description"]
+    assert "preserve an existing behavior's scope" in proposed["description"]
+    assert "new behaviors default to target" in proposed["description"]
     for name in ["create_milestone", "update_milestone"]:
         spec = registry[name]
         schema = spec.schema()["function"]["parameters"]
-        assert "acceptance_scope" in schema["$defs"]["ProposedBehavior"]["properties"]
+        assert schema["$defs"]["ProposedBehavior"]["properties"]["acceptance_scope"] == proposed
         assert "acceptance_scope" in spec.description
+    plan_schema = PlanProposal.model_json_schema()
+    assert plan_schema["$defs"]["ProposedBehavior"]["properties"]["acceptance_scope"] == proposed
+    for name in ["create_milestone", "set_target"]:
+        assert "current user-approved" in registry[name].description
+        assert "Deferred features stay excluded unless the user adds them" in registry[name].description
+    assert "Both remain mandatory milestone acceptance" in registry["create_milestone"].description
+    assert "omitted acceptance_scope retains the active behavior's scope" in registry[
+        "update_milestone"
+    ].description
     assert "only from active target-scope" in registry["set_target"].description
+
+
+@pytest.mark.parametrize("mode", ["agent", "full-plan"])
+def test_current_goal_scope_guidance_reaches_provider(mode, app):
+    """Assert actual prompt exposure, not the model's ability to follow the guidance."""
+    project = app.projects.create("Current goal contract")
+    captured = []
+
+    async def stream(messages, schemas):
+        captured.append(messages[0]["content"])
+        yield {"type": "text", "text": "Fixture only; no generated plan quality claim."}
+
+    async def complete(messages):
+        captured.append(messages[0]["content"])
+        return proposal().model_dump_json(), 1
+
+    app.settings.stream = stream
+    app.settings.complete = complete
+
+    async def run():
+        if mode == "agent":
+            events = [event async for event in app.agent.stream(project.id, "Review current scope")]
+            assert not any(event["type"] == "error" for event in events)
+        else:
+            await app.planning.chat(project.id, "Review current scope", propose=True)
+
+    asyncio.run(run())
+    assert len(captured) == 1
+    system = " ".join(captured[0].split())
+    if mode == "agent":
+        assert "current user-approved goal, including its exclusions" in system
+        assert "Deferred features stay excluded unless the user adds them" in system
+        assert "Both scopes remain mandatory for that milestone's acceptance" in system
+        assert "Preserve existing scopes on updates" in system
+    else:
+        assert "当前用户确认的目标完成时必须成立的要求（包括排除项）" in system
+        assert "已推迟的功能不属于当前目标，除非用户将其加入范围" in system
+        assert "两类行为都必须通过里程碑验收" in system
+        assert "全量计划必须明确保留已有行为的 acceptance_scope" in system
+        assert ProposedBehavior.model_json_schema()["properties"]["acceptance_scope"][
+            "description"
+        ] in system
+    assert "lasting final-state" not in system
+    assert "最终状态必须保持" not in system
+
+
+@pytest.mark.parametrize("mode", ["incremental", "full-plan"])
+def test_current_goal_exclusion_preserves_scope_and_membership(mode, app):
+    """Explicit scope survives editing/review; no natural-language classification is asserted."""
+    project = app.projects.create("Local records")
+    target = "Deliver local records; shared accounts are deferred"
+    current = node()
+    current.behaviors[0].statement = (
+        "In the current approved release, records remain local and no account-sharing action exists"
+    )
+    app.graph.upsert(project.id, current, create=True)
+    app.graph.target(project.id, target)
+    app.graph.finalize(project.id)
+    before = app.db.get(project.id)
+    current.title = "Refined local records delivery"
+    if mode == "incremental":
+        payload = current.model_dump()
+        for behavior in payload["behaviors"]:
+            behavior.pop("acceptance_scope")
+        spec = tools()["update_milestone"]
+        spec.handler(ToolContext(project.id, app), spec.parameters.model_validate(payload))
+        app.graph.finalize(project.id)
+    else:
+        apply_proposal(app, before, PlanProposal(
+            target=target, summary="Refine title only", milestones=[current],
+        ))
+    after = app.db.get(project.id)
+    assert after.behaviors == before.behaviors
+    assert after.targets == before.targets
+    assert after.targets[-1].required_behavior_ids == [before.behaviors[0].id]
+    snapshot = after.model_dump()
+    report = review_design(after)
+    membership = report["prospective_target_membership"]
+    assert membership["target_behavior_count"] == 1
+    assert membership["milestones"][0]["milestone_behavior_count"] == 1
+    assert "当前用户确认目标" in membership["basis"]
+    assert "已推迟的功能除非用户加入否则仍在范围外" in membership["basis"]
+    assert "包括排除项" in report["semantic_review"][0]
+    assert after.model_dump() == snapshot
+    assert not acceptance(after)["achieved"]
 
 
 @pytest.mark.parametrize("interruption", ["cancel", "failure"])

@@ -273,5 +273,5 @@ def test_failed_narration_write_preserves_close_and_releases_admitted_turn(
         assert errors == [
             "Original provider failure"
             if interruption == "provider_error"
-            else "Synthetic assistant storage failure"
+            else "Agent 请求未完成：内部输入输出失败（诊断：internal_io_error）"
         ]

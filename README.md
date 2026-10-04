@@ -63,10 +63,10 @@ A roadmap can contain temporary states. For example, a first PR may write invent
 
 Each proposed behavior supports `acceptance_scope`:
 
-- `target` (the default): a lasting requirement included in the final target contract
+- `target` (the default): a requirement that must hold when the current user-approved goal is complete, including its exclusions
 - `milestone`: a local or transitional check, mandatory for its milestone but excluded from the final target contract
 
-Both incremental tools and full-plan proposals support this field. Set it explicitly when planning a transition; graph order does not determine final membership. The inspector labels each check, and the goal strip counts the exact behavior IDs in the latest committed target. A roadmap containing only milestone-scoped checks has no final acceptance contract yet and is never shown as achieved.
+Deferred features stay outside the current goal unless the user adds them. Both incremental tools and full-plan proposals support this field. Set it explicitly when planning a transition; graph order does not determine final membership. The inspector labels each check, and the goal strip counts the exact behavior IDs in the latest committed target. A roadmap containing only milestone-scoped checks has no final acceptance contract yet and is never shown as achieved.
 
 Existing projects and proposals without the field retain `target` semantics. A scope change creates a new behavior revision; previous targets and evidence are retained. An incremental update that omits the scope on an unchanged active behavior preserves that behavior's scope.
 

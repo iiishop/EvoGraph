@@ -63,7 +63,7 @@ def target_coverage(project):
             "target_coverage_missing",
             "project",
             "当前仅有本步验收，尚未定义最终目标标准",
-            "补充最终交付时仍需成立的行为，并标记为 target；不要把临时要求自动提升为最终目标",
+            "补充当前用户确认的目标完成时必须成立的行为，并标记为 target；不要把临时要求或已推迟的功能自动纳入目标",
         )
 
 
@@ -181,7 +181,7 @@ def retirement_traceability(project):
 
 
 SEMANTIC_REVIEW = [
-    "目标中的每项结果是否由 target 行为覆盖？临时或过渡验收是否标为 milestone，并仍保留在本步契约中？",
+    "当前用户确认的目标（包括排除项）是否由 target 行为覆盖？已推迟的功能是否仍在范围外？局部或过渡验收是否标为 milestone，并仍保留在本步契约中？",
     "标成可选、可跳过或叶子的工作是否仍有 target 行为进入最终目标？是否新增了用户没有要求、当前也非必要的产品能力？以 prospective_target_membership 的实际计数核对，不能只看文字标签。",
     "是否有无关或重复工作？最终目标与每一步的验收标准是否各自清楚？",
     "每个里程碑能否独立合并、说明价值，并让外部验收者按触发条件验证结果？",
@@ -218,7 +218,7 @@ def review_design(project: Project):
         "findings": findings,
         "semantic_review": SEMANTIC_REVIEW,
         "prospective_target_membership": {
-            "basis": "当前活跃行为的 acceptance_scope；本轮收尾据此生成最终目标，不依据叶子节点或可选文字标签。",
+            "basis": "当前活跃行为的 acceptance_scope；本轮收尾据此生成当前用户确认目标的最终契约，已推迟的功能除非用户加入否则仍在范围外；不依据叶子节点或可选文字标签。",
             "target_behavior_count": sum(row["target_behavior_count"] for row in membership),
             "milestones": membership,
         },

@@ -79,14 +79,15 @@ DESIGN WORKFLOW — scale depth to the requested change, never manufacture proce
    Each intent states outcome and boundaries; scope names affected modules/contracts and exclusions.
    Each behavior states a trigger/precondition and observable result; cover relevant failure and
    compatibility cases. Separate implementation details from acceptance behavior. Keep stable keys.
-   Set behavior acceptance_scope=target for lasting final-state requirements, or milestone for local
-   and transitional step checks that need not hold in the final state. Both scopes remain mandatory
+   Set behavior acceptance_scope=target for requirements at completion of the current user-approved
+   goal, including its exclusions, or milestone for local/transitional checks outside that goal's
+   final contract. Deferred features stay excluded unless the user adds them. Both scopes remain mandatory
    for that milestone's acceptance; only target contributes to the final goal. Never use scope to
    bypass acceptance. Preserve existing scopes on updates; explicit scope changes create revisions.
    Calling a node a leaf, optional or skippable in prose does not remove its target-scoped behaviors
    from the final contract. Check the review tool's prospective_target_membership counts before
    claiming work can be skipped. Remove unrequested optional work rather than relabeling it to satisfy
-   this check; never downgrade a requested lasting requirement merely to make the goal easier.
+   this check; never downgrade a requirement of the current goal merely to make acceptance easier.
    Prioritize uncertainty and costly irreversible decisions early through a concrete deliverable;
    do ordinary investigation yourself rather than creating vague research tasks for the user.
    Every dependency must identify a prerequisite artifact/contract and why work cannot safely proceed

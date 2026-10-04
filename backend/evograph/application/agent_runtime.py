@@ -8,9 +8,11 @@ from contextlib import aclosing
 
 from ..agent_tools import tools
 from ..agent_tools.base import ToolContext
+from ..agent_tools.design_review import current_review
 from ..domain.composer import ComposerDocument
 from ..domain.design_review import review_design
 from ..domain.models import uid
+from .agent_errors import agent_error_event
 from .design_workflow import ARCHITECTURE_INTENT, DESIGN_WORKFLOW
 from .tool_execution import ToolExecutor
 from .turn_summary import build_turn_summary, read_turn_summary
@@ -182,6 +184,7 @@ class AgentRuntime:
             ]
             registry = tools()
             ctx = ToolContext(project_id, self.app)
+            ctx.before_snapshot = before_snapshot
             ctx.verification_milestone = verification_milestone
             if self.app.db.setting("vision_enabled", False):
                 ctx.visual_attachments = {
@@ -329,7 +332,7 @@ class AgentRuntime:
                                 "limitations honestly. Honor explicit architecture exclusions or deferments: "
                                 "do not create or modify architecture or diagrams to clear advisory findings, "
                                 "and do not block the requested roadmap on them. Current review (data):\n"
-                                + json.dumps(review_design(current), ensure_ascii=False),
+                                + json.dumps(current_review(ctx, current), ensure_ascii=False),
                             }
                         )
                         yield {"type": "thinking", "label": "正在评审架构与交付设计…"}
@@ -388,12 +391,7 @@ class AgentRuntime:
             raise
         except Exception as exc:
             status = "failed"
-            message = (
-                str(exc)[:1000]
-                if isinstance(exc, (ValueError, OSError))
-                else "Agent 请求未完成，请检查 Provider 是否支持流式工具调用"
-            )
-            yield {"type": "error", "message": message}
+            yield agent_error_event(exc)
         finally:
             changed |= executor.changed if executor else False
             try:

@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
+from ..domain.models import Project
+
 REGISTRY = {}
 
 
@@ -18,6 +20,8 @@ class ToolContext:
     visual_attachments: set[str] = field(default_factory=set)
     web_cache: dict[str, dict] = field(default_factory=dict)
     paused: bool = False
+    before_snapshot: Project | None = None
+    review_context_revision: int | None = None
 
 
 @dataclass
