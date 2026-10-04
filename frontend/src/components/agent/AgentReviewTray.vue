@@ -525,7 +525,9 @@ onUnmounted(() => {
           >
             <AgentTurnSummary
               v-if="summary && !running"
+              :key="`${project.id}:${project.created_at}:${summary.turn_id}`"
               :summary="summary"
+              :project="project"
               :milestones="[...project.milestones, ...(project.source_milestones ?? [])]"
               :open="true"
               @locate="locate"

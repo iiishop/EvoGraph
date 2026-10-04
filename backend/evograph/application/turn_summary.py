@@ -1,7 +1,7 @@
 """Factual, bounded turn outcomes derived from committed planning snapshots.
 
 History, model narration, layout, and accounting never determine whether a turn
-changed the plan. The event stores identifiers and field names, not snapshots.
+changed the plan. The event stores identifiers and field names, not snapshots or model judgments.
 """
 
 from typing import Literal
@@ -124,6 +124,62 @@ def _target_changes(before: Project, after: Project) -> dict | None:
     }
 
 
+def _contract_details(before: Project, after: Project) -> dict:
+    """Keep active references distinct from committed-target membership.
+
+    Immutable history supplies the text. Missing records retain their exact IDs,
+    rather than borrowing a newer revision with the same key. The small receipt
+    also binds unchanged target references to this turn, not today's target.
+    """
+    def references(project: Project) -> dict:
+        by_id = {item.id: item for item in project.behaviors}
+        active = {bid for node in project.milestones for bid in node.behavior_revision_ids}
+        required = set(project.targets[-1].required_behavior_ids if project.targets else [])
+        result = {}
+        for bid in sorted(active | required):
+            behavior = by_id.get(bid)
+            key = ("key", behavior.behavior_key) if behavior else ("missing", bid)
+            side = result.setdefault(key, {"active_id": None, "required_id": None})
+            if bid in active:
+                side["active_id"] = bid
+            if bid in required:
+                side["required_id"] = bid
+        return result
+
+    old, new = references(before), references(after)
+    old_records = {item.id: item for item in before.behaviors}
+    new_records = {item.id: item for item in after.behaviors}
+    old_keys = {item.behavior_key for item in before.behaviors}
+    empty = {"active_id": None, "required_id": None}
+    changes = []
+    for key in sorted(old.keys() | new.keys()):
+        left, right = old.get(key, empty), new.get(key, empty)
+        if left == right:
+            continue
+        previous = old_records.get(left["active_id"] or left["required_id"])
+        current = new_records.get(right["active_id"] or right["required_id"])
+        changes.append({
+            "behavior_key": key[1] if key[0] == "key" else None,
+            "before": left,
+            "after": right,
+            "fields": [
+                field for field in ("statement", "acceptance_scope", "owner")
+                if previous and current and getattr(previous, field) != getattr(current, field)
+            ],
+            "restored": bool(
+                not left["active_id"] and right["active_id"]
+                and key[0] == "key" and key[1] in old_keys
+            ),
+        })
+    return {
+        "project_id": before.id,
+        "project_created_at": before.created_at,
+        "before_target_version": before.targets[-1].number if before.targets else None,
+        "after_target_version": after.targets[-1].number if after.targets else None,
+        "behaviors": changes,
+    }
+
+
 def _other_areas(project: Project) -> dict:
     return {
         "project": {key: getattr(project, key) for key in ("name", "description", "repository")},
@@ -184,8 +240,10 @@ def build_turn_summary(before: Project, after: Project, turn_id: str, status: Tu
         "architecture": architecture,
         "other": sorted(other),
     }
+    contract_details = _contract_details(before, after)
     return {
         "version": 1,
+        "contract_details": contract_details,
         "turn_id": turn_id,
         "status": status,
         "changed": bool(
@@ -194,6 +252,7 @@ def build_turn_summary(before: Project, after: Project, turn_id: str, status: Tu
             or changes["target"]
             or architecture
             or changes["other"]
+            or contract_details["behaviors"]
         ),
         "before_revision": before.revision,
         "after_revision": after.revision,

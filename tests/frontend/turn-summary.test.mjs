@@ -248,7 +248,7 @@ test('named milestone changes and dependency before/after details render compact
   });
   for (const label of [
     '本轮变更',
-    '本轮完成',
+    '变更已保存',
     '迁移到数据库',
     '订单录入',
     '临时 CSV 存储',
@@ -290,8 +290,8 @@ test('target membership changes distinguish moving into and out of final accepta
     { behavior_key: 'csv.persist', before_id: 'B4', after_id: null, fields: ['acceptance_scope'] },
   ];
   const html = await render(AgentTurnSummary, { summary: value, milestones: [] });
-  assert.match(html, /纳入<\/span>「database.persist」/);
-  assert.match(html, /移出<\/span>「csv.persist」/);
+  assert.match(html, /纳入目标<\/span>「database.persist」/);
+  assert.match(html, /移出目标<\/span>「csv.persist」/);
   assert.match(html, /验收归属/);
 });
 

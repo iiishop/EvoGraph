@@ -3,6 +3,9 @@ import { computed } from 'vue';
 import type { Milestone, TurnSummary } from '../../types';
 import {
   dependencyTypeLabels,
+  turnContractViews,
+  turnTargetView,
+  type TurnHistory,
   turnFieldLabels,
   turnOtherLabels,
   turnSummaryHeadline,
@@ -11,7 +14,11 @@ import {
   turnSummaryStatus,
 } from '../../lib/turnSummary';
 
-const props = defineProps<{ summary: TurnSummary; milestones: Milestone[] }>();
+const props = defineProps<{
+  summary: TurnSummary;
+  milestones: Milestone[];
+  project?: TurnHistory;
+}>();
 defineEmits<{ locate: [id: string] }>();
 const exists = (id: string) => props.milestones.some((item) => item.id === id);
 const changes = computed(() => props.summary.changes);
@@ -27,32 +34,8 @@ const dependencyGroups = computed(() => [
 const hasDependencies = computed(() =>
   Object.values(changes.value.dependencies).some((items) => items.length),
 );
-const membership = computed(() => {
-  const target = changes.value.target;
-  if (!target) return [];
-  const items = target.required_behavior_changes
-    .filter((item) => item.before_id !== null || item.after_id !== null)
-    .map((item) => ({
-      key: item.behavior_key,
-      label: item.before_id === null ? '纳入' : item.after_id === null ? '移出' : '修订',
-      fields: item.fields,
-    }));
-  // Unknown/orphan historical IDs remain factual, without inventing a behavior name.
-  for (const [direction, label, idField] of [
-    ['added', '纳入', 'after_id'],
-    ['removed', '移出', 'before_id'],
-  ] as const) {
-    for (const id of target.required_behavior_ids[direction]) {
-      if (!target.required_behavior_changes.some((item) => item[idField] === id)) {
-        items.push({ key: id, label, fields: [] });
-      }
-    }
-  }
-  return items;
-});
-const hasTarget = computed(
-  () => changes.value.target?.statement_changed || membership.value.length,
-);
+const contracts = computed(() => turnContractViews(props.summary, props.project));
+const targetReference = computed(() => turnTargetView(props.summary, props.project));
 function milestoneTitle(id: string): string {
   const snapshot = [
     ...changes.value.milestones.added,
@@ -74,7 +57,11 @@ function version(value: number | null, prefix: string): string {
 </script>
 
 <template>
-  <details class="agent-turn-summary" :data-status="summary.status">
+  <details
+    :key="`${project?.id ?? ''}:${project?.created_at ?? ''}:${summary.turn_id}`"
+    class="agent-turn-summary"
+    :data-status="summary.status"
+  >
     <summary>
       <span class="turn-summary-title">本轮变更</span>
       <span class="turn-summary-status">{{ turnSummaryStatus(summary) }}</span>
@@ -84,6 +71,7 @@ function version(value: number | null, prefix: string): string {
     </summary>
     <div class="turn-summary-scroll" aria-label="本轮已保存的规划变更" tabindex="0">
       <p class="turn-summary-notice">{{ turnSummaryNotice(summary) }}</p>
+      <p class="turn-summary-notice">保存与结构检查不代表目标已验收或语义一致。</p>
       <p v-if="summary.history_warning" class="turn-summary-notice" role="status">
         {{ summary.history_warning }}
       </p>
@@ -168,15 +156,67 @@ function version(value: number | null, prefix: string): string {
             </li>
           </ul>
         </section>
-        <section v-if="hasTarget">
+        <section v-if="contracts.length || targetReference">
           <h3>最终目标与验收</h3>
-          <ul>
-            <li v-if="changes.target?.statement_changed">更新目标描述</li>
-            <li v-for="item in membership" :key="`${item.label}-${item.key}`">
-              <span class="turn-change-action">{{ item.label }}</span
-              >「{{ item.key }}」<span v-if="item.fields.length" class="turn-change-detail"
-                >：{{ fieldNames(item.fields) }}</span
+          <details v-if="targetReference" class="turn-target-reference">
+            <summary>
+              {{ targetReference.unchanged ? '已提交目标描述未变' : '已提交目标描述已更新' }}
+              <span class="turn-change-detail">
+                · {{ version(targetReference.sides[0].version, 'T') }} →
+                {{ version(targetReference.sides[1].version, 'T') }} · 查看原文
+              </span>
+            </summary>
+            <template v-for="side in targetReference.sides" :key="side.label">
+              <div
+                v-if="!targetReference.sharedStatement || side.label === '变更后'"
+                class="turn-contract-side"
               >
+                <strong
+                  >{{ targetReference.sharedStatement ? '该轮已提交目标' : side.label }} ·
+                  {{ version(side.version, 'T') }}</strong
+                >
+                <p v-if="side.target" class="turn-contract-text">{{ side.target.statement }}</p>
+                <p v-else class="turn-contract-missing">
+                  {{
+                    side.version === null ? '此侧未设置目标' : `历史目标记录缺失：T${side.version}`
+                  }}
+                </p>
+              </div>
+            </template>
+          </details>
+          <ul>
+            <li v-for="item in contracts" :key="item.key">
+              <details class="turn-contract-change">
+                <summary>
+                  <span class="turn-change-action">{{ item.label }}</span
+                  >「{{ item.key }}」
+                  <span v-if="item.fields.length" class="turn-change-detail"
+                    >：{{ fieldNames(item.fields) }}</span
+                  >
+                </summary>
+                <div class="turn-contract-sides">
+                  <div v-for="side in item.sides" :key="side.label" class="turn-contract-side">
+                    <strong>{{ side.label }}</strong>
+                    <span v-if="side.behavior" class="turn-contract-meta">
+                      · 版本 v{{ side.behavior.version }} · {{ side.id }}
+                    </span>
+                    <p class="turn-contract-meta">{{ side.membership }}</p>
+                    <template v-if="side.behavior">
+                      <p class="turn-contract-meta">
+                        所属里程碑：{{ side.behavior.owner }} · 验收归属：{{
+                          side.behavior.acceptance_scope === 'target'
+                            ? '目标验收（target）'
+                            : side.behavior.acceptance_scope === 'milestone'
+                              ? '阶段验收（milestone）'
+                              : '历史未记录'
+                        }}
+                      </p>
+                      <p class="turn-contract-text">{{ side.behavior.statement }}</p>
+                    </template>
+                    <p v-else class="turn-contract-missing">{{ side.missing }}</p>
+                  </div>
+                </div>
+              </details>
             </li>
           </ul>
         </section>
@@ -200,6 +240,53 @@ function version(value: number | null, prefix: string): string {
 </template>
 
 <style scoped>
+.turn-contract-change,
+.turn-target-reference {
+  margin: 5px 0;
+  min-width: 0;
+}
+.turn-contract-change > summary,
+.turn-target-reference > summary {
+  padding: 4px 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.turn-contract-change > summary:focus-visible,
+.turn-target-reference > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.turn-contract-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+@container (max-width: 600px) {
+  .turn-contract-sides {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+.turn-contract-side {
+  min-width: 0;
+  margin: 6px 0 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--line);
+}
+.turn-contract-meta,
+.turn-contract-missing,
+.turn-target-reference {
+  color: var(--muted);
+  font-size: 11px;
+}
+.turn-summary-scroll .turn-contract-text {
+  margin-top: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.7;
+}
 .turn-history-warning {
   color: var(--warning);
   font-size: 11px;
@@ -224,6 +311,7 @@ function version(value: number | null, prefix: string): string {
   border-radius: 3px;
 }
 .agent-turn-summary {
+  container-type: inline-size;
   margin: 0 0 8px;
   border: 1px solid var(--line);
   border-radius: 8px;

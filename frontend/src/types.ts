@@ -190,11 +190,30 @@ export interface ProjectEvent {
   detail: string;
   created_at: string;
 }
+export interface TurnContractSide {
+  active_id: string | null;
+  required_id: string | null;
+}
+export interface TurnContractChange {
+  behavior_key: string | null;
+  before: TurnContractSide;
+  after: TurnContractSide;
+  fields: string[];
+  restored: boolean;
+}
+export interface TurnContractDetails {
+  project_id: string;
+  project_created_at: string;
+  before_target_version: number | null;
+  after_target_version: number | null;
+  behaviors: TurnContractChange[];
+}
 export interface TurnSummary {
   version: 1;
   turn_id: string;
   status: 'completed' | 'waiting' | 'stopped' | 'failed';
   history_warning?: string;
+  contract_details?: TurnContractDetails;
   changed: boolean;
   before_revision: number;
   after_revision: number;

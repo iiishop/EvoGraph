@@ -1,4 +1,4 @@
-import type { Project, ProjectEvent, TurnSummary } from '../types';
+import type { Behavior, Project, ProjectEvent, TurnContractSide, TurnSummary } from '../types';
 
 export type { TurnSummary } from '../types';
 
@@ -25,6 +25,25 @@ const edgeUpdate = (value: unknown) =>
   edgeValue(value.before) &&
   edgeValue(value.after);
 
+const contractSide = (value: unknown) =>
+  record(value) && optionalText(value.active_id) && optionalText(value.required_id);
+const contractDetails = (value: unknown) =>
+  record(value) &&
+  text(value.project_id) &&
+  text(value.project_created_at) &&
+  optionalRevision(value.before_target_version) &&
+  optionalRevision(value.after_target_version) &&
+  list(
+    value.behaviors,
+    (item) =>
+      record(item) &&
+      optionalText(item.behavior_key) &&
+      contractSide(item.before) &&
+      contractSide(item.after) &&
+      strings(item.fields) &&
+      typeof item.restored === 'boolean',
+  );
+
 /** Only the versioned, persisted contract can produce a factual turn receipt. */
 export function parseTurnSummary(detail: string): TurnSummary | null {
   try {
@@ -38,6 +57,7 @@ export function parseTurnSummary(detail: string): TurnSummary | null {
       !['completed', 'waiting', 'stopped', 'failed'].includes(value.status) ||
       typeof value.changed !== 'boolean' ||
       (value.history_warning !== undefined && !text(value.history_warning)) ||
+      (value.contract_details !== undefined && !contractDetails(value.contract_details)) ||
       !revision(value.before_revision) ||
       !revision(value.after_revision) ||
       !record(value.changes)
@@ -140,6 +160,7 @@ export const turnFieldLabels: Record<string, string> = {
 };
 export const turnOtherLabels: Record<string, string> = {
   project: '项目信息',
+  target_draft: '未提交目标草案',
   light_checks: '轻量检查',
   diagrams: '设计图',
   uml_diagrams: '局部类结构',
@@ -158,7 +179,7 @@ export const dependencyTypeLabels: Record<string, string> = {
 };
 export const turnSummaryStatus = (summary: TurnSummary) =>
   ({
-    completed: '本轮完成',
+    completed: turnSummaryHasChanges(summary) ? '变更已保存' : '本轮已结束',
     waiting: '等待你的回答',
     stopped: '已停止',
     failed: '本轮未完成',
@@ -182,6 +203,7 @@ export function turnSummaryHasChanges(summary: TurnSummary): boolean {
     target?.required_behavior_ids.removed.length ||
     target?.required_behavior_changes.some((item) => item.before_id !== item.after_id) ||
     architecture ||
+    summary.contract_details?.behaviors.length ||
     other.length,
   );
 }
@@ -203,6 +225,8 @@ export function turnSummaryHeadline(summary: TurnSummary): string {
       target.required_behavior_ids.added.length + target.required_behavior_ids.removed.length;
     if (count) parts.push(`最终验收 ${count} 项`);
   }
+  if (summary.contract_details?.behaviors.length && !target?.required_behavior_changes.length)
+    parts.push(`验收变更 ${summary.contract_details.behaviors.length} 项`);
   if (architecture) parts.push('架构更新');
   parts.push(...other.map((area) => turnOtherLabels[area] || area));
   return parts.join(' · ') || '已保存变更';
@@ -254,9 +278,166 @@ export function milestoneTurnHistory(project: Pick<Project, 'events'>, milestone
         createdAt: event.created_at,
         summary: {
           ...summary,
+          contract_details: undefined,
           changes: { milestones, dependencies, target: null, architecture: null, other: [] },
         },
       },
     ];
   });
+}
+
+export type TurnHistory = Pick<Project, 'id' | 'created_at' | 'targets' | 'behaviors' | 'events'>;
+
+/** Legacy receipts need their own persisted event; a key or a latest value is never provenance. */
+export function turnHistoryBound(summary: TurnSummary, project?: TurnHistory): boolean {
+  if (!project) return false;
+  const detail = summary.contract_details;
+  if (detail)
+    return detail.project_id === project.id && detail.project_created_at === project.created_at;
+  return (project.events ?? []).some((event) => {
+    if (event.kind !== 'agent_turn_finished') return false;
+    const saved = parseTurnSummary(event.detail);
+    return (
+      saved?.turn_id === summary.turn_id &&
+      saved.before_revision === summary.before_revision &&
+      saved.after_revision === summary.after_revision &&
+      JSON.stringify(saved.changes) === JSON.stringify(summary.changes)
+    );
+  });
+}
+
+export interface TurnContractView {
+  key: string;
+  label: string;
+  fields: string[];
+  sides: {
+    label: string;
+    id: string | null;
+    behavior?: Behavior;
+    membership: string;
+    missing: string;
+  }[];
+}
+
+export function turnContractViews(summary: TurnSummary, project?: TurnHistory): TurnContractView[] {
+  const bound = turnHistoryBound(summary, project);
+  const detail = summary.contract_details;
+  const side = (value: TurnContractSide, label: string, key: string | null, legacy = false) => {
+    const id = value.active_id ?? value.required_id;
+    // Exact identity only. Incomplete or inconsistent history is explicitly unavailable.
+    const matches = bound
+      ? (project?.behaviors ?? []).filter(
+          (item) => item.id === id && (key === null || item.behavior_key === key),
+        )
+      : [];
+    const behavior = matches.length === 1 ? matches[0] : undefined;
+    let membership = legacy
+      ? '旧回执未记录启用状态'
+      : value.active_id
+        ? '该侧已启用'
+        : '该侧未启用';
+    if (value.required_id) {
+      membership +=
+        value.active_id && value.required_id !== value.active_id
+          ? ` · 目标仍引用其他版本 ${value.required_id}`
+          : ` · 目标引用 ${value.required_id}`;
+    } else membership += ' · 未纳入此侧目标';
+    const missing = id
+      ? bound
+        ? `历史验收记录缺失：${id}`
+        : '缺少匹配的项目历史，无法读取此版本'
+      : legacy
+        ? '旧回执未记录此侧启用版本，不能据此判断新增或停用'
+        : '本侧未启用，也无目标引用';
+    return { label, id, behavior, membership, missing };
+  };
+  if (detail)
+    return detail.behaviors.map((item) => ({
+      key:
+        item.behavior_key ??
+        item.before.active_id ??
+        item.after.active_id ??
+        item.before.required_id ??
+        item.after.required_id ??
+        '未知验收',
+      label:
+        !item.before.active_id && item.after.active_id
+          ? item.restored
+            ? '恢复启用'
+            : '新增验收项'
+          : item.before.active_id && !item.after.active_id
+            ? '停用验收项'
+            : item.fields.length
+              ? '修订'
+              : '更新版本引用',
+      fields: item.fields,
+      sides: [
+        side(item.before, '变更前', item.behavior_key),
+        side(item.after, '变更后', item.behavior_key),
+      ],
+    }));
+  const target = summary.changes.target;
+  if (!target) return [];
+  const entries = target.required_behavior_changes.map((item) => ({
+    ...item,
+    lookupKey: item.behavior_key as string | null,
+  }));
+  for (const [direction, idField] of [
+    ['added', 'after_id'],
+    ['removed', 'before_id'],
+  ] as const) {
+    for (const id of target.required_behavior_ids[direction]) {
+      if (!entries.some((item) => item[idField] === id))
+        entries.push({
+          behavior_key: id,
+          lookupKey: null,
+          before_id: direction === 'removed' ? id : null,
+          after_id: direction === 'added' ? id : null,
+          fields: [],
+        });
+    }
+  }
+  return entries
+    .filter((item) => item.before_id !== null || item.after_id !== null)
+    .map((item) => ({
+      key: item.behavior_key,
+      label:
+        item.before_id === null
+          ? '纳入目标'
+          : item.after_id === null
+            ? '移出目标'
+            : item.fields.length
+              ? '修订'
+              : '更新版本引用',
+      fields: item.fields,
+      sides: [
+        side({ active_id: null, required_id: item.before_id }, '变更前', item.lookupKey, true),
+        side({ active_id: null, required_id: item.after_id }, '变更后', item.lookupKey, true),
+      ],
+    }));
+}
+
+export function turnTargetView(summary: TurnSummary, project?: TurnHistory) {
+  const detail = summary.contract_details;
+  const target = summary.changes.target;
+  if (!detail && !target) return null;
+  const bound = turnHistoryBound(summary, project);
+  const beforeVersion = detail ? detail.before_target_version : target!.before_version;
+  const afterVersion = detail ? detail.after_target_version : target!.after_version;
+  const get = (number: number | null) => {
+    const matches = bound ? (project?.targets ?? []).filter((item) => item.number === number) : [];
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const before = get(beforeVersion),
+    after = get(afterVersion);
+  const unchanged =
+    before && after ? before.statement === after.statement : !target?.statement_changed;
+  return {
+    unchanged,
+    sharedStatement: Boolean(before && after && unchanged),
+    sides: [
+      { label: '变更前', version: beforeVersion, target: before },
+      { label: '变更后', version: afterVersion, target: after },
+    ],
+  };
 }
