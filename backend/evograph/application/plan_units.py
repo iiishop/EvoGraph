@@ -629,10 +629,34 @@ def current_unit_context(db):
                 # exact node facts. Keep the directory without repeating them.
                 result["components"] = [{"id": c["id"], "label": c["label"]} for c in result["components"]]
                 result["components_note"] = "Complete current component facts are in current_unit.objects['architecture:architecture'].diagram.nodes, joined by id. Directory text is not a replacement for those exact nodes."
+        _compact_unit_directories(result)
     else:
         result["current_unit"] = None
     result["completed_unit_facts"] = deepcopy(schedule["checkpoints"])
     return result
+
+
+def _compact_unit_directories(context):
+    """A directory need not repeat the complete objects included beside it."""
+    objects = context["current_unit"]["objects"]
+    for name, identity, prefix, keep in (
+        ("acceptance_directory", "key", "contract:", ("key", "owner", "revision_id")),
+        ("components", "id", "component:", ("id", "label")),
+    ):
+        compacted = []
+        for index, entry in enumerate(context[name]):
+            key = prefix + entry[identity]
+            full = objects.get(key)
+            if (full is not None and set(entry) - set(keep)
+                    and all(field in full and full[field] == value for field, value in entry.items())):
+                context[name][index] = {field: entry[field] for field in keep}
+                compacted.append(key)
+        if compacted:
+            context[name + "_note"] = (
+                "Complete exact definitions for " + _json(compacted)
+                + " are in current_unit.objects under those same keys. Their directory entries retain identity only, "
+                  "without repeating those definitions. Other entries are unchanged; no acceptance or interface fact is removed."
+            )
 
 
 def prepare_unit_request(db):
