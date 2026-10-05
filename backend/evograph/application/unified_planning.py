@@ -29,7 +29,12 @@ from .plan_harness import (
     validate_review_sources,
 )
 from .plan_ir import DELTA_TOOL
-from .plan_repair_context import REPAIR_INSTRUCTIONS, auto_repair_context, build_repair_agenda
+from .plan_repair_context import (
+    REPAIR_INSTRUCTIONS,
+    auto_repair_context,
+    build_repair_agenda,
+    explicit_repair_agenda,
+)
 from .plan_review import (
     CHECKER_VERSION,
     REVIEW_PACKET_INSTRUCTIONS,
@@ -394,6 +399,8 @@ class UnifiedPlanningService:
             resume = previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] == before.revision
             from .plan_batch_policy import REPAIR_EXPERIMENT, select_experiment
             selected_experiment = select_experiment(experiment, before, previous, resume)
+            repair_agenda = (explicit_repair_agenda(before, previous)
+                if selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT else None)
             candidate = Project.model_validate(previous["project"]) if resume else before.model_copy(deep=True)
             candidate.question = before.question
             bootstrap_contract(candidate)
@@ -521,14 +528,16 @@ class UnifiedPlanningService:
                 stage.record = self.store.save(stage.record)
                 return route
 
-            repair_agenda = None
-
             def router_context():
                 return auto_repair_context(
                     {**initial_unit_context(stage, include_prior_pending=True),
                      "schedule_admission_findings": stage.record.get("schedule_admission_findings", []),
                      "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)},
                     repair_agenda)
+
+            if repair_agenda is not None:
+                facade.agent.initial_context = lambda project: router_context()
+                facade.agent.extra_context = REPAIR_INSTRUCTIONS
 
             def next_segment_context(project, completed_round, tool_results):
                 remaining = metrics["budget"]["max_calls"] - metrics["provider_calls"]

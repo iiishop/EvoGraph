@@ -1,4 +1,4 @@
-"""Read-only feedback for one repair of a freshly sealed harness run.
+"""Read-only feedback for one repair of a sealed harness run.
 
 This is a prompt projection, never a publication decision or reusable certificate.
 Full reports, historical findings and certificates remain in the candidate audit.
@@ -6,13 +6,22 @@ Full reports, historical findings and certificates remain in the candidate audit
 import json
 from copy import deepcopy
 
+from ..domain.models import Project
 from ..domain.plan_contracts import SemanticReview
-from ..domain.plan_harness import CURRENT_POLICY, content_hash, execution_satisfied
+from ..domain.plan_harness import (
+    CURRENT_POLICY,
+    HarnessRun,
+    HarnessSnapshot,
+    content_hash,
+    execution_satisfied,
+)
+from .plan_harness import replay_harness, seal_snapshot
 from .plan_review import (
     BATCH_VERSION,
     BatchSemanticReview,
     batch_review_packet,
     normalize_batch_review,
+    validate_batch_certificate,
 )
 
 REPAIR_INSTRUCTIONS = """
@@ -23,6 +32,40 @@ The agenda describes the sealed pre-repair snapshot. Reconcile it with actual sa
 complete; do not replay resolved work. Evidence pointers name that exact review packet, not later state.
 All sources and saved planning facts remain constraints. Fresh full checks are still required after repair.
 """
+
+
+def explicit_repair_agenda(before, record):
+    """Replay the exact persisted held review before admitting explicit repair.
+
+    This happens before appending the new source. The resulting agenda keeps the
+    original run identity and is historical feedback, never a new certificate.
+    """
+    run = HarnessRun.model_validate_json(json.dumps(record.get("harness_run")))
+    matches = [item for item in record.get("harness_snapshots", [])
+               if item.get("snapshot_id") == run.snapshot_id]
+    if len(matches) != 1:
+        raise ValueError("Explicit repair requires one matching sealed snapshot")
+    snapshot = HarnessSnapshot.model_validate_json(json.dumps(matches[0]))
+    if (record.get("status") != "needs_resolution" or run.decision != "hold"
+            or run.candidate_hash != record.get("candidate_hash")
+            or snapshot != seal_snapshot(before, Project.model_validate(record["project"]), record)
+            or any(row.status != "completed" for row in run.executions
+                   if row.plugin_id in CURRENT_POLICY.required)):
+        raise ValueError("Explicit repair requires the exact completed held candidate review")
+
+    def replay_model(sealed, certificate):
+        if not record.get("batch_reviews") or certificate != record["batch_reviews"][-1]:
+            raise ValueError("Explicit repair certificate differs from its persisted audit")
+        return validate_batch_certificate(sealed.before_project(), sealed.candidate_project(), record)
+
+    replayed = replay_harness(snapshot, run, replay_model)
+    if (replayed.decision != "hold" or replayed.semantic_review_json != run.semantic_review_json
+            or replayed.model_certificate_json != run.model_certificate_json):
+        raise ValueError("Explicit repair requires a verified held review certificate")
+    agenda = build_repair_agenda(run, snapshot)
+    if not agenda["plugins"]:
+        raise ValueError("Explicit repair requires a verified blocking agenda")
+    return agenda
 
 
 def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
@@ -100,7 +143,7 @@ def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
 
 
 def auto_repair_context(context, agenda):
-    """Opt in only for auto-repair; preserve ordinary generation byte-for-byte."""
+    """Opt in only for repair; preserve ordinary generation byte-for-byte."""
     if agenda is None:
         return context
     excluded = {"findings", "inherited_findings", "inherited_semantic_findings", "findings_note",
