@@ -1,6 +1,7 @@
 import type {
   PlanCandidate,
   PlanHarnessDisclosure,
+  PlanHarnessRun,
   PlanRequirement,
   PlanSemanticIssue,
   Project,
@@ -61,7 +62,48 @@ const harnessExecutionLabels: Record<string, string> = {
   cancelled: '已取消 · 未完成',
 };
 
-function harnessCheckDisclosure(check: PlanHarnessDisclosure['checks'][number]) {
+function harnessFindingSummary(
+  check: PlanHarnessDisclosure['checks'][number],
+  run?: PlanHarnessRun,
+) {
+  if (!check.findings) return '';
+  const execution = run?.executions.find((row) => row.plugin_id === check.id);
+  const result = execution?.result;
+  if (
+    execution?.plugin_version === check.version &&
+    execution.kind === check.kind &&
+    execution.status === check.execution &&
+    result?.schema_version === 'plan-harness-result/v1' &&
+    result.plugin_id === check.id &&
+    result.plugin_version === check.version &&
+    result.snapshot_id === run?.snapshot_id &&
+    result.verdict === check.verdict &&
+    result.findings.length === check.findings
+  ) {
+    // Missing severity retains the persisted HarnessFinding model's error default.
+    const blocking = result.findings.filter(
+      (finding) => (finding.severity ?? 'error') === 'error',
+    ).length;
+    const advisory = result.findings.filter((finding) => finding.severity === 'review').length;
+    if (blocking + advisory === check.findings)
+      return [
+        blocking ? `${blocking} 条阻断${check.id === 'semantic_review' ? '主体' : ''}记录` : '',
+        advisory ? `${advisory} 条非阻断建议` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+  }
+  // Older receipts only have a total. Keep pass findings advisory without
+  // inventing a severity split or treating subject records as unique issues.
+  return check.verdict === 'pass'
+    ? `${check.findings} 条非阻断建议`
+    : `${check.findings} 条发现记录（严重程度明细未知）`;
+}
+
+function harnessCheckDisclosure(
+  check: PlanHarnessDisclosure['checks'][number],
+  run?: PlanHarnessRun,
+) {
   let status = harnessExecutionLabels[check.execution] ?? '执行状态未知 · 无法确认完成';
   if (check.execution === 'completed') {
     const verdicts = {
@@ -86,6 +128,7 @@ function harnessCheckDisclosure(check: PlanHarnessDisclosure['checks'][number]) 
     name: harnessCheckNames[check.id] ?? check.id,
     kindLabel: check.kind === 'model_opinion' ? '模型意见' : '程序检查',
     status,
+    findingSummary: harnessFindingSummary(check, run),
   };
 }
 
@@ -144,11 +187,20 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
     candidate.validation_receipt.candidate_hash === candidate.candidate_hash
       ? candidate.validation_receipt
       : undefined;
+  const savedRun = candidate?.harness_run;
+  const matchingRun =
+    savedRun?.schema_version === 'plan-harness-run/v1' &&
+    savedRun.candidate_id === candidate?.id &&
+    savedRun.candidate_hash === receipt?.candidate_hash &&
+    savedRun.snapshot_id === receipt?.harness?.snapshot_id &&
+    savedRun.policy_version === receipt?.harness?.policy_version
+      ? savedRun
+      : undefined;
   const harness =
     receipt?.harness?.schema_version === 'planning-harness-disclosure/v1'
       ? {
           ...receipt.harness,
-          checks: receipt.harness.checks.map(harnessCheckDisclosure),
+          checks: receipt.harness.checks.map((check) => harnessCheckDisclosure(check, matchingRun)),
           decisionLabel:
             receipt.harness.decision === 'apply'
               ? '当次检查策略允许自动应用'

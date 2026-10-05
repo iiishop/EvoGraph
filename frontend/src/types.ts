@@ -350,6 +350,28 @@ export interface PlanHarnessDisclosure {
     message: string;
   }[];
 }
+// Read-only fields used to bind detailed findings to their saved disclosure.
+export interface PlanHarnessRun {
+  schema_version: 'plan-harness-run/v1';
+  candidate_id: string;
+  candidate_hash: string;
+  snapshot_id: string;
+  policy_version: string;
+  executions: {
+    plugin_id: string;
+    plugin_version: string;
+    kind: PlanHarnessDisclosure['checks'][number]['kind'];
+    status: string;
+    result?: {
+      schema_version: 'plan-harness-result/v1';
+      plugin_id: string;
+      plugin_version: string;
+      snapshot_id: string;
+      verdict: PlanHarnessDisclosure['checks'][number]['verdict'];
+      findings: { severity?: 'error' | 'review' }[];
+    } | null;
+  }[];
+}
 export interface PlanValidationReceipt {
   schema_version: 'planning-validation/v1';
   candidate_hash: string;
@@ -404,6 +426,7 @@ export interface PlanCandidate {
   revision: number;
   candidate_hash: string;
   validation_receipt?: PlanValidationReceipt;
+  harness_run?: PlanHarnessRun;
   current_harness_policy_version?: string;
   applied_revision?: number;
   turn_summary?: TurnSummary;

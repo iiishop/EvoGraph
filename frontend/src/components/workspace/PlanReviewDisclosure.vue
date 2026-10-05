@@ -197,9 +197,7 @@ onBeforeUnmount(() => {
               </dt>
               <dd>
                 {{ check.status
-                }}<span v-if="check.findings">
-                  · {{ check.findings }} {{ check.verdict === 'pass' ? '项建议' : '项问题' }}</span
-                >
+                }}<span v-if="check.findingSummary"> · {{ check.findingSummary }}</span>
                 <p
                   v-if="
                     check.message && (check.execution !== 'completed' || check.verdict !== 'pass')
