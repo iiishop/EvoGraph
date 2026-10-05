@@ -14,6 +14,7 @@ from evograph.application.plan_batch_policy import (
     request_stage_rejection,
 )
 from evograph.application.plan_pending_continuation import admit_pending_continuation
+from evograph.application.plan_unit_schema import project_unit_schema
 from evograph.application.plan_units import (
     _hash,
     _objects,
@@ -149,7 +150,20 @@ def test_four_atomic_calls_and_one_held_whole_review(app, stopped_add):
         if "submit_plan_delta" in names:
             assert names == {"submit_plan_delta", "ask_user"}
             assert "repair_agenda" not in messages[0]["content"]
+            from evograph.application.plan_budget import compact_schema
+            projected, audit = project_unit_schema(record, Project.model_validate(record["project"]))
+            assert audit["status"] == "projected"
+            actual = next(s["function"]["parameters"] for s in schemas
+                          if s["function"]["name"] == "submit_plan_delta")
+            assert actual == compact_schema(projected)
             name, raw = "submit_plan_delta", offline_delta(record)
+            if record["unit_request"]["unit_id"] == "unit-002":
+                objects = _objects(Project.model_validate(record["project"]))
+                existing = [item for item in raw["components"] if "component:" + item["id"] in objects]
+                assert len(existing) == 4
+                for item in existing:
+                    for key in set(item) - {"id", "description"}:
+                        del item[key]
         else:
             assert names == {"submit_plan_review"}
             name, raw = "submit_plan_review", offline_held_review(json.loads(messages[-1]["content"]))
@@ -169,6 +183,10 @@ def test_four_atomic_calls_and_one_held_whole_review(app, stopped_add):
     assert saved["status"] == "needs_resolution" and saved["generation_pause_reason"] == "experiment_review_complete"
     assert saved["metrics"]["budget"] == previous["metrics"]["budget"]
     assert saved["generation_progress"]["checkpoint_count"] == 5
+    assert len(saved["tool_schema_projections"]) == 4
+    assert all(audit["status"] == "projected" for audit in saved["tool_schema_projections"])
+    assert [audit["unit_id"] for audit in saved["tool_schema_projections"]] == [
+        "unit-002", "unit-004", "unit-006", "unit-007"]
     assert app.unified.store.get(previous["id"]) == previous
     assert app.db.get(before.id) == before
 

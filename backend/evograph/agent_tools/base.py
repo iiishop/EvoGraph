@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -33,6 +34,7 @@ class ToolSpec:
     label: str
     effect: str
     focus_field: str | None
+    parameters_schema: dict | None = None
 
     def schema(self):
         return {
@@ -40,7 +42,8 @@ class ToolSpec:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters.model_json_schema(),
+                "parameters": (deepcopy(self.parameters_schema) if self.parameters_schema is not None
+                               else self.parameters.model_json_schema()),
             },
         }
 

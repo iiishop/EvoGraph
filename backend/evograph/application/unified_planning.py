@@ -46,6 +46,7 @@ from .plan_review import (
     normalize_batch_review,
 )
 from .plan_stage import StagedDatabase, staged_application
+from .plan_unit_schema import unit_delta_tool_for
 from .plan_units import (
     all_units_complete,
     carry_review_findings,
@@ -603,13 +604,13 @@ class UnifiedPlanningService:
                     stage.record["generation_pause_reason"] = "call_budget_reserved_for_review"
                     return None
                 scheduled = route == "generator"
+                if scheduled:
+                    prepare_unit_request(stage)
                 facade.agent.synthesis_registry = ({
-                    "submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"],
+                    "submit_plan_delta": unit_delta_tool_for(stage), "ask_user": tools()["ask_user"],
                 } if scheduled else {
                     "schedule_plan_changes": manifest_tool, "ask_user": tools()["ask_user"],
                 })
-                if scheduled:
-                    prepare_unit_request(stage)
                 data = (auto_repair_context(current_unit_context(stage), repair_agenda)
                         if scheduled else router_context())
                 if scheduled and data.get("current_unit") is None:
@@ -677,7 +678,8 @@ class UnifiedPlanningService:
                         facade.agent.initial_context = lambda project: auto_repair_context({
                             **current_unit_context(stage),
                             "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}, repair_agenda)
-                        facade.agent.tool_registry = {"submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"]}
+                        facade.agent.tool_registry = {"submit_plan_delta": unit_delta_tool_for(stage),
+                                                      "ask_user": tools()["ask_user"]}
                     facade.agent.synthesis_registry = facade.agent.tool_registry
                     if route == "generator" and current_unit_context(stage).get("current_unit") is None:
                         stage.record["generation_pause_reason"] = "scheduled_units_held"
