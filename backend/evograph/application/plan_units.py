@@ -827,6 +827,9 @@ def current_unit_context(db):
                 result["components"] = [{"id": c["id"], "label": c["label"]} for c in result["components"]]
                 result["components_note"] = "Complete current component facts are in current_unit.objects['architecture:architecture'].diagram.nodes, joined by id. Directory text is not a replacement for those exact nodes."
         _compact_unit_directories(result)
+        prerequisites = _prerequisite_context(result, objects)
+        if prerequisites is not None:
+            result["prerequisite_context"] = prerequisites
     else:
         result["current_unit"] = None
     result["completed_unit_facts"] = deepcopy(schedule["checkpoints"])
@@ -854,6 +857,67 @@ def _compact_unit_directories(context):
                 + " are in current_unit.objects under those same keys. Their directory entries retain identity only, "
                   "without repeating those definitions. Other entries are unchanged; no acceptance or interface fact is removed."
             )
+
+
+def _prerequisite_context(context, source_objects):
+    """Exact one-hop provider mechanisms for this unit's declared prerequisites.
+
+    Selection is bounded by explicit reference edges, not a new byte budget.
+    Missing definitions are context coverage, never additional admission gates.
+    """
+    uses = [use for change in context["current_unit"]["changes"] for use in change["uses"]
+            if ((change["kind"] == "slice" and use["field"] == "dependencies" and use["kind"] == "slice")
+                or (change["kind"] == "contract" and use["field"] == "requires_behavior_keys"
+                    and use["kind"] == "contract"))]
+    if not uses:
+        return None
+    slices = sorted({use["id"] for use in uses if use["kind"] == "slice"})
+    direct = sorted({use["id"] for use in uses if use["kind"] == "contract"})
+    directory = {item["key"]: item for item in context["acceptance_directory"]}
+    saved_slices = {item["id"] for item in [*context["slices"], *context.get("source_slices", [])]}
+    full = context["current_unit"]["objects"]
+    completed = {item["key"]: item for item in context["completed_contract_mechanisms"]}
+    result = {"slice_ids": slices, "direct_contract_keys": direct, "contracts": [], "missing": [],
+              "coverage": "One hop from current_unit.changes[].uses: slice dependencies and contract requires_behavior_keys only. "
+                          "Select active contracts owned by referenced saved slices plus direct referenced contracts. "
+                          "Join key and revision_id to acceptance_directory in this snapshot. Exact mechanisms are copied or referenced, "
+                          "without truncation. No transitive expansion, inferred references, history, or semantic compatibility proof."}
+    selected = set(direct)
+    for identity in slices:
+        if identity not in saved_slices:
+            result["missing"].append({"kind": "slice", "id": identity, "reason": "not_saved_in_this_snapshot"})
+        else:
+            selected.update(key for key, item in directory.items() if item["owner"] == identity)
+    for key in sorted(selected):
+        entry, source = directory.get(key), source_objects.get("contract:" + key)
+        if entry is None or source is None:
+            result["missing"].append({"kind": "contract", "id": key, "reason": "active_definition_unavailable"})
+            continue
+        if source["revision_id"] != entry["revision_id"]:
+            result["missing"].append({"kind": "contract", "id": key, "reason": "revision_mismatch",
+                                      "directory_revision_id": entry["revision_id"],
+                                      "source_revision_id": source["revision_id"]})
+            continue
+        if any(source.get(field) != value for field, value in entry.items()):
+            result["missing"].append({"kind": "contract", "id": key, "reason": "directory_values_mismatch"})
+            continue
+        if "mechanism" not in source:
+            result["missing"].append({"kind": "contract", "id": key, "reason": "mechanism_unavailable"})
+            continue
+        row = {"key": key, "revision_id": entry["revision_id"]}
+        for existing, path in (
+            (full.get("contract:" + key), "current_unit.objects[" + _json("contract:" + key) + "].mechanism"),
+            (completed.get(key), "completed_contract_mechanisms[key=" + _json(key)
+             + ",revision_id=" + _json(entry["revision_id"]) + "].mechanism"),
+        ):
+            if (existing is not None and existing.get("revision_id") == entry["revision_id"]
+                    and existing.get("mechanism") == source["mechanism"]):
+                row["mechanism_ref"] = path
+                break
+        else:
+            row["mechanism"] = deepcopy(source["mechanism"])
+        result["contracts"].append(row)
+    return result
 
 
 def prepare_unit_request(db):

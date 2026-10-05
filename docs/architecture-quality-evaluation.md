@@ -137,6 +137,18 @@ The normal review tool reports structural diagnostics plus semantic prompts.
 Neither a model's self-assessment nor this rubric is production acceptance; actual
 implementation still needs external verification against the user's contracts.
 
+Scheduled generation also receives exact read-only mechanisms for one hop of
+explicit prerequisites: `slice.dependencies` and `contract.requires_behavior_keys`
+declared in the current unit's manifest `uses`. For a referenced saved slice,
+only its active owned contracts are selected. Contract keys and revision IDs join
+the existing acceptance directory; an identical same-revision mechanism already
+in a full current-unit object or completed-contract context is referenced rather
+than repeated. Selection IDs, coverage and unavailable or mismatched references
+remain explicit, including prerequisites not saved yet. This adds no gate,
+transitive traversal, owner text, history or inferred references. Exact text is
+never truncated; the existing whole-request budget still decides admission.
+These facts improve visibility, not proof that generated contracts are compatible.
+
 During an agent turn, the existing review tool and automatic review also receive
 a read-only `change_context` comparing the turn-start and current saved milestone
 contracts. It includes eligible prerequisites across both snapshots, including
