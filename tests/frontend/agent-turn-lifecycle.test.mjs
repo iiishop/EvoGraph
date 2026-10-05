@@ -1185,3 +1185,23 @@ test('newer candidate ID survives old recovery frames and stream omission cannot
   workspace.applyProject({ ...original, plan_candidate: fresh });
   assert.equal(workspace.state.project.plan_candidate, null);
 });
+
+test('ordinary composer sends the exact displayed closed-candidate repair pins', async () => {
+  const { agent, env, workspace } = await agentHarness('closed-repair-pins');
+  const pins = {
+    version: 'complete-candidate-repair/v1', candidate_id: 'closed-candidate',
+    candidate_hash: 'candidate-hash', record_hash: 'exact-old-audit', base_revision: 2,
+    base_hash: 'base-hash', candidate_revision: 7, candidate_fingerprint: 'candidate-plan',
+    base_fingerprint: 'base-plan', schedule_hash: 'five-checkpoints', compiler_lineage_hash: 'compiler',
+    checker_version: 'checker', policy_version: 'policy',
+  };
+  workspace.state.project = { id: 'P1', created_at: '2026-10-05', messages: [], plan_candidate: { repair_from: pins } };
+  env.run = async (params, receive) => {
+    assert.deepEqual(params.repair_from, pins);
+    assert.equal(params.content, 'Tester feedback');
+    assert.equal(params.review_recheck, undefined);
+    receive({ type: 'started', turn_id: 'new-repair' });
+    receive({ type: 'done', turn_id: 'new-repair', summary: { turn_id: 'new-repair', status: 'failed', changed: false } });
+  };
+  await agent.send('P1', 'Tester feedback');
+});

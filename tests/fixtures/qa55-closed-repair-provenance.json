@@ -1,0 +1,23 @@
+{
+  "source": "Frozen 10-normal-review-recovery-result; exact latest candidate and terminal receipts; offline fake-provider tests only.",
+  "frozen_files": {
+    "candidate-project.json": "78a69c1a024c2d354047706064802da4986e3391ff84606f58682ddf6141e5ae",
+    "candidates.json": "7d925110f9715bb04a64a5160739c03ceb8a0997e3f89905dca845cfd3046c9b",
+    "events.json": "24155d33c97ab3eafb452bedd57c9a5e4b5b5cf2ad52893fd9b8bbfbd79b051e",
+    "messages.json": "0d08dbac7c272e528aa2e9886d79813655b920118ba8ce47357a331d693519c0",
+    "project.json": "5af58ece060e18190fe107c282021b8be160584f8d5e4557a30b11d164268fbe",
+    "summary.json": "aa0e4e54f3feb4f1b423165c8f5fd4c8ead6abfc48bda292fd5c1efb98b702b9"
+  },
+  "files": {
+    "candidate": {
+      "compressed_file": "qa55-closed-repair-candidate.json.gz",
+      "bytes": 1281098,
+      "sha256": "83f3ce99c7d046ec37ce8bf28a9619f941c75af469b2aedfc9ddd74ee4269845"
+    },
+    "receipts": {
+      "compressed_file": "qa55-closed-repair-receipts.json.gz",
+      "bytes": 1760,
+      "sha256": "5a8194b21a4a4fd84b43306bd4aa461bdf49239d48cb7f28f6cdf00f2243b7f9"
+    }
+  }
+}

@@ -107,11 +107,12 @@ class AgentRuntime:
         snapshot_mode: str = "full",
         source_analysis: bool = False,
         review_recheck: dict | None = None,
+        repair_from: dict | None = None,
     ):
         if review_recheck is not None:
             from .plan_recheck import stream_recheck
             if (content != "重新评审" or question_id or attachment_ids or verification_milestone
-                    or composer_document or source_analysis):
+                    or composer_document or source_analysis or repair_from):
                 yield {"type": "error", "message": "重新评审不能同时提交新要求或执行其他操作"}
                 yield {"type": "done", "changed": False}
                 return
@@ -133,10 +134,14 @@ class AgentRuntime:
         ):
             async with aclosing(self.app.unified.stream(
                 project_id, content, question_id=question_id, attachment_ids=attachment_ids,
-                composer_document=composer_document, snapshot_mode=snapshot_mode,
+                composer_document=composer_document, snapshot_mode=snapshot_mode, repair_from=repair_from,
             )) as candidate_stream:
                 async for event in candidate_stream:
                     yield event
+            return
+        if repair_from is not None:
+            yield {"type": "error", "message": "修复来源只能用于统一规划的新反馈"}
+            yield {"type": "done", "changed": False}
             return
         # Negotiate once before admission; never retry a potentially accepted turn.
         if snapshot_mode not in {"full", "compact-v1"}:

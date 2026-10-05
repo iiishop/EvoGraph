@@ -184,6 +184,15 @@ async function send(
 ): Promise<boolean> {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return false;
+  // Pin the candidate in this accepted workspace view before starting either transport.
+  const repairFrom =
+    !reviewRecheck &&
+    !sourceAnalysis &&
+    !verificationMilestone &&
+    !questionId &&
+    workspace.state.project?.id === projectId
+      ? workspace.state.project.plan_candidate?.repair_from
+      : undefined;
   if (submission && sourceAnalysis) submission.sourceAnalysis = true;
   // This session-level watcher outlives a dock unmount and observes only project
   // snapshots the workspace has accepted through its existing ordering guards.
@@ -247,6 +256,7 @@ async function send(
         project_id: projectId,
         content,
         ...(reviewRecheck ? { review_recheck: reviewRecheck } : {}),
+        ...(repairFrom ? { repair_from: repairFrom } : {}),
         attachment_ids: attachmentIds,
         ...(composerDocument ? { composer_document: composerDocument } : {}),
         verification_milestone: verificationMilestone,

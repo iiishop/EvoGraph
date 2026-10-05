@@ -116,12 +116,15 @@ class ProjectService:
         result = project_view(project, self.db, include_history=include_history)
         if not getattr(self.db, "is_candidate", False):
             from ..infrastructure.plan_candidates import CandidateStore
-            record = CandidateStore(self.db).latest(project_id)
+            store = CandidateStore(self.db)
+            record = store.latest(project_id)
             if record:
                 from .plan_recheck import recheck_offer, review_projection
                 offer = recheck_offer(project, record)
+                repair_from = store.repair_phase_offer(project, record) if offer else None
                 record = review_projection(record)
                 record["review_recheck"] = offer
+                record["repair_from"] = repair_from
                 from ..domain.plan_harness import CURRENT_POLICY
                 record["current_harness_policy_version"] = CURRENT_POLICY.version
                 if record["status"] not in {"applied", "discarded"} and record["base_revision"] != result["revision"]:

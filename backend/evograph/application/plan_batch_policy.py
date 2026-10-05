@@ -173,11 +173,13 @@ def validate_batch_delta(schedule, pin, raw, actual):
         raise ValueError("bounded batch actual reference is outside its closed manifest")
 
 
-def select_experiment(argument, project, previous, resume):
+def select_experiment(argument, project, previous, resume, *, repair_phase=None):
     """Application-only opt-in; not read from project settings or model arguments."""
     if argument is None:
         if resume and previous.get("planning_experiment"):
-            raise ValueError("saved experimental candidate needs an explicit supported stage")
+            from .plan_repair_phase import repair_phase_pins
+            if not repair_phase or repair_phase.get("pins") != repair_phase_pins(project, previous):
+                raise ValueError("saved experimental candidate needs an explicit supported stage or closed repair admission")
         return None
     keys = {"project_id", "version"}
     if isinstance(argument, dict) and argument.get("version") == PENDING_ARCHITECTURE_EXPERIMENT:

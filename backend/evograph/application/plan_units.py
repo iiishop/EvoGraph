@@ -705,6 +705,8 @@ def initial_unit_context(db, *, include_prior_pending=False):
         result["planning_experiment"] = deepcopy(db.record["planning_experiment"])
         if db.record["planning_experiment"]["version"] == COLD_START_EXPERIMENT:
             result["packing_policy"] = deepcopy(BATCH_POLICY)
+    if db.record.get("repair_phase"):
+        result["repair_phase"] = deepcopy(db.record["repair_phase"])
     if include_prior_pending:
         prior = prior_pending_intent_context(db.record, project.id)
         if prior is not None:

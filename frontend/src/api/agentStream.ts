@@ -1,4 +1,4 @@
-import type { AgentEvent, ComposerDocument, ReviewRecheck } from '../types';
+import type { AgentEvent, ComposerDocument, RepairFrom, ReviewRecheck } from '../types';
 
 export async function agentStream(
   params: {
@@ -10,6 +10,7 @@ export async function agentStream(
     verification_milestone?: string;
     source_analysis?: boolean;
     review_recheck?: ReviewRecheck;
+    repair_from?: RepairFrom;
   },
   receive: (event: AgentEvent) => void,
   signal: AbortSignal,

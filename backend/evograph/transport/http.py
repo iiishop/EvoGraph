@@ -26,6 +26,7 @@ class AgentRequest(BaseModel):
     verification_milestone: str | None = None
     source_analysis: bool = False
     review_recheck: dict | None = None
+    repair_from: dict | None = None
     composer_document: ComposerDocument | None = None
     snapshot_mode: Literal["full", "compact-v1"] = "full"
 

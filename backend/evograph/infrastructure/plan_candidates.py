@@ -29,6 +29,11 @@ class CandidateStore:
         saved = json.loads(row[0]) if row else None
         if saved and saved["status"] in {"applied", "discarded"}:
             raise ConflictError("候选已应用或放弃，不能覆盖其最终状态")
+        if saved and connection.execute(
+                "SELECT 1 FROM plan_candidates WHERE "
+                "json_extract(payload, '$.repair_phase.pins.candidate_id')=? LIMIT 1",
+                (candidate_id,)).fetchone():
+            raise ConflictError("候选已成为新修复轮次的固定来源，不能覆盖既有审计")
         if required and saved is None:
             raise ValueError("候选规划不存在")
         return saved
@@ -41,11 +46,69 @@ class CandidateStore:
             previous = self._writable_candidate(connection, data["id"], required=False)
             if previous and previous.get("review_attempts"):
                 raise ConflictError("候选已有独立评审轮次，旧写入不能覆盖评审记录")
+            self._check_repair_phase(connection, data, previous)
             connection.execute("INSERT INTO plan_candidates VALUES(?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", (
                     data["id"], data["project"]["id"], json.dumps(data, ensure_ascii=False), data["created_at"],
                 ))
         return data
+
+    def _repair_phase_admission(self, connection, before, predecessor):
+        from ..application.plan_repair_phase import admit_repair_phase, closed_turn_ids
+        from ..application.plan_units import _hash
+        latest = connection.execute("SELECT payload FROM plan_candidates WHERE project_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (before.id,)).fetchone()
+        if (not latest or _hash(json.loads(latest[0])) != _hash(predecessor)
+                or self.db.read_project(connection, before.id) != before):
+            raise ConflictError("候选或正式规划已改变，请刷新后开始新修复轮次")
+        receipts = []
+        for turn in closed_turn_ids(predecessor):
+            row = connection.execute(
+                "SELECT detail FROM events WHERE project_id=? AND kind='agent_turn_finished' "
+                "AND json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, '$.turn_id')=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1", (before.id, turn)).fetchone()
+            if not row:
+                raise ConflictError("前一轮尚无已结束记录，不能开始新修复轮次")
+            receipts.append(json.loads(row[0]))
+        return admit_repair_phase(before, predecessor, receipts)
+
+    def repair_phase_admission(self, before, predecessor):
+        with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._repair_phase_admission(connection, before, predecessor)
+
+    def repair_phase_offer(self, before, predecessor):
+        if not predecessor.get("planning_experiment"):
+            return None
+        try:
+            return self.repair_phase_admission(before, predecessor)["pins"]
+        except (ValueError, ConflictError, KeyError, TypeError, AttributeError):
+            return None
+
+    def _check_repair_phase(self, connection, data, previous):
+        from ..application.plan_repair_phase import validate_repair_start
+        from ..application.plan_units import _hash
+        admission = data.get("repair_phase")
+        if previous and previous.get("repair_phase") != admission:
+            raise ConflictError("新修复轮次的来源凭据不能修改或移除")
+        if not admission:
+            return
+        row = connection.execute("SELECT payload FROM plan_candidates WHERE id=?",
+            (admission["pins"]["candidate_id"],)).fetchone()
+        predecessor = json.loads(row[0]) if row else None
+        if not predecessor or _hash(predecessor) != admission["pins"]["record_hash"]:
+            raise ConflictError("新修复轮次的原候选审计已改变")
+        sources = predecessor["project"]["plan_contract"]["sources"]
+        if (data.get("resumes_candidate_id") != predecessor["id"]
+                or data.get("prior_work_units") != predecessor["work_units"]
+                or data["project"]["plan_contract"]["sources"][:len(sources)] != sources
+                or data.get("planning_experiment") or data["metrics"].get("planning_experiment")):
+            raise ConflictError("新修复轮次必须保留既有来源与完整检查点，不能重开实验")
+        if previous is None:
+            before = self.db.read_project(connection, data["project_id"])
+            if admission != self._repair_phase_admission(connection, before, predecessor):
+                raise ConflictError("新修复轮次的来源凭据已改变")
+            validate_repair_start(data, predecessor)
 
     def begin_review_attempt(self, project_id, pins, turn_id):
         from ..application.plan_recheck import (

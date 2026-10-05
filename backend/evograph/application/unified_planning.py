@@ -370,6 +370,7 @@ class UnifiedPlanningService:
         offer = recheck_offer(current, record) if not self.app.agent.active_turns.get(project_id) else None
         data = {**review_projection(record), "project": project_view(Project.model_validate(record["project"]), self.app.db, include_history=False)}
         data["review_recheck"] = offer
+        data["repair_from"] = self.store.repair_phase_offer(current, record) if offer else None
         data["current_harness_policy_version"] = CURRENT_POLICY.version
         data["project"].pop("plan_candidate", None)
         return data
@@ -424,7 +425,7 @@ class UnifiedPlanningService:
         return run
 
     async def stream(self, project_id, content, *, question_id=None, attachment_ids=None,
-                     composer_document=None, snapshot_mode="full", experiment=None):
+                     composer_document=None, snapshot_mode="full", experiment=None, repair_from=None):
         if snapshot_mode not in {"full", "compact-v1"}:
             raise ValueError("未知的 Agent 快照格式")
         turn_id = uid()
@@ -452,9 +453,7 @@ class UnifiedPlanningService:
             if question_id and not before.question:
                 raise ValueError("问题已经失效，请刷新项目")
             from .plan_recheck import review_projection
-            previous = self.store.latest(project_id)
-            if previous:
-                previous = review_projection(previous)
+            durable_previous = previous = self.store.latest(project_id)
             if previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] != before.revision:
                 raise ConflictError("保留的候选基于旧正式版本，未自动合并或覆盖；请先查看并放弃旧候选，再从当前方案重新生成")
             resume = previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] == before.revision
@@ -464,7 +463,17 @@ class UnifiedPlanningService:
                 SAVED_UNITS_EXPERIMENT,
                 select_experiment,
             )
-            selected_experiment = select_experiment(experiment, before, previous, resume)
+            repair_phase = None
+            if repair_from is not None:
+                if experiment is not None or not resume or not previous.get("planning_experiment"):
+                    raise ConflictError("修复来源已改变，请刷新后重新提交反馈")
+                repair_phase = self.store.repair_phase_admission(before, previous)
+                if repair_from != repair_phase["pins"]:
+                    raise ConflictError("修复来源已改变，请刷新后重新提交反馈")
+            selected_experiment = select_experiment(
+                experiment, before, previous, resume, repair_phase=repair_phase)
+            if previous:
+                previous = review_projection(previous)
             saved_units_stage = bool(selected_experiment and selected_experiment["version"] == SAVED_UNITS_EXPERIMENT)
             pending_architecture_stage = bool(selected_experiment and
                 selected_experiment["version"] == PENDING_ARCHITECTURE_EXPERIMENT)
@@ -476,6 +485,9 @@ class UnifiedPlanningService:
                 transformed_previous = {**previous, "work_units": transformed}
             repair_agenda = (explicit_repair_agenda(before, previous)
                 if selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT else None)
+            if repair_phase:
+                from .plan_repair_phase import validated_repair_agenda
+                repair_agenda = validated_repair_agenda(before, durable_previous)
             saved_units_admission = None
             if saved_units_stage:
                 repair_agenda, saved_units_admission = saved_units_repair_context(before, previous, self.store)
@@ -504,8 +516,8 @@ class UnifiedPlanningService:
                 "base_revision": before.revision, "status": "generating", "created_at": now(),
                 "revision": candidate.revision, "project": candidate.model_dump(), "input": content,
                 "report": {"findings": []},
-                "inherited_findings": previous.get("report", {}).get("findings", []) if resume else [],
-                "inherited_semantic_findings": carry_review_findings(previous) if resume else None,
+                "inherited_findings": previous.get("report", {}).get("findings", []) if resume and not repair_phase else [],
+                "inherited_semantic_findings": carry_review_findings(previous) if resume and not repair_phase else None,
                 "prior_work_units": previous.get("work_units") if resume else None,
                 "reviews": [], "metrics": metrics,
                 "resumes_candidate_id": previous["id"] if resume else None,
@@ -525,7 +537,9 @@ class UnifiedPlanningService:
             }
             if selected_experiment:
                 record["planning_experiment"] = selected_experiment
-            if resume and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
+            if repair_phase:
+                record["repair_phase"] = repair_phase
+            if resume and not repair_phase and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
                 resumed_units = resume_unit_schedule(transformed_previous, candidate, turn_id, content)
                 if saved_units_stage:
                     # Fail before saving a new candidate; never fall back to a
@@ -633,7 +647,8 @@ class UnifiedPlanningService:
 
             if repair_agenda is not None:
                 facade.agent.initial_context = lambda project: router_context()
-                facade.agent.extra_context = REPAIR_INSTRUCTIONS
+                from .plan_repair_phase import REPAIR_PHASE_INSTRUCTIONS
+                facade.agent.extra_context = REPAIR_PHASE_INSTRUCTIONS if repair_phase else REPAIR_INSTRUCTIONS
 
             def next_segment_context(project, completed_round, tool_results):
                 remaining = metrics["budget"]["max_calls"] - metrics["provider_calls"]

@@ -415,7 +415,14 @@ export interface ReviewRecheck {
   checker_version: string;
   policy_version: string;
 }
+export interface RepairFrom extends ReviewRecheck {
+  candidate_fingerprint: string;
+  base_fingerprint: string;
+  schedule_hash: string;
+  compiler_lineage_hash: string;
+}
 export interface PlanCandidate {
+  repair_from?: RepairFrom | null;
   review_recheck?: ReviewRecheck | null;
   review_attempt?: {
     id: string;
