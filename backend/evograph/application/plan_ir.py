@@ -20,8 +20,9 @@ from ..domain.policies import CHANGE_POLICIES
 from .design import validate_diagram
 from .plan_contracts import AddProcessConstraint, AddRequirement, RetireRequirement
 from .plan_patch import PlanPatch, compiled_plan_hash, propose_plan_patch
+from .retained_acceptance import AcceptanceChange
 
-PROTOCOL_VERSION = "plan-delta/v3"
+PROTOCOL_VERSION = "plan-delta/v4"
 
 
 class IRModel(BaseModel):
@@ -73,6 +74,7 @@ class ContractDelta(IRModel):
         "the owning slice using its actual prerequisites; target does not defer acceptance.",
     )
     owner_change_reason: str | None = Field(default=None, min_length=1, max_length=1500)
+    acceptance_changes: list[AcceptanceChange] = Field(default_factory=list, max_length=16)
 
     @field_validator("key", "statement", "mechanism", "owner_change_reason", "capability_move_reason")
     @classmethod
@@ -165,6 +167,7 @@ class PlanDelta(IRModel):
     remove_relations: list[RelationDelta] = Field(default_factory=list, max_length=100)
     remove_slice_ids: list[str] = Field(default_factory=list, max_length=24)
     remove_contract_keys: list[str] = Field(default_factory=list, max_length=256)
+    removal_acceptance_changes: dict[str, list[AcceptanceChange]] = Field(default_factory=dict, max_length=24)
     remove_component_ids: list[str] = Field(default_factory=list, max_length=40)
     restore_contract_keys: list[str] = Field(default_factory=list, max_length=256,
         json_schema_extra={"manifest_extra": {"kind": "contract", "field": "restore"}})
@@ -343,7 +346,7 @@ def _architecture(project, args, slice_ids):
     return result
 
 
-def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPlanDelta:
+def compile_plan_delta(project: Project, delta: PlanDelta | dict, *, retained_record=None) -> CompiledPlanDelta:
     """Pure structural compiler; PlanPatch still owns final domain/source checks."""
     raw = delta.model_dump(mode="json", exclude_unset=True) if isinstance(delta, PlanDelta) else deepcopy(delta)
     args = PlanDelta.model_validate(raw, strict=True)
@@ -391,7 +394,13 @@ def compile_plan_delta(project: Project, delta: PlanDelta | dict) -> CompiledPla
     for key in args.remove_contract_keys:
         affected.add(owners[key])
     for item in args.contracts:
-        changes = item.model_dump(exclude_unset=True, exclude={"owner_change_reason"})
+        from .retained_acceptance import disposition_only_contract, validate_metadata_scope
+        if (item.key not in existing and disposition_only_contract(
+                retained_record, project, item.key, item.model_fields_set - {"key"})):
+            validate_metadata_scope(retained_record, project, {"contracts": [item.model_dump(exclude_unset=True)]})
+            # Reaffirm an inactive original claim without restoring a contract.
+            continue
+        changes = item.model_dump(exclude_unset=True, exclude={"owner_change_reason", "acceptance_changes"})
         old = existing.get(item.key)
         if (old and old.get("steps") is not None and "statement" in changes
                 and changes["statement"] != old["statement"] and "steps" not in changes):
@@ -510,7 +519,9 @@ def submit_plan_delta(ctx, args):
             return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS",
                     "candidate_state": "staged", "publication_requested": False,
                     "replayed_unit_id": pin["unit_id"], "saved_revision": db.project.revision}
-    compiled = compile_plan_delta(db.get(ctx.project_id), args)
+    from .retained_acceptance import validate_metadata_scope
+    validate_metadata_scope(db.record, db.get(ctx.project_id), args.model_dump(exclude_unset=True))
+    compiled = compile_plan_delta(db.get(ctx.project_id), args, retained_record=db.record)
     result = propose_plan_patch(ctx, compiled.patch, compiler_audit=compiled.audit)
     if getattr(db, "segmented_planning", False):
         ctx.candidate_ready = False
@@ -546,6 +557,13 @@ DELTA_TOOL = ToolSpec(
     "contracts remain outside this check. [] clears provides or steps, "
     "component_ids or requires_behavior_keys. A changed typed statement requires explicit steps. "
     "Moving a capability key between provider contracts requires capability_move_reason on the receiver. "
+    "Entry acceptance claims have fixed server baseline IDs. Same-key unchanged mappings are derived. "
+    "For replacement/retirement use acceptance_changes on the assigned original contract or current holder; "
+    "removal_acceptance_changes is keyed only by explicit remove_contract_keys. Supply disposition, "
+    "witness_keys, kind and reason (or existing owner_change_reason); acceptance_at explicitly maps stages. "
+    "Scope changes/draft corrections require exact source_id/quote, which proves provenance only. "
+    "Staged claims are drafts; correct inventions without pretending they were approved. "
+    "Witnesses must be active now and available at the promised stage, never a later unit. "
     "Owner moves need owner_change_reason and "
     "retain the stable key/history. Only send actual changes, never rephrase omitted text. "
     "New slices need title/intent/scope (work boundaries). Existing components need only id and changed "

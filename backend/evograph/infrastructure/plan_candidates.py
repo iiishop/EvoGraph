@@ -34,6 +34,11 @@ class CandidateStore:
                 "json_extract(payload, '$.repair_phase.pins.candidate_id')=? LIMIT 1",
                 (candidate_id,)).fetchone():
             raise ConflictError("候选已成为新修复轮次的固定来源，不能覆盖既有审计")
+        if saved and connection.execute(
+                "SELECT 1 FROM plan_candidates WHERE "
+                "json_extract(payload, '$.retained_acceptance.pins.staged_candidate_id')=? LIMIT 1",
+                (candidate_id,)).fetchone():
+            raise ConflictError("候选已成为验收请求入口的固定来源，不能覆盖历史")
         if required and saved is None:
             raise ValueError("候选规划不存在")
         return saved
@@ -41,6 +46,7 @@ class CandidateStore:
     def save(self, record, *, dispatch=False):
         data = deepcopy(record)
         data["candidate_hash"] = candidate_hash(Project.model_validate(data["project"]))
+        data.setdefault("project_id", data["project"]["id"])
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             previous = self._writable_candidate(connection, data["id"], required=False)
@@ -50,11 +56,110 @@ class CandidateStore:
             self._check_prior_schedule_owner(connection, data, previous)
             from .plan_jobs import guard_candidate_write
             guard_candidate_write(self.db, connection, data, previous, dispatch=dispatch)
+            self._check_retained_acceptance(connection, data, previous)
             connection.execute("INSERT INTO plan_candidates VALUES(?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", (
                     data["id"], data["project"]["id"], json.dumps(data, ensure_ascii=False), data["created_at"],
                 ))
         return data
+
+    def _check_retained_acceptance(self, connection, data, previous, *, commit=False):
+        from ..application.retained_acceptance import (
+            capture_entry,
+            entry_for,
+            projection,
+            resolutions,
+            validate_metadata_scope,
+        )
+        from ..domain.plan_harness import content_hash
+
+        before = self.db.read_project(connection, data["project_id"])
+        candidate = Project.model_validate(data["project"])
+
+        def read(identity):
+            row = connection.execute("SELECT payload FROM plan_candidates WHERE id=?", (identity,)).fetchone()
+            if not row:
+                raise ConflictError("retained acceptance pinned predecessor missing")
+            return json.loads(row[0])
+
+        if previous is None:
+            predecessor = read(data["resumes_candidate_id"]) if data.get("resumes_candidate_id") else None
+            same_request = bool(predecessor and data.get("planning_job")
+                                and data["planning_job"] == predecessor.get("planning_job")
+                                and data.get("input") == predecessor.get("input"))
+            if same_request and predecessor.get("retained_acceptance"):
+                expected = deepcopy(predecessor["retained_acceptance"])
+                inherited = predecessor.get("compilations", [])
+                if data.get("compilations") not in (None, inherited):
+                    raise ConflictError("retained acceptance continuation compiler history changed")
+                data["compilations"] = deepcopy(inherited)
+            else:
+                entry_record = predecessor
+                # Legacy job continuation is bootstrapped from its existing exact
+                # job-entry pin, never the last weakened checkpoint or model IDs.
+                if same_request and predecessor.get("planning_job"):
+                    job_id = predecessor["planning_job"]["job_id"]
+                    row = connection.execute("SELECT payload FROM planning_jobs WHERE id=?", (job_id,)).fetchone()
+                    if not row:
+                        raise ConflictError("retained acceptance legacy job pin missing")
+                    job = json.loads(row[0])
+                    entry_record = read(job["pins"]["candidate_id"]) if job["pins"]["candidate_id"] else None
+                    if (content_hash(entry_record) != job["pins"]["record_hash"]
+                            or job["project_id"] != before.id or job["input"] != data["input"]
+                            or job["pins"]["base_hash"] != candidate_hash(before)):
+                        raise ConflictError("retained acceptance legacy entry pin changed")
+                    data["compilations"] = deepcopy(predecessor.get("compilations", []))
+                source_id = data.get("planning_job", {}).get("source_id", data.get("turn_id", data["id"]))
+                expected = capture_entry(before, entry_record, source_id=source_id,
+                                         audit_start=0 if same_request else len(data.get("compilations", [])))
+            if data.get("retained_acceptance") not in (None, expected):
+                raise ConflictError("retained acceptance admission is server-owned")
+            data["retained_acceptance"] = expected
+        elif previous.get("retained_acceptance") != data.get("retained_acceptance"):
+            raise ConflictError("retained acceptance fixed entry cannot change or disappear")
+        if "retained_acceptance" not in data:
+            if commit:
+                raise ConflictError("retained acceptance legacy scope requires a new admitted request")
+            return
+        entry = entry_for(before, data)
+        resolutions(entry, data, candidate)
+        pin = entry["pins"]
+        original = read(pin["staged_candidate_id"]) if pin["staged_candidate_id"] else None
+        if original is not None and content_hash(original) != pin["staged_record_hash"]:
+            raise ConflictError("retained acceptance pinned entry record changed")
+        expected = capture_entry(before, original, source_id=pin["source_id"], audit_start=entry["audit_start"])
+        # Question transitions may advance only canonical revision, not planning hash.
+        expected["pins"]["canonical_revision"] = pin["canonical_revision"]
+        expected["entry_hash"] = content_hash({k: v for k, v in expected.items() if k != "entry_hash"})
+        if expected != entry:
+            raise ConflictError("retained acceptance entry inventory differs from pinned records")
+        if previous:
+            old_audits, audits = previous.get("compilations", []), data.get("compilations", [])
+            if audits[:len(old_audits)] != old_audits or len(audits) < len(old_audits):
+                raise ConflictError("retained acceptance compiler history cannot be changed or deleted")
+            if len(audits) > len(old_audits) + 1:
+                raise ConflictError("retained acceptance accepts one atomic compiler checkpoint")
+            old_project = Project.model_validate(previous["project"])
+            if len(audits) > len(old_audits):
+                audit = audits[-1]
+                validate_metadata_scope(previous, old_project, audit.get("ir", {}))
+                if any(row.get("acceptance_changes") for row in audit.get("ir", {}).get("contracts", [])) or audit.get("ir", {}).get("removal_acceptance_changes"):
+                    if (audit.get("base_candidate_hash") != candidate_hash(old_project)
+                            or audit.get("result_candidate_hash") != candidate_hash(candidate)):
+                        raise ConflictError("retained acceptance compiler checkpoint is stale")
+                    if previous.get("work_units"):
+                        from ..application.plan_units import advance_unit_checkpoint
+                        # Recompute the assigned checkpoint against durable state
+                        # under this writer lock, not only the earlier handler.
+                        replayed = advance_unit_checkpoint(
+                            {**deepcopy(previous), "compilations": deepcopy(audits)},
+                            old_project, candidate, audit)
+                        if any(replayed.get(key) != data.get(key) for key in ("work_units", "unit_request")):
+                            raise ConflictError("retained acceptance unit checkpoint changed before atomic save")
+            changed = any(getattr(old_project, name) != getattr(candidate, name)
+                          for name in ("behaviors", "milestones")) or old_project.plan_contract.bindings != candidate.plan_contract.bindings
+            if changed or len(audits) != len(old_audits) or commit:
+                projection(before, candidate, data)
 
     def _check_prior_schedule_owner(self, connection, data, previous):
         """Bind router-only predecessor context to saved job identity under the writer lock."""
@@ -260,6 +365,7 @@ class CandidateStore:
                 # Validate source, budget and call ownership before the existing
                 # question CAS changes canonical revision. This grants no call.
                 guard_candidate_write(self.db, connection, data, prior, question=question is not None)
+            self._check_retained_acceptance(connection, data, prior)
             current.question = question
             current.revision += 1
             current.updated_at = now()
@@ -314,6 +420,7 @@ class CandidateStore:
             current = self.db.read_project(connection, before.id)
             if current.revision != data["base_revision"]:
                 raise ConflictError("正式规划已改变，候选保留")
+            self._check_retained_acceptance(connection, data, prior)
             summary = build_turn_summary(before, current, turn_id, "completed")
             data.update(status="needs_resolution" if pending else "applied", turn_summary=summary)
             data["candidate_hash"] = candidate_hash(Project.model_validate(data["project"]))
@@ -367,6 +474,7 @@ class CandidateStore:
                 raise ConflictError("评审前快照与当前正式规划不一致，候选需要重新校验")
             from .plan_jobs import guard_candidate_write
             guard_candidate_write(self.db, connection, saved, durable, commit=True)
+            self._check_retained_acceptance(connection, saved, durable, commit=True)
             snapshot = seal_snapshot(before, staged, saved)
 
             def replay_model(sealed, certificate):

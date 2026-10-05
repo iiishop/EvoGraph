@@ -28,6 +28,7 @@ from ..domain.plan_contracts import (
     ProvidedCapability,
     active_behaviors,
     candidate_hash,
+    history_findings,
     planning_payload,
 )
 from ..domain.target_contract import target_finalization
@@ -208,7 +209,7 @@ def contract_changes(before, after):
 def _check_compiler_base(audit, before, args):
     if audit is None or audit.get("protocol_version") == "plan-delta/v1":
         return
-    if (audit.get("protocol_version") not in {"plan-delta/v2", "plan-delta/v3"}
+    if (audit.get("protocol_version") not in {"plan-delta/v2", "plan-delta/v3", "plan-delta/v4"}
             or audit.get("project_id") != before.id
             or audit.get("base_revision") != before.revision
             or audit.get("base_candidate_hash") != candidate_hash(before)
@@ -362,12 +363,14 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     if decision is not None and not decision.creates_version:
         project.target_draft = None
     if planning_payload(project) == planning_payload(before):
+        acceptance_only = False
         if compiler_audit is not None:
-            db.record_compilation_noop(_completed_compiler_audit(
+            acceptance_only = db.record_compilation_noop(_completed_compiler_audit(
                 compiler_audit, before, project, changed=False,
             ))
         ctx.candidate_ready = True
-        return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS", "findings": []}
+        return {"node_ids": [], "effect": "updated",
+                "status": "ACCEPTANCE_UPDATED" if acceptance_only else "NO_PROGRESS", "findings": []}
     # One planning revision and finalization, entirely private; the outer save is
     # the only candidate checkpoint and retains optimistic concurrency protection.
     final_graph = GraphEditor(memory)
@@ -382,10 +385,17 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     # The finalized compiler output uses the same read-only program plugins as
     # the main run and commit. Unsupported evidence can remain a visible candidate;
     # central publication policy will hold it rather than manufacture clearance.
-    checked = run_deterministic(seal_snapshot(before, project, {
-        "id": "compiler:" + project.id, "project_id": project.id,
-        "base_revision": before.revision, "input": "", "reference_context": {},
-    }))
+    checkpoint_history = history_findings(before, project)
+    if checkpoint_history:
+        raise ValueError("规划补丁修改了既有检查点历史：" + "; ".join(f["message"] for f in checkpoint_history))
+    completed_audit = _completed_compiler_audit(compiler_audit, before, project, changed=True)
+    check_record = {**getattr(db, "record", {}), "id": "compiler:" + project.id,
+                    "project_id": project.id, "base_revision": before.revision}
+    if completed_audit is not None:
+        check_record["compilations"] = [*check_record.get("compilations", []), completed_audit]
+    # Retained entry pins refer to canonical before, not the latest checkpoint.
+    check_before = db.canonical.get(project.id) if "retained_acceptance" in check_record else before
+    checked = run_deterministic(seal_snapshot(check_before, project, check_record))
     findings = [finding for row in checked.executions
                 if row.status == "completed" and row.result.verdict == "block"
                 for finding in row.result.findings if finding.severity == "error"]

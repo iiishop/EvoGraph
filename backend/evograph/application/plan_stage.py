@@ -80,12 +80,27 @@ class StagedDatabase:
         return project
 
     def record_compilation_noop(self, audit):
+        metadata = any(row.get("acceptance_changes") for row in audit.get("ir", {}).get("contracts", []))
+        if metadata and not getattr(self, "segmented_planning", False):
+            raise ValueError("acceptance-only changes require an explicitly assigned metadata unit")
         record = copy.deepcopy(self.record)
         record.setdefault("compilations", []).append(audit)
         if getattr(self, "segmented_planning", False):
             from .plan_units import advance_unit_checkpoint
             record = advance_unit_checkpoint(record, self.project, self.project, audit)
+        acceptance_only = False
+        if metadata and record.get("unit_request", {}).get("accepted_delta_hash"):
+            from .plan_units import _hash
+            acceptance_only = (record["unit_request"]["accepted_delta_hash"] == _hash(audit["ir"])
+                               and record["work_units"]["checkpoints"][-1].get("acceptance_only", False))
+        if acceptance_only:
+            from .plan_validation import build_validation_receipt
+            record["generation_progress"] = {**record.get("generation_progress", {}), "state": "staged",
+                "checkpoint_count": record.get("generation_progress", {}).get("checkpoint_count", 0) + 1}
+            record["validation_requested"] = False
+            record["validation_receipt"] = build_validation_receipt(self.project)
         self.record = self.store.save(record)
+        return acceptance_only
 
     def start_tool_attempt(self, name, arguments):
         from .plan_batch_policy import PINNED_CONTINUATIONS

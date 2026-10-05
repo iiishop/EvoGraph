@@ -138,7 +138,7 @@ class PluginExecution(FrozenRecord):
 # policy revision can make the model advisory without relaxing deterministic safety.
 DETERMINISTIC_REQUIRED = (
     "source_completeness", "graph_identity", "contract_source_history", "design_consistency",
-    "declared_availability", "typed_capability_flow",
+    "declared_availability", "typed_capability_flow", "retained_acceptance",
 )
 
 
@@ -154,7 +154,7 @@ class HarnessPolicy(FrozenRecord):
         return self.deterministic_required + (("semantic_review",) if self.require_model_opinion else ())
 
 
-CURRENT_POLICY = HarnessPolicy(version="plan-harness-policy/v6",
+CURRENT_POLICY = HarnessPolicy(version="plan-harness-policy/v7",
                                deterministic_required=DETERMINISTIC_REQUIRED,
                                require_model_opinion=True,
                                not_applicable_reasons=(("typed_capability_flow",

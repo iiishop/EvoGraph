@@ -91,7 +91,7 @@ def project_unit_schema(record, project):
         extras = {name: field.json_schema_extra["manifest_extra"]
                   for name, field in PlanDelta.model_fields.items()
                   if (field.json_schema_extra or {}).get("manifest_extra")}
-        known = {"summary", "target", "relations", "remove_relations", *ARCH_FIELDS, *extras,
+        known = {"summary", "target", "relations", "remove_relations", "removal_acceptance_changes", *ARCH_FIELDS, *extras,
                  *REMOVALS.values(), *(field for field, _ in COLLECTIONS.values())}
         if properties.keys() != known:
             raise ValueError("uncataloged PlanDelta operation fields")
@@ -116,7 +116,27 @@ def project_unit_schema(record, project):
                     branch = deepcopy(base)
                     branch["properties"][identity]["enum"] = selected
                     branch["required"] = sorted(required_plan_fields(model, new=new))
-                    branches.append(branch)
+                    if kind == "contract" and record.get("retained_acceptance", {}).get("claims"):
+                        from .retained_acceptance import writable_ids
+                        for key in selected:
+                            scoped = deepcopy(branch)
+                            scoped["properties"][identity]["enum"] = [key]
+                            from .retained_acceptance import disposition_only_contract
+                            assigned_fields = next(row["fields"] for row in rows if row["id"] == key)
+                            if new and disposition_only_contract(record, project, key, assigned_fields):
+                                scoped["required"] = ["key", "acceptance_changes"]
+                                scoped["properties"] = {name: value for name, value in scoped["properties"].items()
+                                                        if name in {"key", "acceptance_changes"}}
+                            changes = scoped["properties"]["acceptance_changes"]
+                            ids_for_key = writable_ids(record, project, {key})
+                            changes["maxItems"] = min(16, len(ids_for_key))
+                            if ids_for_key:
+                                item = deepcopy(schema["$defs"]["AcceptanceChange"])
+                                item["properties"]["baseline_id"]["enum"] = ids_for_key
+                                changes["items"] = item
+                            branches.append(scoped)
+                    else:
+                        branches.append(branch)
                 properties[field]["items"] = branches[0] if len(branches) == 1 else {"anyOf": branches}
             elif kind in REMOVALS:
                 field = REMOVALS[kind]
@@ -168,6 +188,21 @@ def project_unit_schema(record, project):
             ids = [row["id"] for row in by_kind[extra["kind"]]]
             properties[field]["items"]["enum"] = ids
             properties[field]["maxItems"] = min(len(ids), properties[field]["maxItems"])
+        removal_rows = by_kind.get("remove_contract", [])
+        if removal_rows:
+            from .retained_acceptance import writable_ids
+            removal_fields = {}
+            for row in removal_rows:
+                ids_for_key = writable_ids(record, project, {row["id"]})
+                if not ids_for_key:
+                    continue
+                item = deepcopy(schema["$defs"]["AcceptanceChange"])
+                item["properties"]["baseline_id"]["enum"] = ids_for_key
+                removal_fields[row["id"]] = {"type": "array", "maxItems": min(16, len(ids_for_key)), "items": item}
+            if removal_fields:
+                keep.add("removal_acceptance_changes")
+                properties["removal_acceptance_changes"] = {"type": "object", "properties": removal_fields,
+                    "additionalProperties": False, "maxProperties": min(24, len(removal_fields))}
         schema["properties"] = {name: value for name, value in properties.items() if name in keep}
         if keep - schema["properties"].keys():
             raise ValueError("missing operation schema")

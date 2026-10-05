@@ -306,6 +306,19 @@ def capability_move_context(before, candidate, record):
 validate_attachment_excerpts = validate_review_sources
 
 
+def retained_disposition_changed(before, candidate, record, prior_packet):
+    """Only a validated retained disposition change permits same-plan re-review."""
+    if not record.get("retained_acceptance") or not prior_packet.get("retained_acceptance"):
+        return False
+    from .plan_review import resolve_packet_pointer
+    from .retained_acceptance import projection
+    old = resolve_packet_pointer(prior_packet, "/retained_acceptance")
+    new = projection(before, candidate, record)
+    return (old["entry_hash"] == new["entry_hash"]
+            and {r["id"]: r["resolution"] for r in old["claims"]}
+            != {r["id"]: r["resolution"] for r in new["claims"]})
+
+
 def review_packet(before, candidate, record):
     validate_review_sources(candidate)
     packet = batch_review_packet(before, candidate, record)
@@ -900,7 +913,9 @@ class UnifiedPlanningService:
                     terminal = "failed"
                     break
                 # Complete segments are already normalized; validate the exact ready snapshot.
-                if attempt and stage.record.get("review_inputs") and stage.record["review_inputs"][-1].get("planning_fingerprint") == planning_fingerprint(candidate):
+                if (attempt and stage.record.get("review_inputs")
+                        and stage.record["review_inputs"][-1].get("planning_fingerprint") == planning_fingerprint(candidate)
+                        and not retained_disposition_changed(before, candidate, stage.record, stage.record["review_inputs"][-1])):
                     stage.record["status"] = "needs_resolution"
                     terminal = "failed"
                     break

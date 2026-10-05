@@ -212,12 +212,12 @@ def test_versions_hashes_and_raw_replay_are_current_and_exact(context):
               "report": {"semantic_batch": batch.model_dump(), "semantic": review.model_dump()},
               "reviews": [review.model_dump()]}
     assert BATCH_VERSION == "semantic-batch/v2"
-    assert packet["checker_version"] == CHECKER_VERSION and CHECKER_VERSION.endswith("v12")
+    assert packet["checker_version"] == CHECKER_VERSION and CHECKER_VERSION.endswith("v13")
     assert validate_batch_certificate(project, project, stored) == review
     run = harness(context, batch)
     replayed = replay_harness(snapshot, run, lambda *_: validate_batch_certificate(project, project, stored))
     assert replayed.decision == "apply"
-    assert replayed.executions[-1].plugin_version == "2"
+    assert replayed.executions[-1].plugin_version == "3"
     for change in ({"checker_version": "unified-contract-challenge-v11"},
                    {"batch_reviews": [{**certificate, "schema_version": "semantic-batch/v1"}]},
                    {"input": "Changed scope"}):
@@ -311,7 +311,8 @@ def test_no_saved_unknown_rewrite_or_keyword_downgrade(context):
     issue["reason"] = "TrueTrue is part of the reported issue; semantic impact is still the reviewer's judgment"
     run = harness(context, batch_for(context[3], issues=[issue]))
     assert run.decision == "hold" and run.executions[-1].result.verdict == "unknown"
-    assert "TrueTrue" in json.loads(run.semantic_review_json)["checks"][-2]["reason"]
+    assert "TrueTrue" in next(c for c in json.loads(run.semantic_review_json)["checks"]
+                              if c["subject"] == "slice_activation:M1")["reason"]
 
 
 def test_v1_shapes_and_normalized_tamper_cannot_authorize(context):

@@ -26,7 +26,6 @@ from ..domain.plan_contracts import (
     contract_findings,
     declared_availability_findings,
     history_findings,
-    review_subjects,
     validate_semantic_review,
 )
 from ..domain.plan_harness import (
@@ -54,7 +53,8 @@ from .provider_output import ProviderOutputError
 _PROJECT_FIELDS = {*PLANNING_FIELDS, "id", "name", "description", "revision", "archived",
                    "unified_planning", "baselines", "evidence", "attachments"}
 _RECORD_FIELDS = ("id", "project_id", "base_revision", "input", "reference_context", "checker_version",
-                  "capability_move_audits", "typed_obligation_keys", "consumption_obligation_keys", "work_units")
+                  "capability_move_audits", "typed_obligation_keys", "consumption_obligation_keys", "work_units",
+                  "retained_acceptance", "compilations", "resumes_candidate_id", "planning_job")
 
 
 def _project_data(project):
@@ -329,6 +329,21 @@ def _typed_capability_flow(snapshot):
                    verdict=report["verdict"], applicability_reason=report["applicability_reason"])
 
 
+def _retained_acceptance(snapshot):
+    from .plan_review import CHECKER_VERSION
+    from .retained_acceptance import projection, subjects
+    try:
+        record = snapshot.record_data()
+        if (record.get("checker_version", CHECKER_VERSION) != CHECKER_VERSION
+                and "retained_acceptance" not in record):
+            raise ValueError("retained acceptance historical certificate lacks current entry scope")
+        projected = projection(snapshot.before_project(), snapshot.candidate_project(), snapshot.record_data())
+        return _result(snapshot, "retained_acceptance", subjects(projected))
+    except (ValueError, KeyError, TypeError) as exc:
+        return _result(snapshot, "retained_acceptance", ("retained_acceptance",),
+                       (_finding("invalid_retained_acceptance", "retained_acceptance", str(exc)),))
+
+
 @dataclass(frozen=True)
 class BuiltinPlugin:
     manifest: PluginManifest
@@ -353,7 +368,10 @@ BUILTIN_REGISTRY = (
     BuiltinPlugin(PluginManifest(id="typed_capability_flow", version="3", kind="deterministic",
                                 prerequisites=("graph_identity", "contract_source_history"),
                                 scope="declared_typed_acceptance_and_runtime_consumption"), _typed_capability_flow),
-    BuiltinPlugin(PluginManifest(id="semantic_review", version="2", kind="model_opinion",
+    BuiltinPlugin(PluginManifest(id="retained_acceptance", version="1", kind="deterministic",
+                                prerequisites=("graph_identity", "contract_source_history"),
+                                scope="fixed_entry_acceptance_identity_and_availability"), _retained_acceptance),
+    BuiltinPlugin(PluginManifest(id="semantic_review", version="3", kind="model_opinion",
                                 prerequisites=CURRENT_POLICY.deterministic_required,
                                 scope="source_plan_semantic_opinion")),
 )
@@ -490,13 +508,13 @@ def _semantic_result(snapshot, review, certificate):
     candidate = snapshot.candidate_project()
     raw_review = review.model_dump() if isinstance(review, SemanticReview) else review
     review = SemanticReview.model_validate(raw_review)
-    validate_semantic_review(candidate, review)
     # Recheck exact raw bytes and normalized subject/evidence coverage, even if
     # the transport already checked them. A model-supplied verdict is not a gate.
     if certificate.get("schema_version") != BATCH_VERSION:
         raise ValueError("Required raw semantic certificate is missing or obsolete")
     batch = BatchSemanticReview.model_validate_json(certificate["raw_arguments"])
     packet = batch_review_packet(snapshot.before_project(), candidate, snapshot.record_data())
+    validate_semantic_review(candidate, review, required_subjects=packet["required_subjects"])
     normalized = normalize_batch_review(candidate, packet, batch)
     if batch.model_dump() != certificate.get("batch") or normalized != review:
         raise ValueError("Raw certificate and normalized semantic review differ")
@@ -512,7 +530,7 @@ def _semantic_result(snapshot, review, certificate):
                     for observation in batch.observations for subject in observation.subjects)
     verdict = ("block" if any(c.verdict == "contradicted" for c in review.checks) else "unknown"
                if any(c.verdict == "unknown" for c in review.checks) else "pass")
-    return (_result(snapshot, "semantic_review", review_subjects(candidate), findings, verdict=verdict),
+    return (_result(snapshot, "semantic_review", packet["required_subjects"], findings, verdict=verdict),
             canonical_json(review.model_dump()), canonical_json(certificate))
 
 

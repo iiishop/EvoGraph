@@ -323,11 +323,11 @@ class SemanticReview(ContractModel):
     summary: str = Field(min_length=1, max_length=2000)
     checks: list[SemanticCheck] = Field(min_length=1, max_length=300)
 
-def validate_semantic_review(project, review):
+def validate_semantic_review(project, review, *, required_subjects=None):
     if review.candidate_hash != candidate_hash(project):
         raise ValueError("评审引用了过期候选版本")
     subjects = [c.subject for c in review.checks]
-    if len(set(subjects)) != len(subjects) or set(subjects) != set(review_subjects(project)):
+    if len(set(subjects)) != len(subjects) or set(subjects) != set(review_subjects(project) if required_subjects is None else required_subjects):
         raise ValueError("评审未逐项覆盖准确的需求、撤销和整体一致性检查")
     eligible_ids = {e["id"] for e in eligible_execution_evidence(project)}
     for check in review.checks:
