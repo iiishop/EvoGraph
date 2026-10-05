@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 from ..agent_tools.base import ToolContext
 from ..domain.models import Project
-from ..domain.plan_contracts import candidate_hash, planning_payload
-from .plan_batch_policy import PENDING_ARCHITECTURE_EXPERIMENT
+from ..domain.plan_contracts import IntentSource, candidate_hash, planning_payload
+from .plan_batch_policy import PENDING_ARCHITECTURE_EXPERIMENT, experiment_policy
 from .plan_ir import PlanDelta, compile_plan_delta
 from .plan_patch import _completed_compiler_audit, _MemoryDatabase, propose_plan_patch
 from .plan_units import (
@@ -26,11 +26,14 @@ from .plan_units import (
     _schedule,
     _schedule_view,
     _unit_changes,
+    resume_unit_schedule,
     schedule_findings,
 )
 
 PIN_KEYS = {"project_id", "version", "predecessor_candidate_id", "predecessor_record_hash",
             "schedule_hash", "canonical_revision", "canonical_hash"}
+ZERO_WRITE_RETRY = "zero-write-once/v1"
+RETRY_PIN_KEYS = PIN_KEYS | {"retry"}
 
 
 def recombine_pending_architecture(schedule):
@@ -104,17 +107,25 @@ def _validate_compiled_result(canonical, base, after, compiled, source_id):
         raise ValueError("pending continuation saved planning result differs from compiled checkpoint")
 
 
-def admit_pending_continuation(argument, before, previous, content):
+def _validate_pins(argument, before, previous, *, retry=False):
+    keys = RETRY_PIN_KEYS if retry else PIN_KEYS
+    if (set(argument) != keys or (retry and argument["retry"] != ZERO_WRITE_RETRY)
+            or argument["version"] != PENDING_ARCHITECTURE_EXPERIMENT
+            or argument["project_id"] != before.id
+            or argument["canonical_revision"] != before.revision
+            or argument["canonical_hash"] != candidate_hash(before)
+            or argument["predecessor_candidate_id"] != previous["id"]
+            or argument["predecessor_record_hash"] != _hash(previous)
+            or argument["schedule_hash"] != _hash(previous["work_units"])):
+        raise ValueError("pending continuation caller pin changed")
+
+
+def admit_pending_continuation(argument, before, previous, content, *, store=None):
     """Validate caller pins, exact source/router evidence and the sole compiler checkpoint."""
     try:
-        if (set(argument) != PIN_KEYS or argument["version"] != PENDING_ARCHITECTURE_EXPERIMENT
-                or argument["project_id"] != before.id
-                or argument["canonical_revision"] != before.revision
-                or argument["canonical_hash"] != candidate_hash(before)
-                or argument["predecessor_candidate_id"] != previous["id"]
-                or argument["predecessor_record_hash"] != _hash(previous)
-                or argument["schedule_hash"] != _hash(previous["work_units"])):
-            raise ValueError("pending continuation caller pin changed")
+        if "retry" in argument:
+            return _admit_zero_write_retry(argument, before, previous, content, store)
+        _validate_pins(argument, before, previous)
         candidate = Project.model_validate(previous["project"])
         schedule = previous["work_units"]
         if (previous["project_id"] != before.id or candidate.id != before.id
@@ -193,13 +204,89 @@ def admit_pending_continuation(argument, before, previous, content):
         raise ValueError("malformed pending continuation evidence") from exc
 
 
+def _admit_zero_write_retry(argument, before, previous, content, store):
+    """One additional attempt, rooted in the original ordinary compiler proof."""
+    _validate_pins(argument, before, previous, retry=True)
+    if _hash(store.latest(before.id)) != _hash(previous):
+        raise ValueError("pending retry predecessor is no longer latest")
+    original = store.get(previous["resumes_candidate_id"])
+    # Calling the ordinary admission, not this retry path, prevents recursion.
+    old_admission = previous["pending_architecture_admission"]
+    if set(old_admission["pins"]) != PIN_KEYS:
+        raise ValueError("pending retry cannot retry a retry successor")
+    transformed, verified = admit_pending_continuation(
+        old_admission["pins"], before, original, content)
+    policy = {"project_id": before.id, **experiment_policy(PENDING_ARCHITECTURE_EXPERIMENT)}
+    candidate = Project.model_validate(previous["project"])
+    parent = Project.model_validate(original["project"])
+    attempts = previous["tool_attempts"]
+    if (previous["id"] == original["id"] or previous["turn_id"] != previous["id"]
+            or previous["project_id"] != before.id or previous["base_revision"] != before.revision
+            or previous["revision"] != parent.revision or candidate.revision != parent.revision
+            or previous["candidate_hash"] != candidate_hash(candidate)
+            or previous["status"] != "needs_resolution" or previous["input"] != content
+            or previous["reference_context"] != original["reference_context"]
+            or previous["planning_experiment"] != policy or old_admission != verified
+            or previous["prior_work_units"] != original["work_units"]
+            or previous.get("work_unit_schedule_history")
+            or previous["compilations"] != original["compilations"]
+            or previous.get("reviews") or previous.get("batch_reviews") or previous.get("harness_run")
+            or previous.get("validation_requested") or previous.get("tool_calls")
+            or previous["generation_progress"] != {"state": "staged", "checkpoint_count": 1}
+            or previous["generation_pause_reason"] != "experiment_first_failure"
+            or previous["metrics"].get("experiment_stopped") != "experiment_first_failure"
+            or previous["metrics"]["provider_calls"] != 1
+            or previous["metrics"]["planning_experiment"] != policy or len(attempts) != 1):
+        raise ValueError("pending retry requires the unchanged zero-write first failure")
+    attempt = attempts[0]
+    if (attempt["id"] != 1 or attempt["name"] != "submit_plan_delta"
+            or attempt["status"] != "failed" or attempt["source_id"] != previous["id"]
+            or attempt["generation_call"] != 1 or attempt["payload"].get("ok") is not False
+            or not attempt["payload"].get("error")):
+        raise ValueError("pending retry failed activity changed")
+    source = IntentSource(id=previous["id"], text=content,
+                          reference_context=original["reference_context"])
+    expected = parent.model_copy(deep=True)
+    expected.plan_contract.sources.append(source)
+    resumed = resume_unit_schedule({**original, "work_units": transformed}, expected, previous["id"], content)
+    if resumed != previous["work_units"]:
+        raise ValueError("pending retry schedule or completed checkpoint changed")
+    source.message_id = previous["source_message_id"]
+    unit = next(u for u in resumed["units"] if u["state"] == "pending")
+    pin = {"unit_id": unit["id"], "unit_hash": unit["hash"], "source_id": source.id,
+           "manifest_hash": resumed["manifest_hash"], "revision": parent.revision,
+           "planning_fingerprint": _identity(expected), "candidate_hash": candidate_hash(expected),
+           "accepted_delta_hash": None}
+    source.activity = [{"id": attempt["id"], "name": attempt["name"], "status": attempt["status"]}]
+    if (not source.message_id or expected != candidate or previous["unit_request"] != pin
+            or schedule_findings(previous, candidate)):
+        raise ValueError("pending retry saved result differs from its zero-write source/activity")
+    return deepcopy(resumed), {
+        **verified, "pins": deepcopy(argument), "transformed_schedule_hash": _hash(resumed),
+        "zero_write_retry": {"original_candidate_id": original["id"],
+                             "original_record_hash": _hash(original),
+                             "original_admission_hash": _hash(verified)},
+    }
+
+
 def pending_continuation_errors(record):
     """Recheck immutable transformation/old checkpoint before dispatch and atomic write."""
     try:
         admission = record["pending_architecture_admission"]
         prior = record["prior_work_units"]
         pins = admission["pins"]
-        expected = recombine_pending_architecture(prior)
+        retry = admission.get("zero_write_retry")
+        if retry is not None:
+            if (set(pins) != RETRY_PIN_KEYS or pins["retry"] != ZERO_WRITE_RETRY
+                    or set(retry) != {"original_candidate_id", "original_record_hash", "original_admission_hash"}
+                    or retry["original_candidate_id"] != prior["origin_source_id"]
+                    or len(prior["resumes"]) != 1 or len(prior["checkpoints"]) != 1):
+                return ["pending retry lineage changed"]
+            expected = prior  # Already transformed, verified once; never repack a retry.
+        else:
+            if set(pins) != PIN_KEYS:
+                return ["pending continuation caller pin changed"]
+            expected = recombine_pending_architecture(prior)
         current = record["work_units"]
         if (pins["version"] != PENDING_ARCHITECTURE_EXPERIMENT
                 or pins["project_id"] != record["project_id"]

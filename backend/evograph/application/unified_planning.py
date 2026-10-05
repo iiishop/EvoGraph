@@ -413,7 +413,8 @@ class UnifiedPlanningService:
             transformed_previous, pending_admission = previous, None
             if pending_architecture_stage:
                 from .plan_pending_continuation import admit_pending_continuation
-                transformed, pending_admission = admit_pending_continuation(experiment, before, previous, content)
+                transformed, pending_admission = admit_pending_continuation(
+                    experiment, before, previous, content, store=self.store)
                 transformed_previous = {**previous, "work_units": transformed}
             repair_agenda = (explicit_repair_agenda(before, previous)
                 if selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT else None)

@@ -1,0 +1,12 @@
+{
+  "source": "QA55 retained first-output failed successor bd59ba1fa21b47ea, canonical R2, 2026-10-05",
+  "scope": "Exact single historical record for offline admission only. No credentials. Not semantic or model quality evidence.",
+  "source_candidates_sha256": "ec172d70f04375c751c7e11ca8b9559b7bf80b8efc1a55b032043b3e9a7e3a25",
+  "candidate_id": "bd59ba1fa21b47ea",
+  "record_hash": "a8b034ee4ad035513fc87996017ebcc1ed9c2857d7338e88840c577921ae3645",
+  "fixture": {
+    "compressed_file": "qa55-zero-write-successor.json.gz",
+    "bytes": 201687,
+    "sha256": "a8b034ee4ad035513fc87996017ebcc1ed9c2857d7338e88840c577921ae3645"
+  }
+}

@@ -181,8 +181,8 @@ def select_experiment(argument, project, previous, resume):
         return None
     keys = {"project_id", "version"}
     if isinstance(argument, dict) and argument.get("version") == PENDING_ARCHITECTURE_EXPERIMENT:
-        from .plan_pending_continuation import PIN_KEYS
-        keys = PIN_KEYS
+        from .plan_pending_continuation import PIN_KEYS, RETRY_PIN_KEYS
+        keys = RETRY_PIN_KEYS if "retry" in argument else PIN_KEYS
     if isinstance(argument, dict) and argument.get("version") == SAVED_UNITS_EXPERIMENT:
         keys |= {"predecessor_candidate_id", "schedule_hash"}
     if (not isinstance(argument, dict) or set(argument) != keys
