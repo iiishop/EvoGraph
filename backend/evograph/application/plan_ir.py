@@ -109,8 +109,10 @@ class SliceDelta(IRModel):
 
 class ComponentDelta(IRModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
-    label: str = Field(min_length=1, max_length=120)
-    description: str = Field(min_length=1, max_length=1500)
+    label: str | None = Field(default=None, min_length=1, max_length=120,
+                              json_schema_extra={"required_if_new": True})
+    description: str | None = Field(default=None, min_length=1, max_length=1500,
+                                    json_schema_extra={"required_if_new": True})
     role: Literal["frontend", "backend", "database", "security", "cloud", "message", "external"] = "backend"
     source_refs: list[str] = Field(default_factory=list, max_length=40)
 
@@ -282,7 +284,13 @@ def _architecture(project, args, slice_ids):
     for cid in args.remove_component_ids:
         del nodes[cid]
     for item in args.components:
-        # Retain source references/counts and omitted roles on existing nodes.
+        if item.id not in nodes:
+            missing = required_plan_fields(ComponentDelta, new=True) - item.model_fields_set
+            if missing:
+                raise ValueError(f"components.{item.id}: new component requires "
+                                 + ", ".join(sorted(missing)))
+        # Apply only explicit fields, retaining all omitted presentation/source
+        # data and roles on existing nodes. Domain defaults apply only to new IDs.
         nodes[item.id] = {**nodes.get(item.id, {}), **item.model_dump(exclude_unset=True)}
         if "source_refs" in item.model_fields_set:
             _unique(item.source_refs, f"components.{item.id}.source_refs")
@@ -540,7 +548,8 @@ DELTA_TOOL = ToolSpec(
     "Moving a capability key between provider contracts requires capability_move_reason on the receiver. "
     "Owner moves need owner_change_reason and "
     "retain the stable key/history. Only send actual changes, never rephrase omitted text. "
-    "New slices need title/intent/scope (work boundaries). components upsert IDs; source_refs replace "
+    "New slices need title/intent/scope (work boundaries). Existing components need only id and changed "
+    "fields; omitted fields remain exact. New components need label and description. source_refs replace "
     "real repository paths ([] clears). relations upsert "
     "exact source/target/label triples; remove_relations deletes exact triples. Deletions require "
     "repairing surviving links. Component retirements need unfinished migration owners. "

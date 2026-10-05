@@ -1,0 +1,462 @@
+{
+  "provenance": {
+    "case": "QA55 add-reminders unit-002",
+    "candidate_id": "572e49cdf1654727",
+    "tool_attempt_id": 4,
+    "raw_arguments_sha256": "4161df5e359cc79087d984a8f7093469184fcdeb336aecc5e66f7c7ba303b937",
+    "scope": "Exact captured tool arguments plus only the structural project fields used by compile_plan_delta. No model messages, reasoning, profiles, or credentials."
+  },
+  "raw_arguments": "{\"summary\": \"unit-002：把防双排保证扩展到候补推进写入路径，并新增通知派发器与邮件发送适配器组件、更新受影响组件的职责描述。\", \"contracts\": [{\"key\": \"contract-no-double-booking\", \"statement\": \"对同一技师的任一时间窗口（服务时长对应的连续原子时段区间），无论来自顾客提交、店员调整还是候补转正（把候补登记推进为预约），并发写入中最多一个成功；落库后不存在两条未取消预约在同一技师的任一原子时段上重叠（含只重叠一部分时段的情形）；被拒绝的一方收到明确冲突错误且不产生记录；同一条候补登记或同一次转正请求重复执行最多产生一条预约与其对应的一组占位行，不出现第二次占位。\", \"mechanism\": \"时间窗口不再是不可比对的整块键，而是展开到原子时段：服务时长按 slot_minutes 折成 L 个连续原子时段，一次预约占用 start_slot 起的 L 个原子时段。顾客提交与店员调整共用同一个写入事务：事务内先检查目标技师这些原子时段上没有有效占位，再为每个原子时段各插入一行 technician_slot_holds；库层 (technician_id, slot) 唯一索引是最终防线，任一行被拒绝（包括仅有一个原子时段的部分重叠）即整笔事务回滚并返回冲突错误，不依赖先查后写；取消预约在同一事务内删除其占位行，使这些原子时段重新可用。候补转正不引入第三条写入路径：它就是同一事务里的同一组占位写入——在同一事务内按目标 (technician_id, start_slot) 展开 L 个原子时段并逐行插入占位行，任一行被唯一索引拒绝即整笔回滚，该候补登记保持 active 且不产生预约；同一事务内把候补登记状态迁到已转正并写入其转正所得预约 ID（状态迁移与占位写入同事务提交，因此同一条候补登记的重复转正不产生第二条预约、不产生第二次占位）。验收步骤：对同一技师同一时段并行发起两个顾客提交，断言恰好一个成功、一个返回冲突响应；查询该技师该时段断言只有一条有效预约；构造部分重叠用例（技师 A 已有 09:00–10:00，即 09:00、09:30 两个原子时段，新单为 09:30–10:30）断言写入被库层拒绝且 A 的有效占位仍为原两行；以店员身份把另一技师的预约调整到 A 的 09:30–10:30 断言同样被拒绝；断言相邻但不重叠的 10:00–10:30 与 10:30–11:00 可分别成功；取消其中一单后断言对应原子时段可被再次预约。候补推进追加步骤：对同一候补登记并行触发两次转正，断言只产生一条预约、占位行恰为 L 行且候补状态只迁移一次；把候补转正目标指向已被占用的技师时段，断言整笔回滚、候补仍为 active 且占位行数不变。该契约只保证占位不重复；取消时通知候补顾客的投递幂等（同一事件不发两封邮件）由承担提醒与候补通知的契约负责。\"}], \"components\": [{\"id\": \"comp-booking-service\", \"description\": \"统一的预约写入与查询逻辑：可用时段计算、必填联系方式校验（姓名、电话、邮箱）、事务内技师时段占用校验（顾客提交、店员调整与候补转正走同一路径）、预约创建与变更、冲突错误返回；候补登记写入而不占用技师时段。取消与候补推进在同一事务内完成：释放被取消预约的占位行、把该时段最早的 active 候补登记推进为预约（复用同一占位写入），并为待发送的提醒与候补通知各生成一行带幂等键（预约或候补登记 ID + 通知类型）的待发送记录；事务提交后才交给派发组件投递，自身不等待邮件服务，也不因邮件失败回滚或丢失预约与候补数据。\"}, {\"id\": \"comp-booking-store\", \"description\": \"持久化技师(6 位)、服务项目、预约记录与技师时段占用；以事务与库层排他约束拒绝同一技师时段重叠写入。同时持久化候补登记（含状态与登记时间）与待发送提醒/通知记录，后两者以幂等键（预约或候补登记 ID + 通知类型）的唯一约束保证重复执行不产生第二条待发送记录；提醒扫描与通知派发只读取这些表并回写自身状态，不修改预约与候补的业务数据。\"}, {\"id\": \"comp-customer-web\", \"description\": \"移动优先的响应式顾客入口：浏览服务项目、选择日期与可用时间、填写姓名、电话与邮箱并提交，显示预约编号或冲突/缺字段错误（邮箱供预约前一天提醒使用）。当所选服务与起始时段没有任何可指派技师时，同一页面提供候补登记入口：顾客留下姓名与邮箱即可提交，得到候补登记编号；登记不占用技师时段，也不改变该时段对其他人是否可预约的判断。\"}, {\"id\": \"comp-deploy-runtime\", \"description\": \"单台小服务器上的应用进程托管、静态资源与 API 暴露、HTTPS 终止、配置与数据文件备份/恢复步骤。到期提醒扫描与通知派发以同一应用进程内的定时/触发步骤运行，不引入消息队列或额外常驻服务；邮件服务地址与凭据走配置（可用自建 SMTP 中继），其超时或失败被隔离在派发步骤内，不影响预约写入与查询。备份/恢复范围涵盖预约、技师时段占用、候补登记与待发送通知数据。\"}, {\"id\": \"comp-notification-dispatcher\", \"label\": \"通知派发器\", \"description\": \"同一应用进程内的提醒扫描与通知派发：按日期扫描次日预约，为每条预约生成一行幂等键为（预约 ID + 提醒类型）的待发送记录；取消事务提交后，为被释放时段最早的候补登记派发一行（候补登记 ID + 通知类型）的候补通知记录。派发逐条读取待发送记录并调用邮件发送适配器，正常发送后把该记录置为已发送；重复运行或重试命中幂等键时跳过已发送记录，因此同一次提醒或同一次取消不会发出第二封邮件；投递失败只把该记录留在待发送/失败状态等待重试，不触碰预约与候补数据。\", \"role\": \"message\"}, {\"id\": \"comp-email-adapter\", \"label\": \"邮件发送适配器\", \"description\": \"封装邮件服务调用（SMPT/SMTP 提交、连接与读取超时、重试上限与失败分类），把成功、超时与失败分别映射为返回值而不向调用方抛出，使超时或异常不会中断取消事务与预约写入；仅在事务提交后由派发器调用，调用方不等待其结果，因此邮件服务超时既不回滚取消，也不丢失预约、候补登记与待发送记录。\", \"role\": \"external\"}]}",
+  "base_project": {
+    "name": "QA55 component update compiler fixture",
+    "milestones": [
+      {
+        "id": "slice-1-foundation",
+        "title": "单机部署骨架与数据模型",
+        "intent": "建立可在单台小服务器上运行、可重复部署并持久化技师/服务/预约数据的基线，使 6 位技师与日均约 40 单的规模可在单进程内承载。",
+        "architecture_components": [
+          "comp-deploy-runtime",
+          "comp-booking-store"
+        ],
+        "scope": [
+          "应用进程骨架与顾客/店员路由的静态托管",
+          "数据模型与迁移：技术人员(6 位)、服务项目、预约、技师时段占用",
+          "单机部署与配置：进程托管、配置注入、数据文件备份与恢复步骤",
+          "不在本切片：预约界面交互、冲突校验策略细节"
+        ],
+        "dependencies": [],
+        "dependency_reasons": {},
+        "behavior_revision_ids": [
+          "6fe528d1f3734e10"
+        ],
+        "change_types": [
+          "data",
+          "api"
+        ]
+      },
+      {
+        "id": "slice-2-customer-booking",
+        "title": "顾客手机网页预约通路",
+        "intent": "让顾客用手机网页选服务与时间、留下联系方式并提交，获得可核对的预约确认。",
+        "architecture_components": [
+          "comp-customer-web",
+          "comp-booking-service",
+          "comp-booking-store"
+        ],
+        "scope": [
+          "响应式顾客页：服务项目列表、日期与可用时段、联系方式表单",
+          "提交与查询 API：创建预约、查询某日可用时段",
+          "无线上支付的确认提示与错误提示（时段不可用、联系方式缺失）"
+        ],
+        "dependencies": [
+          "slice-1-foundation"
+        ],
+        "dependency_reasons": {
+          "slice-1-foundation": "需要已存在的单机运行外壳与技师/服务/预约数据表才能写入并回读预约"
+        },
+        "behavior_revision_ids": [
+          "49873d80e6ca4888"
+        ],
+        "change_types": [
+          "api"
+        ]
+      },
+      {
+        "id": "slice-3-staff-console",
+        "title": "店员预约查看与调整",
+        "intent": "让店员按日期查看全部预约并调整时间/技师或取消，改动后可被重新查询到。",
+        "architecture_components": [
+          "comp-staff-console",
+          "comp-booking-service",
+          "comp-booking-store"
+        ],
+        "scope": [
+          "按日期的预约列表与预约详情（技师、服务、时间、联系方式）",
+          "调整时间/技师与取消预约的 API 与界面",
+          "店员访问凭据（计划假设：先单一共享账号；是否按技师分账号待澄清）"
+        ],
+        "dependencies": [
+          "slice-2-customer-booking"
+        ],
+        "dependency_reasons": {
+          "slice-2-customer-booking": "店员调整作用于顾客已提交的预约记录，并复用同一读写接口约定"
+        },
+        "behavior_revision_ids": [
+          "0e504c09ee764b15"
+        ],
+        "change_types": [
+          "api"
+        ]
+      },
+      {
+        "id": "slice-4-conflict-guarantee",
+        "title": "技师防双排保证",
+        "intent": "在顾客提交与店员调整两条写入路径上，保证同一技师同一时间窗口不被两单同时占用，并把冲突以明确错误返回。",
+        "architecture_components": [
+          "comp-booking-service",
+          "comp-booking-store"
+        ],
+        "scope": [
+          "统一写入事务内的可用性检查与排他占用写入",
+          "并发争抢同一技师时段的冲突响应与用户可读提示",
+          "覆盖顾客路径与店员路径的冲突验证（含并发双写）"
+        ],
+        "dependencies": [
+          "slice-3-staff-console"
+        ],
+        "dependency_reasons": {
+          "slice-3-staff-console": "店员调整是第二条会占用技师时段的写入路径，必须一并纳入同一保证"
+        },
+        "behavior_revision_ids": [
+          "2a0d8beccf994be0"
+        ],
+        "change_types": [
+          "api",
+          "test"
+        ]
+      }
+    ],
+    "behaviors": [
+      {
+        "id": "2a0d8beccf994be0",
+        "behavior_key": "contract-no-double-booking",
+        "version": 2,
+        "statement": "对同一技师的任一时间窗口（服务时长对应的连续原子时段区间），无论来自顾客提交还是店员调整，并发写入中最多一个成功；落库后不存在两条未取消预约在同一技师的任一原子时段上重叠（含只重叠一部分时段的情形）；被拒绝的一方收到明确冲突错误且不产生记录。",
+        "acceptance_scope": "target",
+        "owner": "slice-4-conflict-guarantee",
+        "supersedes": "b20e197f172a44f6"
+      },
+      {
+        "id": "6fe528d1f3734e10",
+        "behavior_key": "contract-foundation",
+        "version": 2,
+        "statement": "在单台小服务器上以单进程方式部署后，数据模型包含技术人员(6 位)、服务项目、预约与技师时段占用；部署与迁移步骤重复执行不产生重复结构；在 6 位技师、日均约 40 单的写入量下，预约写入与当日预约查询均在正常交互时间内完成，且不依赖任何外部托管服务。",
+        "acceptance_scope": "target",
+        "owner": "slice-1-foundation",
+        "supersedes": "13270c0ac7b84636"
+      },
+      {
+        "id": "49873d80e6ca4888",
+        "behavior_key": "contract-customer-booking",
+        "version": 3,
+        "statement": "在手机浏览器（360×640 视口）打开顾客页，可选择一项服务与一个可用起始时间、填写姓名、电话与邮箱并提交，由系统在该时段指派一位空闲技师，得到带预约编号与该技师的确认；随后查询可回读到该预约及其联系方式（含邮箱）。当所选服务与起始时间没有任何可指派的空闲技师时，页面提供候补登记：顾客留下姓名、邮箱与该时段即得到候补登记确认；登记本身不占用技师时段，也不改变该时段对其他人是否可预约的判断。顾客不选择技师，提交表单与请求载荷不含技师字段，整条流程也没有任何在线支付步骤或支付字段。",
+        "acceptance_scope": "target",
+        "owner": "slice-2-customer-booking",
+        "supersedes": "027502a8a38040f3"
+      },
+      {
+        "id": "0e504c09ee764b15",
+        "behavior_key": "contract-staff-console",
+        "version": 3,
+        "statement": "店员可按日期查看全部预约及其技师、服务、时间与联系方式（含邮箱），并能修改某条预约的时间或技师、或取消该预约；保存后重新查询显示更新后的值，被取消的预约不再占用技师时段；顾客端查询可用时段时反映这些改动。取消一单时，系统为该时段最早的候补登记生成一条待发送的候补通知并在取消提交返回后异步投递：邮件服务超时或失败不影响取消结果，也不影响已有预约与候补数据；重复提交或重试同一次取消不会额外生成第二条候补通知，被释放的技师时段也不会被重复占位。",
+        "acceptance_scope": "target",
+        "owner": "slice-3-staff-console",
+        "supersedes": "d2ff2d8b41fe4186"
+      }
+    ],
+    "architectures": [
+      {
+        "quality_scenarios": [],
+        "risks": [
+          "单台服务器与单数据文件构成单点：需要可在数分钟内完成的备份与恢复步骤，并验证恢复后预约数据完整。",
+          "若只用应用层先查后写，并发下仍可能把同一技师排给两单：必须以库层约束兜底并用并行请求验证。",
+          "服务项目与价格的维护方式（由谁新增、是否需要停用旧项目）尚未定义，可能在实现阶段形成新的小切片。",
+          "单一开发者值守，部署与回滚必须脚本化、可重复执行，避免手工步骤导致停机时间拉长。"
+        ],
+        "summary": "单机分层架构：顾客手机网页与店员控制台是两个前端入口，共用同一个预约服务（可用时段计算、联系方式校验、事务内写入与查询），数据落在同一台小服务器上的关系型数据库；顾客提交与店员调整两条写入路径共用同一时段占用事务，由数据层约束保证同一技师同一时间窗口只有一个有效预约。部署形态保持单进程 + 单数据文件 + 同机 HTTPS 反向代理，不引入消息队列、缓存、托管数据库或线上支付集成，契合单一开发者维护与 6 位技师、日均约 40 单的规模。交付路线图分四段：单机骨架与数据模型 → 顾客手机网页预约通路 → 店员查看与调整通路 → 技师防双排保证；每段都有可独立验收的契约，后段在前段之上叠加而不重写前段保证。",
+        "technologies": [
+          {
+            "area": "部署与运行时",
+            "choice": "单台小服务器上的单个应用进程 + 同机反向代理（HTTPS 终止）",
+            "rationale": "6 位技师、日均约 40 单的负载单进程足够；单一开发者可用一条部署命令维护，避免多机与容器编排的运维面。"
+          },
+          {
+            "area": "数据存储",
+            "choice": "单文件关系型数据库（SQLite），仅事务性读写",
+            "rationale": "数据量小、并发低，单文件便于备份与整体迁移；事务与唯一索引（technician_slot_holds 上 (technician_id, slot)）可在库层直接拒绝同一技师的原子时段重叠写入，不依赖应用层时序。"
+          },
+          {
+            "area": "顾客与店员界面",
+            "choice": "服务端渲染的移动优先响应式网页，同一代码库，无原生 App",
+            "rationale": "顾客用手机网页即可完成预约无需安装；店员控制台与顾客页共用部署与样式基线，单一开发者维护成本最低。"
+          },
+          {
+            "area": "冲突控制",
+            "choice": "事务内可用性检查 + 按原子时段逐段占位（technician_slot_holds 每时段一行，(technician_id, slot) 唯一索引）",
+            "rationale": "把服务时长按 slot_minutes 折成连续原子时段并逐时段写占位行，唯一索引即可拒绝部分重叠而非只拒绝完全相同的整块键，把“不能把同一位技师同时排给两单”落成数据层保证，抗并发双写并易于用并行请求验证。"
+          },
+          {
+            "area": "线上支付",
+            "choice": "不接入任何支付渠道，无支付字段与跳转",
+            "rationale": "用户明确本阶段暂时不收线上付款，避免引入结算、对账与合规负担。"
+          }
+        ],
+        "decisions": [
+          "单体优先：顾客页、店员端与预约服务同处一个应用进程，规模（6 位技师、日均约 40 单）不需要前后端分离或分布式拆分。",
+          "写入路径唯一：顾客提交与店员调整共用同一个冲突校验事务与同一套原子时段占位写入，避免两处各写一套可用性规则导致保证不一致。",
+          "技师指派规则明确化：顾客请求只含服务、时间与联系方式，不选技师（req-customer-mobile-booking 原文如此）；服务端在同一事务内计算该起始时段上其 duration_slots 覆盖的全部原子时段均无有效占位的合格技师集合，按 technician_id 升序取第一位指派并写库，集合为空则返回冲突错误且不写任何行。可用时段只有在不存在任何合格空闲技师时才不可用，某位技师被占用不单独使时段不可用。",
+          "冲突保证下沉到数据层：服务时长按 slot_minutes 折成连续原子时段，一次预约为其覆盖的每个原子时段各写一行 (technician_id, slot) 占位，并以 (technician_id, slot) 唯一索引兜底，使部分重叠（如技师 A 已有 09:00–10:00、新单 09:30–10:30）也被库层拒绝并整笔事务回滚；应用层先查后写只作快速失败与友好提示，不作为唯一防线。",
+          "本阶段不引入消息队列、缓存、托管数据库与支付渠道；若后续需要，作为新的架构变更单元单独评估。",
+          "店员访问先以单一共享凭据起步（计划假设，需在实现时确认是否按技师分账号）。"
+        ],
+        "diagram": {
+          "id": "architecture",
+          "title": "系统架构",
+          "kind": "architecture",
+          "nodes": [
+            {
+              "id": "comp-customer-web",
+              "label": "顾客预约网页",
+              "description": "移动优先的响应式顾客入口：浏览服务项目、选择日期与可用时间、填写姓名与电话并提交，显示预约编号或冲突/缺字段错误。",
+              "role": "frontend",
+              "source_refs": [],
+              "source_ref_count": 0
+            },
+            {
+              "id": "comp-staff-console",
+              "label": "店员预约控制台",
+              "description": "店员入口：按日期查看预约列表与详情（技师、服务、时间、联系方式），并调整时间/技师或取消预约。",
+              "role": "frontend",
+              "source_refs": [],
+              "source_ref_count": 0
+            },
+            {
+              "id": "comp-booking-service",
+              "label": "预约服务",
+              "description": "统一的预约写入与查询逻辑：可用时段计算、必填联系方式校验、事务内技师时段占用校验（顾客提交与店员调整走同一路径）、预约创建与变更、冲突错误返回。",
+              "role": "backend",
+              "source_refs": [],
+              "source_ref_count": 0
+            },
+            {
+              "id": "comp-booking-store",
+              "label": "预约数据存储",
+              "description": "持久化技师(6 位)、服务项目、预约记录与技师时段占用；以事务与库层排他约束拒绝同一技师时段重叠写入。",
+              "role": "database",
+              "source_refs": [],
+              "source_ref_count": 0
+            },
+            {
+              "id": "comp-deploy-runtime",
+              "label": "单机部署运行环境",
+              "description": "单台小服务器上的应用进程托管、静态资源与 API 暴露、HTTPS 终止、配置与数据文件备份/恢复步骤。",
+              "role": "cloud",
+              "source_refs": [],
+              "source_ref_count": 0
+            }
+          ],
+          "edges": [
+            {
+              "source": "comp-customer-web",
+              "target": "comp-booking-service",
+              "label": "提交预约与查询时段"
+            },
+            {
+              "source": "comp-staff-console",
+              "target": "comp-booking-service",
+              "label": "查看与调整预约"
+            },
+            {
+              "source": "comp-booking-service",
+              "target": "comp-booking-store",
+              "label": "读写预约数据"
+            },
+            {
+              "source": "comp-deploy-runtime",
+              "target": "comp-booking-service",
+              "label": "承载部署运行"
+            }
+          ],
+          "groups": [
+            {
+              "id": "grp-frontend",
+              "label": "前端入口（顾客页与店员控制台）",
+              "description": "移动优先的顾客预约页与店员运营控制台，均只调用本机预约服务。",
+              "kind": "client",
+              "member_node_ids": [
+                "comp-customer-web",
+                "comp-staff-console"
+              ]
+            },
+            {
+              "id": "grp-service",
+              "label": "预约领域服务",
+              "description": "统一承载可用时段计算、写入校验与冲突判定，是两条前端路径的共同后端。",
+              "kind": "server",
+              "member_node_ids": [
+                "comp-booking-service"
+              ]
+            },
+            {
+              "id": "grp-data",
+              "label": "预约数据存储",
+              "description": "技师、服务项目、预约与技师时段占用数据，提供事务与排他约束。",
+              "kind": "data",
+              "member_node_ids": [
+                "comp-booking-store"
+              ]
+            },
+            {
+              "id": "grp-runtime",
+              "label": "单机部署运行环境",
+              "description": "小服务器上的进程托管、HTTPS 终止与数据文件备份/恢复。",
+              "kind": "shared",
+              "member_node_ids": [
+                "comp-deploy-runtime"
+              ]
+            }
+          ],
+          "milestone_ids": [
+            "slice-1-foundation",
+            "slice-2-customer-booking",
+            "slice-3-staff-console",
+            "slice-4-conflict-guarantee"
+          ],
+          "attachment_ids": []
+        },
+        "research_ids": [],
+        "retirements": [],
+        "number": 2,
+        "created_at": "2026-10-05T12:19:55.039946+00:00"
+      }
+    ],
+    "plan_contract": {
+      "requirements": [
+        {
+          "id": "req-customer-mobile-booking",
+          "quote": "顾客可以在手机网页上选服务和时间、留下联系方式",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-staff-manage-appointments",
+          "quote": "店员能查看和调整预约",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "outcome",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-no-double-booking",
+          "quote": "不能把同一位技师同时排给两单",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "constraint",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-six-techs-scale",
+          "quote": "只有 6 位技师的小型自行车维修店",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "constraint",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-daily-40-orders",
+          "quote": "现在每天大约 40 单",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "constraint",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-single-dev-small-server",
+          "quote": "只有我一个开发者，想用一个小服务器部署",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "constraint",
+          "active": true,
+          "retired_by": null
+        },
+        {
+          "id": "req-no-online-payment",
+          "quote": "暂时不收线上付款",
+          "source_id": "1f146b2e8341475d",
+          "origin": "user",
+          "kind": "exclusion",
+          "active": true,
+          "retired_by": null
+        }
+      ],
+      "bindings": [
+        {
+          "behavior_key": "contract-foundation",
+          "behavior_revision_id": "6fe528d1f3734e10",
+          "requirement_ids": [
+            "req-single-dev-small-server",
+            "req-six-techs-scale",
+            "req-daily-40-orders"
+          ],
+          "component_ids": [
+            "comp-deploy-runtime",
+            "comp-booking-store"
+          ],
+          "mechanism": "单机部署：一个应用进程（静态顾客页 + 店员页 + 预约 API）与一个单文件关系型数据库（SQLite）在同一主机上，HTTPS 由同机反向代理终止。时间模型以原子时段为最小单位：全站常量 slot_minutes（计划假设默认 30 分钟，部署时固定一次）把营业日切成连续原子时段（如 09:00–18:00 共 18 个）；services 表保存每个服务项目的 duration_slots（该服务连续占用的原子时段数）。appointments 保存 customer_name、phone、service_id、start_slot、由 start_slot 与 duration_slots 推出的占用时段集合、服务端选定的 technician_id 与状态（有效/取消）。technician_slot_holds 每个被占用的原子时段一行 (technician_id, slot)，并对 (technician_id, slot) 建唯一索引，使同一技师的同一原子时段最多一行；写入路径在事务内为该预约覆盖的每个原子时段各插一行。迁移脚本创建 technicians（预置 6 行）、services、appointments、technician_slot_holds 与该唯一索引，应用启动时幂等执行。验收步骤：在目标小服务器上执行部署与迁移命令两次，确认表结构、唯一索引与 6 位技师数据不重复；断言时长换算：一个 60 分钟服务在 slot_minutes=30 下占用 2 个原子时段并写 2 行占位；脚本化生成 40 条当日预约写入并以查询读取当日列表，确认全部成功返回；停止并重启进程后再次查询，数据仍在。",
+          "requires_behavior_keys": [],
+          "provides": [],
+          "steps": null
+        },
+        {
+          "behavior_key": "contract-customer-booking",
+          "behavior_revision_id": "49873d80e6ca4888",
+          "requirement_ids": [
+            "req-customer-mobile-booking",
+            "req-no-online-payment"
+          ],
+          "component_ids": [
+            "comp-customer-web",
+            "comp-booking-service",
+            "comp-booking-store"
+          ],
+          "mechanism": "顾客页为移动优先的响应式页面，只呈现服务项目、日期与可用起始时间、姓名、电话与邮箱；顾客不选技师（req-customer-mobile-booking 原文只含服务、时间、联系方式），技师由服务端在该时段指派。预约请求载荷固定为 {service_id, start_slot, customer_name, phone, email}，不含 technician_id，也不含金额或支付渠道字段；邮箱必填并做格式校验，供后续提醒使用。可用时段计算：对给定服务与日期，逐原子时段判断是否存在至少一位技师在其 duration_slots 覆盖的全部原子时段上都没有有效 technician_slot_holds 行；只要有这样一位技师，该起始时段即为可用。提交时服务端在同一事务内重新计算该时段的空闲合格技师集合，按确定性规则（technician_id 升序取第一位）指派一位，写入 appointments（含该 technician_id）并为其覆盖的每个原子时段写占位行；集合为空（被并发抢占）返回冲突错误且不写任何行；姓名、电话或邮箱缺失、服务或时段不合法则返回可读错误且不写库。候补登记路径：当某服务与起始时段不存在任何合格空闲技师时，顾客页在该时段显示候补入口，POST /waitlist 请求体为 {service_id, start_slot, customer_name, email}，写入 waitlist_entries（状态 active、含登记时间），不写任何 technician_slot_holds 行，因此既不占用技师时段也不影响可用时段计算结果；返回候补登记编号；姓名或邮箱缺失返回可读错误且不写库；同一邮箱对同一 (service_id, start_slot) 的重复登记由库层唯一约束拒绝并返回已有登记编号，即同一候补请求重复执行不产生第二条候补记录（候补转正与通知投递的幂等由后续通知契约承担）。验收步骤：手机视口完成一次预约，断言返回预约编号与非空 technician_id，且回读到的联系方式包含所填邮箱；断言缺邮箱的提交被拒且不写库；构造该时段无任何空闲技师的场景，断言该时段仍可被选择并出现候补入口，提交候补后 waitlist_entries 新增一行、technician_slot_holds 行数不变；构造同一时段另有一位合格技师空闲的场景，断言两笔连续提交都成功且分别指派到不同技师；检查提交表单与请求载荷字段集合，断言无技师字段与支付相关字段。",
+          "requires_behavior_keys": [
+            "contract-foundation"
+          ],
+          "provides": [],
+          "steps": null
+        },
+        {
+          "behavior_key": "contract-staff-console",
+          "behavior_revision_id": "0e504c09ee764b15",
+          "requirement_ids": [
+            "req-staff-manage-appointments"
+          ],
+          "component_ids": [
+            "comp-staff-console",
+            "comp-booking-service",
+            "comp-booking-store"
+          ],
+          "mechanism": "店员端与顾客页为独立路由，访问前需通过凭据校验（计划假设：先使用单一共享店员账号，是否需要按技师区分账号待澄清）。列表通过 GET /appointments?date= 发起日期范围查询，详情含顾客联系方式（姓名、电话、邮箱）。调整与取消复用与顾客提交完全相同的占用语义：时间窗口不是整块键，而是展开为原子时段——服务时长按 slot_minutes 折成 L 个连续原子时段（沿用 contract-foundation 的 slot_minutes 与 services.duration_slots），一次预约占用 start_slot 起的 L 个原子时段。调整时间/技师走 PATCH /appointments/{id}，在同一事务内先删除该预约原有的全部 technician_slot_holds 行（释放旧原子时段），再按新的 (technician_id, start_slot) 展开 L 个原子时段并逐行插入新的占位行；若目标技师的任一原子时段已有有效占位（含只有一个原子时段的部分重叠），库层 (technician_id, slot) 唯一索引使该行插入失败，整笔事务回滚并返回冲突错误，原预约与其原占位行均保持不变，应用层的先查后写不作为最终防线。取消是状态变更：在同一事务内把该预约置为已取消、删除其全部占位行（使这些原子时段重新可用），并为该时段最早的 active 候补登记写入一行待发送候补通知（幂等键 = 预约 ID + 候补登记 ID + 通知类型，库层唯一约束）；事务提交后由独立派发步骤调用邮件服务投递，取消提交的响应只依赖本地事务、不等待邮件服务，因此邮件服务超时或发送失败既不回滚取消、也不丢失预约与候补数据，重试投递命中幂等键不会重复发信。顾客端可用时段计算读取同一批 technician_slot_holds 行，因此会反映店员的调整与取消。验收步骤：创建一条预约后以店员身份按日期查询，断言可见技师、服务、时间与联系方式（含邮箱）；将其时间改到空闲时段后重新查询断言新值生效、且旧原子时段占位行已释放（可被再次预约）；把某预约调整到目标技师已占用的时段（含部分重叠，例如技师 A 已有 09:00–10:00 而新单为 09:30–10:30）断言被库层拒绝、返回明确冲突错误且原记录与原占位未变；取消一单后断言其覆盖的全部原子时段在顾客端重新可用、且存在一条待发送候补通知记录；在邮件服务不可用/超时的情况下重复取消，断言取消成功、预约与候补数据完整、待发送通知不重复新增。",
+          "requires_behavior_keys": [],
+          "provides": [],
+          "steps": null
+        },
+        {
+          "behavior_key": "contract-no-double-booking",
+          "behavior_revision_id": "2a0d8beccf994be0",
+          "requirement_ids": [
+            "req-no-double-booking"
+          ],
+          "component_ids": [
+            "comp-booking-service",
+            "comp-booking-store"
+          ],
+          "mechanism": "时间窗口不再是不可比对的整块键，而是展开到原子时段：服务时长按 slot_minutes 折成 L 个连续原子时段，一次预约占用 start_slot 起的 L 个原子时段。顾客提交与店员调整共用同一个写入事务：事务内先检查目标技师这些原子时段上没有有效占位，再为每个原子时段各插入一行 technician_slot_holds；库层 (technician_id, slot) 唯一索引是最终防线，任一行被拒绝（包括仅有一个原子时段的部分重叠）即整笔事务回滚并返回冲突错误，不依赖先查后写；取消预约在同一事务内删除其占位行，使这些原子时段重新可用。验收步骤：对同一技师同一时段并行发起两个顾客提交，断言恰好一个成功、一个返回冲突响应；查询该技师该时段断言只有一条有效预约；构造部分重叠用例（技师 A 已有 09:00–10:00，即 09:00、09:30 两个原子时段，新单为 09:30–10:30）断言写入被库层拒绝且 A 的有效占位仍为原两行；以店员身份把另一技师的预约调整到 A 的 09:30–10:30 断言同样被拒绝；断言相邻但不重叠的 10:00–10:30 与 10:30–11:00 可分别成功；取消其中一单后断言对应原子时段可被再次预约。",
+          "requires_behavior_keys": [
+            "contract-foundation"
+          ],
+          "provides": [],
+          "steps": null
+        }
+      ]
+    }
+  }
+}
