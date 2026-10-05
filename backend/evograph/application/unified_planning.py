@@ -29,6 +29,7 @@ from .plan_harness import (
     validate_review_sources,
 )
 from .plan_ir import DELTA_TOOL
+from .plan_repair_context import REPAIR_INSTRUCTIONS, auto_repair_context, build_repair_agenda
 from .plan_review import (
     CHECKER_VERSION,
     REVIEW_PACKET_INSTRUCTIONS,
@@ -460,10 +461,14 @@ class UnifiedPlanningService:
                 stage.record = self.store.save(stage.record)
                 return route
 
+            repair_agenda = None
+
             def router_context():
-                return {**initial_unit_context(stage, include_prior_pending=True),
-                        "schedule_admission_findings": stage.record.get("schedule_admission_findings", []),
-                        "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
+                return auto_repair_context(
+                    {**initial_unit_context(stage, include_prior_pending=True),
+                     "schedule_admission_findings": stage.record.get("schedule_admission_findings", []),
+                     "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)},
+                    repair_agenda)
 
             def next_segment_context(project, completed_round, tool_results):
                 remaining = metrics["budget"]["max_calls"] - metrics["provider_calls"]
@@ -494,7 +499,8 @@ class UnifiedPlanningService:
                 })
                 if scheduled:
                     prepare_unit_request(stage)
-                data = current_unit_context(stage) if scheduled else router_context()
+                data = (auto_repair_context(current_unit_context(stage), repair_agenda)
+                        if scheduled else router_context())
                 if scheduled and data.get("current_unit") is None:
                     stage.record["generation_pause_reason"] = "scheduled_units_held"
                     stage.record["report"]["findings"].append({"code": "work_units_held",
@@ -752,7 +758,9 @@ class UnifiedPlanningService:
                     # stopped small repairs with runnable units and unused budget.
                     facade.agent.max_rounds = metrics["budget"]["max_calls"] - metrics["provider_calls"] - 1
                     facade.agent.max_calls = 8
-                    facade.agent.extra_context = "\nRepair this candidate once, preserving exact user intent. Findings (data):\n" + json.dumps(stage.record["report"], ensure_ascii=False)
+                    repair_agenda = build_repair_agenda(run, snapshot)
+                    facade.agent.initial_context = lambda project: router_context()
+                    facade.agent.extra_context = REPAIR_INSTRUCTIONS
                     stage.record["status"] = "generating"
                     stage.record = self.store.save(stage.record)
                     yield self.candidate_event(stage, turn_id, "正在修正候选中的不一致")
