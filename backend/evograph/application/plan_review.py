@@ -6,11 +6,12 @@ import re
 from collections import Counter
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..domain.dependencies import ancestor_sets
 from ..domain.models import Project
 from ..domain.plan_contracts import (
+    SemanticCheck,
     SemanticReview,
     active_behaviors,
     candidate_hash,
@@ -26,8 +27,8 @@ from ..domain.typed_capabilities import (
 )
 from .plan_patch import contract_changes
 
-CHECKER_VERSION = "unified-contract-challenge-v11"
-BATCH_VERSION = "semantic-batch/v1"
+CHECKER_VERSION = "unified-contract-challenge-v12"
+BATCH_VERSION = "semantic-batch/v2"
 _ALIAS_KEY = "$packet_ref"
 _RECORD_LISTS = (
     ("milestones",), ("behaviors",), ("source_milestones",), ("research",),
@@ -80,6 +81,13 @@ _SNAPSHOT_FIELDS = {
 class BatchModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    @field_validator("*", mode="after")
+    @classmethod
+    def nonblank_text(cls, value):
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("评审字段不能只有空白")
+        return value
+
 
 class BatchStatuses(BatchModel):
     supported: list[str] = Field(max_length=300)
@@ -87,12 +95,38 @@ class BatchStatuses(BatchModel):
     unknown: list[str] = Field(max_length=300)
 
 
+class MaterialityEvidence(BatchModel):
+    """Bounded provenance and a model's causal claim, never an entailment proof."""
+    obligation_ref: str = Field(min_length=1, max_length=240)
+    obligation_excerpt: str = Field(min_length=1, max_length=320)
+    affected_owner_ids: list[str] = Field(max_length=64)
+    gap_kind: Literal["explicit_conflict", "unresolved_semantics", "unavailable_prerequisite"]
+    boundary_refs: list[str] = Field(min_length=1, max_length=8)
+    necessary_plan_change: str = Field(min_length=1, max_length=320)
+    # reason/counterexample below explain why ordinary owned implementation
+    # cannot fulfill the unchanged plan. Do not duplicate that prose here.
+    consumer_owner_id: str | None = Field(default=None, max_length=120)
+    provider_ref: str | None = Field(default=None, max_length=240)
+
+
 class BatchIssue(BatchModel):
     id: str = Field(min_length=1, max_length=40)
     subjects: list[str] = Field(min_length=1, max_length=300)
+    materiality: MaterialityEvidence
     verdict: Literal["contradicted", "unknown"]
     reason: str = Field(min_length=1, max_length=240)
     counterexample: str = Field(min_length=1, max_length=320)
+    basis: Literal["model_inference", "source_statement", "existing_execution_record"] = "model_inference"
+    execution_evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_refs: list[str] = Field(min_length=1, max_length=8)
+
+
+class BatchObservation(BatchModel):
+    """Advisory audit data; cannot cover an unknown/contradicted subject."""
+    id: str = Field(min_length=1, max_length=40)
+    subjects: list[str] = Field(min_length=1, max_length=300)
+    kind: Literal["editorial", "implementation_latitude"]
+    reason: str = Field(min_length=1, max_length=320)
     basis: Literal["model_inference", "source_statement", "existing_execution_record"] = "model_inference"
     execution_evidence_ids: list[str] = Field(default_factory=list, max_length=100)
     evidence_refs: list[str] = Field(min_length=1, max_length=8)
@@ -104,6 +138,7 @@ class BatchSemanticReview(BatchModel):
     summary: str = Field(min_length=1, max_length=500)
     statuses: BatchStatuses
     issues: list[BatchIssue] = Field(max_length=300)
+    observations: list[BatchObservation] = Field(max_length=100)
 
 
 def _pointer_tokens(pointer):
@@ -639,6 +674,89 @@ def batch_review_packet(before, candidate, record):
     return packet
 
 
+def _checked_refs(packet, pointers, catalog, *, descendants=False):
+    if len(pointers) != len(set(pointers)):
+        raise ValueError("批量评审依据重复")
+    for pointer in pointers:
+        if len(pointer) > 240 or not any(
+                pointer == ref or (descendants and pointer.startswith(ref + "/"))
+                for ref in catalog):
+            raise ValueError("批量评审依据必须引用目录中的具体包内记录或允许的字段")
+        resolve_packet_pointer(packet, pointer)
+
+
+def _referenced_owner(packet, pointer):
+    """Resolve identity only; a reference does not prove the claimed capability."""
+    tokens = _pointer_tokens(pointer)
+    for path, field in ((("candidate", "milestones"), "id"),
+                        (("candidate", "source_milestones"), "id"),
+                        (("candidate", "behaviors"), "owner")):
+        if tokens[:len(path)] == path and len(tokens) > len(path):
+            return resolve_packet_pointer(packet, "/" + "/".join(tokens[:len(path) + 1]))[field]
+    if tokens[:3] == ("candidate", "plan_contract", "bindings") and len(tokens) >= 4:
+        binding = resolve_packet_pointer(packet, "/" + "/".join(tokens[:4]))
+        for behavior in resolve_packet_pointer(packet, "/candidate/behaviors"):
+            if (behavior["id"] == binding["behavior_revision_id"]
+                    and behavior["behavior_key"] == binding["behavior_key"]):
+                return behavior["owner"]
+    return None
+
+
+def _validate_materiality(candidate, packet, issue, catalog):
+    evidence = issue.materiality
+    _checked_refs(packet, [evidence.obligation_ref], catalog, descendants=True)
+    _checked_refs(packet, evidence.boundary_refs, catalog, descendants=True)
+    # An obligation must cite literal source/contract text, not an ID, status,
+    # whole candidate copy or reviewer-authored summary. Entailment stays human/model work.
+    if not re.fullmatch(
+            r"/current_input|/candidate/(?:target/statement|target_draft|"
+            r"behaviors/[0-9]+/statement|milestones/[0-9]+/(?:intent|scope/[0-9]+)|"
+            r"source_milestones/[0-9]+/source_behaviors/[0-9]+/statement|"
+            r"plan_contract/(?:sources/[0-9]+/(?:text|reference_context/(?:references|attachments)/"
+            r".+/(?:text|excerpt|content)|evidence/[0-9]+/result/(?:text|excerpt|content))|"
+            r"requirements/[0-9]+/quote|process_constraints/[0-9]+/quote))|"
+            r"/reference_context/(?:references|attachments)/.+/(?:text|excerpt|content)",
+            evidence.obligation_ref):
+        raise ValueError("实质问题必须引用准确的来源或契约义务文本字段")
+    obligation = resolve_packet_pointer(packet, evidence.obligation_ref)
+    if not isinstance(obligation, str) or evidence.obligation_excerpt not in obligation:
+        raise ValueError("实质问题的义务摘录必须逐字存在于引用文本")
+    requirement = re.fullmatch(r"/candidate/plan_contract/requirements/([0-9]+)/quote",
+                               evidence.obligation_ref)
+    if requirement:
+        row = candidate.plan_contract.requirements[int(requirement[1])]
+        if not row.active and "retirement:" + row.id not in issue.subjects:
+            raise ValueError("已撤销义务只能用于对应撤销检查")
+    owners = evidence.affected_owner_ids
+    owner_ids = {m.id for m in [*candidate.source_milestones, *candidate.milestones]}
+    if len(owners) != len(set(owners)) or set(owners) - owner_ids:
+        raise ValueError("实质问题的受影响归属必须是唯一的候选交付或源码能力 ID")
+    expected = {subject.split(":", 1)[1] for subject in issue.subjects
+                if subject.startswith("slice_activation:")}
+    obligation_owner = _referenced_owner(packet, evidence.obligation_ref)
+    if obligation_owner:
+        expected.add(obligation_owner)
+    if not expected <= set(owners):
+        raise ValueError("实质问题的受影响归属未覆盖所引义务或交付检查")
+    if evidence.gap_kind == "explicit_conflict" and issue.verdict != "contradicted":
+        raise ValueError("明确冲突必须使用 contradicted")
+    if evidence.gap_kind == "unresolved_semantics" and issue.verdict != "unknown":
+        raise ValueError("未决语义必须使用 unknown")
+    if evidence.gap_kind == "unavailable_prerequisite":
+        consumer, provider_ref = evidence.consumer_owner_id, evidence.provider_ref
+        if consumer not in owners or not provider_ref or provider_ref not in evidence.boundary_refs:
+            raise ValueError("不可用前置必须指明受影响消费者及边界中的既有提供者引用")
+        provider = _referenced_owner(packet, provider_ref)
+        if provider is None:
+            raise ValueError("未命名既有提供者应作为 unresolved_semantics，不能虚构归属")
+        graph = {m.id: list(m.dependencies)
+                 for m in [*candidate.source_milestones, *candidate.milestones]}
+        if provider in {consumer, *ancestor_sets(graph)[consumer]}:
+            raise ValueError("自身或声明祖先已可用，不能声明为不可用前置")
+    elif evidence.consumer_owner_id is not None or evidence.provider_ref is not None:
+        raise ValueError("只有不可用前置问题可声明消费者和提供者引用")
+
+
 def normalize_batch_review(candidate, packet, batch):
     batch = BatchSemanticReview.model_validate(batch.model_dump())
     if batch.candidate_hash != candidate_hash(candidate) or batch.review_scope_hash != packet["review_scope_hash"]:
@@ -655,19 +773,32 @@ def normalize_batch_review(candidate, packet, batch):
     issues, ids = {}, set()
     catalog = set(_expanded_evidence_catalog(packet))
     for issue in batch.issues:
-        if issue.id in ids or len(issue.evidence_refs) != len(set(issue.evidence_refs)):
+        if issue.id in ids:
             raise ValueError("批量评审的问题身份或依据重复")
         ids.add(issue.id)
-        for pointer in issue.evidence_refs:
-            if pointer not in catalog:
-                raise ValueError("批量评审依据必须引用目录中的具体包内记录")
-            resolve_packet_pointer(packet, pointer)
+        _checked_refs(packet, issue.evidence_refs, catalog)
+        _validate_materiality(candidate, packet, issue, catalog)
         for subject in issue.subjects:
             if subject in issues or statuses.get(subject) != issue.verdict:
                 raise ValueError("批量评审问题覆盖重复或与逐项状态不一致")
             issues[subject] = issue
     if set(issues) != {subject for subject, verdict in statuses.items() if verdict != "supported"}:
         raise ValueError("批量评审的问题必须精确覆盖每个未通过项")
+    eligible_ids = {entry["id"] for entry in eligible_execution_evidence(candidate)}
+    for observation in batch.observations:
+        if observation.id in ids or len(observation.subjects) != len(set(observation.subjects)):
+            raise ValueError("批量评审观察身份或检查项重复")
+        ids.add(observation.id)
+        if set(observation.subjects) - statuses.keys():
+            raise ValueError("批量评审观察引用了未知检查项")
+        _checked_refs(packet, observation.evidence_refs, catalog, descendants=True)
+        # Reuse the honest execution-basis validator without adding observations
+        # to the normalized verdict/coverage channel.
+        SemanticCheck(subject=observation.subjects[0], verdict="supported",
+                      reason=observation.reason, counterexample=observation.reason,
+                      basis=observation.basis, execution_evidence_ids=observation.execution_evidence_ids)
+        if set(observation.execution_evidence_ids) - eligible_ids:
+            raise ValueError("观察的执行依据不在当前有效验收记录中")
     checks = []
     for subject in required:
         issue = issues.get(subject)
@@ -691,7 +822,9 @@ def normalize_batch_review(candidate, packet, batch):
 
 def batch_review_certificate(raw, batch):
     return {"schema_version": BATCH_VERSION, "raw_arguments": raw, "batch": batch.model_dump(),
-            "normalization": "Supported-row reason/counterexample are server-authored disclosure placeholders."}
+            "normalization": "Supported-row reason/counterexample are server-authored disclosure placeholders. "
+                             "Materiality evidence and advisory observations remain in the exact batch audit; "
+                             "the compatible SemanticReview projection contains verdict checks only."}
 
 
 def validate_batch_certificate(before, candidate, record):

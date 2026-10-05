@@ -373,6 +373,15 @@ export interface PlanSemanticIssue {
   reason: string;
   counterexample: string;
 }
+export interface PlanSemanticObservation {
+  id: string;
+  subjects: string[];
+  kind: 'editorial' | 'implementation_latitude';
+  reason: string;
+  basis: 'model_inference' | 'source_statement' | 'existing_execution_record';
+  execution_evidence_ids: string[];
+  evidence_refs: string[];
+}
 export interface PlanCandidate {
   id: string;
   generation_progress?: {
@@ -406,7 +415,11 @@ export interface PlanCandidate {
   } | null;
   report: {
     findings: { code: string; subject: string; message: string; severity?: 'error' | 'review' }[];
-    semantic_batch?: { candidate_hash: string; issues: PlanSemanticIssue[] };
+    semantic_batch?: {
+      candidate_hash: string;
+      issues: PlanSemanticIssue[];
+      observations?: PlanSemanticObservation[];
+    };
     semantic?: {
       candidate_hash?: string;
       checks: {

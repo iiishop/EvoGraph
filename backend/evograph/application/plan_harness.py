@@ -353,7 +353,7 @@ BUILTIN_REGISTRY = (
     BuiltinPlugin(PluginManifest(id="typed_capability_flow", version="3", kind="deterministic",
                                 prerequisites=("graph_identity", "contract_source_history"),
                                 scope="declared_typed_acceptance_and_runtime_consumption"), _typed_capability_flow),
-    BuiltinPlugin(PluginManifest(id="semantic_review", version="1", kind="model_opinion",
+    BuiltinPlugin(PluginManifest(id="semantic_review", version="2", kind="model_opinion",
                                 prerequisites=CURRENT_POLICY.deterministic_required,
                                 scope="source_plan_semantic_opinion")),
 )
@@ -506,6 +506,10 @@ def _semantic_result(snapshot, review, certificate):
                          check.reason + "；反例/边界：" + check.counterexample,
                          basis=check.basis, refs=pointers.get(check.subject, ()))
                 for check in review.checks if check.verdict != "supported"]
+    findings.extend(_finding("semantic_observation_" + observation.kind, subject,
+                             f"[{observation.id}] {observation.reason}", severity="review",
+                             basis=observation.basis, refs=observation.evidence_refs)
+                    for observation in batch.observations for subject in observation.subjects)
     verdict = ("block" if any(c.verdict == "contradicted" for c in review.checks) else "unknown"
                if any(c.verdict == "unknown" for c in review.checks) else "pass")
     return (_result(snapshot, "semantic_review", review_subjects(candidate), findings, verdict=verdict),

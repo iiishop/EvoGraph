@@ -45,6 +45,32 @@ Change the code afterwards and that evidence goes stale. The artifact that passe
 | Evidence | The result of a local command, pinned to a milestone, the milestone's behavior revisions, and one baseline |
 | Current evidence | Evidence whose baseline id and fingerprint both match the latest baseline and whose result is PASS. Everything else is stale |
 
+## Planning-review materiality
+
+The current semantic batch protocol (`semantic-batch/v2`, checker v12, semantic plugin v2,
+harness policy v6) separates material planning defects from nonblocking editorial or
+implementation-latitude observations. Each unknown or contradicted subject still needs an
+exactly covering material issue: a literal obligation excerpt and pointer, affected owner IDs,
+boundary references, gap kind, and necessary plan change. Its reason/counterexample explains
+why ordinary implementation cannot fulfill the unchanged plan. An owner can implement its own
+assigned work in one coding session; missing helper names or endpoint inventories alone do not
+prove a defect. Real capability, security, commit-boundary and consequential semantic gaps remain held.
+
+Mechanical checks verify exact pointers, literal quotation fidelity, declared owner identities,
+subject coverage and a named unavailable provider's exclusion from the consumer's own/ancestor
+closure (including source milestones). They do **not** establish semantic relevance, entailment,
+truth of the proposed counterexample, or correctness of the model's materiality judgment. A missing
+provider can be an unresolved semantic issue without inventing an owner. No keyword rewrites or
+automatic downgrading of saved unknown findings are performed.
+
+Observations remain in the exact raw certificate, full batch audit and review-details UI, with
+`review` severity; only material blockers become semantic repair tasks. Malformed review output
+is a protocol failure requiring controlled retry, not a diagnosed plan defect. Publication replays
+the exact raw certificate and normalized verdict projection against current candidate/scope hashes,
+plugin versions and policy. Historical plans, opinions and receipts remain readable; old v1
+certificates cannot authorize current publication. A plan can pass while implementation remains
+explicitly `not_run`. Offline tests check these admission guarantees, not real model-review quality.
+
 ## See what changed in a planning turn
 
 Describe a new goal, constraint or change in the shared composer. The agent determines which milestones, dependencies and architecture need to evolve. Optional `#` references identify planned/source milestones or architecture components; `@` references identify saved materials or safe files in the connected repository. Selecting a reference creates a typed token bound to its project and stable ID. Plain `#`/`@` text stays ordinary text, and references provide context rather than limiting the agent's editing scope.

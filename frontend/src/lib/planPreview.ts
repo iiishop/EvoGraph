@@ -228,10 +228,16 @@ export function planReviewDisclosure(candidate?: PlanCandidate | null, canonical
   const notRun =
     receipt?.implementation.scope === 'current_planning_turn' &&
     receipt.implementation.status === 'not_run';
+  const batch = candidate?.report?.semantic_batch;
+  const observations =
+    matchesView && application !== 'noop' && batch?.candidate_hash === candidate?.candidate_hash
+      ? (batch?.observations ?? [])
+      : [];
   return {
     label: harness ? (previousPolicy ? '历史检查记录 · 策略已更新' : '程序检查 · 模型意见') : label,
     harness,
     history,
+    observations,
     structural,
     semantic,
     legacyNotice,

@@ -233,6 +233,24 @@ onBeforeUnmount(() => {
         <p v-if="evidence.harness" class="plan-review-policy">
           {{ evidence.harness.decisionLabel }}
         </p>
+        <details v-if="evidence.observations.length" class="plan-review-history">
+          <summary>非阻断观察 · {{ evidence.observations.length }} 项</summary>
+          <p>这些意见供实现或文字整理参考，不覆盖未决项，也不代表实现已验证。</p>
+          <ul>
+            <li v-for="observation in evidence.observations" :key="observation.id">
+              <strong>
+                {{ observation.id }} ·
+                {{ observation.kind === 'editorial' ? '文字整理' : '实现余地' }}
+              </strong>
+              <p>{{ observation.reason }}</p>
+              <p>{{ observation.subjects.join(' · ') }}</p>
+              <p>依据：{{ observation.basis }} · {{ observation.evidence_refs.join(' · ') }}</p>
+              <p v-if="observation.execution_evidence_ids.length">
+                既有执行记录：{{ observation.execution_evidence_ids.join(' · ') }}
+              </p>
+            </li>
+          </ul>
+        </details>
         <p v-if="evidence.legacyNotice && !evidence.history" class="plan-review-legacy">
           {{ evidence.legacyNotice }}
         </p>

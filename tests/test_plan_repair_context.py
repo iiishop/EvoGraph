@@ -40,7 +40,12 @@ def reviewed_run(snapshot):
             "supported": packet["required_subjects"][2:], "unknown": subjects, "contradicted": []},
         "issues": [{"id": "one-shared-boundary", "subjects": subjects, "verdict": "unknown",
                     "reason": "Exact boundary is not established", "counterexample": "A retry races with commit",
-                    "evidence_refs": ["/current_input"]}]})
+                    "materiality": {"obligation_ref": "/current_input",
+                        "obligation_excerpt": snapshot.record_data()["input"],
+                        "affected_owner_ids": [], "gap_kind": "unresolved_semantics",
+                        "boundary_refs": ["/current_input"],
+                        "necessary_plan_change": "Decide the observable retry result"},
+                    "evidence_refs": ["/current_input"]}], "observations": []})
     normalized = normalize_batch_review(snapshot.candidate_project(), packet, batch)
     certificate = batch_review_certificate(batch.model_dump_json(), batch)
     result, review_json, certificate_json = _semantic_result(snapshot, normalized, certificate)
@@ -51,7 +56,7 @@ def reviewed_run(snapshot):
         policy_version=CURRENT_POLICY.version, policy_hash=POLICY_HASH, registry_hash="fixture-registry",
         status="completed", executions=(
             execution(snapshot, "design_consistency", findings=(advisory,)),
-            PluginExecution(plugin_id="semantic_review", plugin_version="1", kind="model_opinion",
+            PluginExecution(plugin_id="semantic_review", plugin_version=result.plugin_version, kind="model_opinion",
                             status="completed", result=result, certificate_id="issue-certificate",
                             request_refs=("/metrics/calls/1",))),
         semantic_review_json=review_json, model_certificate_json=certificate_json)

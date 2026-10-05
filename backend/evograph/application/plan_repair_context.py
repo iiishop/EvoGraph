@@ -8,7 +8,12 @@ from copy import deepcopy
 
 from ..domain.plan_contracts import SemanticReview
 from ..domain.plan_harness import CURRENT_POLICY, content_hash, execution_satisfied
-from .plan_review import BatchSemanticReview, batch_review_packet, normalize_batch_review
+from .plan_review import (
+    BATCH_VERSION,
+    BatchSemanticReview,
+    batch_review_packet,
+    normalize_batch_review,
+)
 
 REPAIR_INSTRUCTIONS = """
 Repair this candidate once, preserving exact user intent. Use repair_agenda in the current state
@@ -35,7 +40,8 @@ def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
             or run.policy_hash != content_hash(policy.model_dump(mode="json"))):
         raise ValueError("Repair feedback requires the current policy and matching sealed run")
     if any(row.status in {"unavailable", "timeout", "budget_exhausted", "invalid_output",
-                          "error", "cancelled"} for row in run.executions):
+                          "error", "cancelled"} for row in run.executions
+           if row.plugin_id in policy.required):
         raise ValueError("Incomplete checks require controlled retry, not model repair")
     plugins = []
     for row in run.executions:
@@ -51,6 +57,8 @@ def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
                   "evidence_refs": list(result.evidence_refs)}
         if row.plugin_id == "semantic_review":
             certificate = json.loads(run.model_certificate_json)
+            if certificate.get("schema_version") != BATCH_VERSION:
+                raise ValueError("Repair feedback requires the current semantic certificate")
             batch = BatchSemanticReview.model_validate_json(certificate["raw_arguments"])
             if batch.model_dump() != certificate["batch"]:
                 raise ValueError("Repair feedback batch differs from its raw certificate")
@@ -60,7 +68,7 @@ def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
             if normalized != SemanticReview.model_validate_json(run.semantic_review_json):
                 raise ValueError("Repair feedback batch differs from its normalized review")
             if {subject for issue in batch.issues for subject in issue.subjects} != {
-                    finding.subject for finding in result.findings}:
+                    finding.subject for finding in result.findings if finding.severity == "error"}:
                 raise ValueError("Repair feedback does not cover the execution findings")
             plugin["review_scope_hash"] = batch.review_scope_hash
             # One exact issue preserves all its subjects; normalized findings and
