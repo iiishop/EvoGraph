@@ -57,7 +57,13 @@ const {
   recoveryError,
   attachmentTransfer,
 } = useAgentDraft(() => props.project.id);
-const failedAttempt = computed(() => failures.value[0]);
+// New submissions append their recovery snapshot. Keep the visible retry and
+// its receipt on the newest request; older snapshots remain recoverable.
+const failedAttempt = computed(() => failures.value.at(-1));
+const failedRequestSnippet = computed(() => {
+  const text = failedAttempt.value?.text.replace(/\s+/g, ' ').trim() ?? '';
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+});
 const failedCandidateReceipt = computed(() => {
   const turnId = failedAttempt.value?.turnId;
   if (!turnId) return null;
@@ -519,6 +525,8 @@ function choose(option: string) {
       <div v-if="failedAttempt" class="agent-recovery-card">
         <p v-if="recoveryError" role="status">{{ recoveryError }}</p>
         {{ recoveryNotice }}
+        <p class="agent-recovery-request">原请求：{{ failedRequestSnippet }}</p>
+        <small v-if="failedAttempt.turnId">请求轮次：{{ failedAttempt.turnId }}</small>
         <details
           v-if="
             !failureRestored ||
@@ -634,6 +642,10 @@ function choose(option: string) {
   overflow-wrap: anywhere;
   max-height: none;
   overflow: visible;
+}
+
+.agent-recovery-request {
+  overflow-wrap: anywhere;
 }
 
 /* History yields space before the composer or the graph can leave the viewport. */

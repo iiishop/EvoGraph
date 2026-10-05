@@ -1605,3 +1605,193 @@ test('retry admission starts without the previous failed turn identity', () => {
   drafts.settle(second, false);
   assert.equal(drafts.bind(() => 'P1').failures.value[0].turnId, undefined);
 });
+
+test('restored status follows the newest failure while keeping older requests recoverable', () => {
+  const drafts = createAgentDraftStore();
+  const draft = drafts.bind(() => 'A');
+  draft.content.value = 'Earlier repair request';
+  const first = drafts.start('A', { text: draft.content.value, ids: ['earlier-file'] });
+  first.turnId = 'earlier-turn';
+  drafts.settle(first, false);
+  draft.content.value = 'Continue only the remaining work';
+  const second = drafts.start('A', { text: draft.content.value, ids: ['latest-file'] });
+  second.turnId = 'latest-turn';
+  drafts.settle(second, false);
+  assert.deepEqual(
+    draft.failures.value.map((failure) => failure.id),
+    [first.id, second.id],
+  );
+  assert.equal(draft.failureRestored.value, true, 'Status belongs to the newest displayed request');
+  assert.equal(draft.restoredFailure.value.id, second.id);
+  drafts.dismissFailure('A', second.id);
+  assert.equal(
+    draft.failureRestored.value,
+    false,
+    'Older recovery must not claim the latest composer',
+  );
+  assert.equal(draft.content.value, second.text);
+  assert.equal(draft.failures.value[0].turnId, 'earlier-turn');
+});
+
+async function twoFailedRequests(h) {
+  const earlier = 'Earlier five-point repair: ' + 'Keep the established design. '.repeat(24);
+  const latest = 'Continue only the remaining work; retain the saved changes.';
+  h.env.send = async (...args) => {
+    args[6].turnId = `request-turn-${h.env.calls.length}`;
+    return false;
+  };
+  await h.input(earlier);
+  await h.attach(['earlier-file']);
+  await h.submit();
+  await tick();
+  await h.input(latest);
+  await h.attach(['latest-file']);
+  await h.submit();
+  await tick();
+  return { earlier, latest, first: h.env.submissions[0], second: h.env.submissions[1] };
+}
+
+test('normal edited Send followed by Retry sends the newest failure, then names any older fallback', async () => {
+  const h = await harness();
+  try {
+    const { earlier, latest } = await twoFailedRequests(h);
+    const card = () => all(h.root).find((node) => node.class === 'agent-recovery-card');
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value.length, 2);
+    assert.match(textOf(card()), /内容已放回输入框/);
+    assert.match(textOf(card()), /原请求：Continue only the remaining work/);
+    assert.match(textOf(card()), /请求轮次：request-turn-2/);
+    assert.doesNotMatch(textOf(card()), /Earlier five-point repair/);
+    h.env.send = async () => true;
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls.length, 3);
+    assert.equal(h.env.calls[2][1], latest);
+    assert.deepEqual(h.env.calls[2][3], ['latest-file']);
+    assert.deepEqual(h.env.calls[2][5], h.env.calls[1][5]);
+    assert.equal(h.find('textarea').value, '');
+    assert.match(textOf(card()), /原请求：Earlier five-point repair/);
+    assert.match(textOf(card()), /请求轮次：request-turn-1/);
+    assert.match(textOf(card()), /当前草稿未改动/);
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls[3][1], earlier.trim());
+    assert.deepEqual(h.env.calls[3][3], ['earlier-file']);
+    assert.equal(h.button('重试这条请求'), undefined);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('closing the newest hint exposes the named older request without changing the restored composer', async () => {
+  const h = await harness();
+  try {
+    const { latest, second } = await twoFailedRequests(h);
+    const card = () => all(h.root).find((node) => node.class === 'agent-recovery-card');
+    h.button('关闭提示').onClick();
+    await tick();
+    assert.match(textOf(card()), /原请求：Earlier five-point repair/);
+    assert.match(textOf(card()), /请求轮次：request-turn-1/);
+    assert.equal(h.find('textarea').value, latest);
+    assert.deepEqual(h.find('attachments').selected, ['latest-file']);
+    assert.equal(h.agentDrafts.bind(() => 'A').restoredFailure.value.id, second.id);
+    h.button('丢弃这条请求').onClick();
+    await tick();
+    assert.equal(h.button('重试这条请求'), undefined);
+    h.env.send = async () => true;
+    await h.submit();
+    await tick();
+    assert.equal(
+      h.env.calls[2][1],
+      latest,
+      'Untouched Send still uses the latest composer provenance',
+    );
+    assert.deepEqual(h.env.calls[2][3], ['latest-file']);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('a successful new Send retains an older failure with explicit original request identity', async () => {
+  const h = await harness();
+  try {
+    h.env.send = async (...args) => {
+      args[6].turnId = 'older-unsuccessful-turn';
+      return false;
+    };
+    await h.input('Earlier unfinished request');
+    await h.submit();
+    await tick();
+    await h.input('A new successful request');
+    h.env.send = async () => true;
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls[1][1], 'A new successful request');
+    assert.equal(h.find('textarea').value, '');
+    const card = all(h.root).find((node) => node.class === 'agent-recovery-card');
+    assert.match(textOf(card), /原请求：Earlier unfinished request/);
+    assert.match(textOf(card), /请求轮次：older-unsuccessful-turn/);
+    assert.match(textOf(card), /当前草稿未改动/);
+    assert.doesNotMatch(textOf(card), /A new successful request/);
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls[2][1], 'Earlier unfinished request');
+  } finally {
+    h.dispose();
+  }
+});
+
+test('late older receipts and duplicate failures cannot replace the newest retry identity', async () => {
+  const h = await harness();
+  try {
+    const { latest, first, second } = await twoFailedRequests(h);
+    h.agentDrafts.confirmDelivered(first);
+    h.agentDrafts.settle(first, false);
+    await tick();
+    const draft = h.agentDrafts.bind(() => 'A');
+    assert.deepEqual(
+      draft.failures.value.map((failure) => failure.id),
+      [second.id],
+    );
+    const card = all(h.root).find((node) => node.class === 'agent-recovery-card');
+    assert.match(textOf(card), /原请求：Continue only the remaining work/);
+    assert.match(textOf(card), /请求轮次：request-turn-2/);
+    assert.equal(draft.failureRestored.value, true);
+    h.env.send = async () => true;
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls[2][1], latest);
+    assert.equal(h.button('重试这条请求'), undefined);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('unsent edits, blocked Send and duplicate completion leave failure ordering and identity unchanged', async () => {
+  const h = await harness();
+  try {
+    const { first, second } = await twoFailedRequests(h);
+    const draft = h.agentDrafts.bind(() => 'A');
+    await h.input('A third unsent request');
+    h.workspace.state.busy = true;
+    await h.submit();
+    await tick();
+    h.workspace.state.busy = false;
+    await h.input('');
+    await h.submit();
+    h.agentDrafts.settle(first, false);
+    h.agentDrafts.settle(second, false);
+    await tick();
+    assert.equal(h.env.calls.length, 2);
+    assert.deepEqual(
+      draft.failures.value.map((failure) => failure.id),
+      [first.id, second.id],
+    );
+    assert.equal(draft.failureRestored.value, false);
+    const card = all(h.root).find((node) => node.class === 'agent-recovery-card');
+    assert.match(textOf(card), /原请求：Continue only the remaining work/);
+    assert.match(textOf(card), /请求轮次：request-turn-2/);
+    assert.equal(h.find('textarea').value, '');
+  } finally {
+    h.dispose();
+  }
+});

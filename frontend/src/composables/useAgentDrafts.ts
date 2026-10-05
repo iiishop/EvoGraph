@@ -439,7 +439,7 @@ export function createAgentDraftStore() {
       restoredFailure: computed(() => entry(projectId())?.composerOrigin ?? undefined),
       failureRestored: computed(() => {
         const draft = entry(projectId());
-        return Boolean(draft && draft.failures[0]?.restoredRevision === draft.revision);
+        return Boolean(draft && draft.failures.at(-1)?.restoredRevision === draft.revision);
       }),
     }),
   };
