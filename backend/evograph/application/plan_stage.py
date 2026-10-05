@@ -87,15 +87,15 @@ class StagedDatabase:
         self.record = self.store.save(record)
 
     def start_tool_attempt(self, name, arguments):
-        from .plan_batch_policy import SAVED_UNITS_EXPERIMENT
-        if self.record.get("planning_experiment", {}).get("version") == SAVED_UNITS_EXPERIMENT:
+        from .plan_batch_policy import PINNED_CONTINUATIONS
+        if self.record.get("planning_experiment", {}).get("version") in PINNED_CONTINUATIONS:
             call = (self.metrics_ref or {}).get("provider_calls", 0)
             if (name not in {"submit_plan_delta", "ask_user"}
                     or any(attempt.get("generation_call") == call
                            for attempt in self.record.get("tool_attempts", []))):
                 if self.metrics_ref is not None:
                     self.metrics_ref["experiment_stopped"] = "experiment_request_sequence"
-                raise ValueError("saved-units permits one assigned-unit attempt per request; no router or retries")
+                raise ValueError("pinned continuation permits one assigned-unit attempt per request; no router or retries")
         if getattr(self, "segmented_planning", False) and name == "submit_plan_delta":
             self.record["validation_requested"] = False
             self.record["generation_progress"] = {**self.record.get("generation_progress", {}), "state": "staged"}

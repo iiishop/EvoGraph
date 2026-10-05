@@ -4,6 +4,7 @@ import json
 import os
 import time
 from contextlib import aclosing
+from copy import deepcopy
 
 from ..agent_tools import tools
 from ..domain.models import Project, now, uid
@@ -399,12 +400,20 @@ class UnifiedPlanningService:
                 raise ConflictError("保留的候选基于旧正式版本，未自动合并或覆盖；请先查看并放弃旧候选，再从当前方案重新生成")
             resume = previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] == before.revision
             from .plan_batch_policy import (
+                PENDING_ARCHITECTURE_EXPERIMENT,
                 REPAIR_EXPERIMENT,
                 SAVED_UNITS_EXPERIMENT,
                 select_experiment,
             )
             selected_experiment = select_experiment(experiment, before, previous, resume)
             saved_units_stage = bool(selected_experiment and selected_experiment["version"] == SAVED_UNITS_EXPERIMENT)
+            pending_architecture_stage = bool(selected_experiment and
+                selected_experiment["version"] == PENDING_ARCHITECTURE_EXPERIMENT)
+            transformed_previous, pending_admission = previous, None
+            if pending_architecture_stage:
+                from .plan_pending_continuation import admit_pending_continuation
+                transformed, pending_admission = admit_pending_continuation(experiment, before, previous, content)
+                transformed_previous = {**previous, "work_units": transformed}
             repair_agenda = (explicit_repair_agenda(before, previous)
                 if selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT else None)
             saved_units_admission = None
@@ -457,7 +466,7 @@ class UnifiedPlanningService:
             if selected_experiment:
                 record["planning_experiment"] = selected_experiment
             if resume and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
-                resumed_units = resume_unit_schedule(previous, candidate, turn_id, content)
+                resumed_units = resume_unit_schedule(transformed_previous, candidate, turn_id, content)
                 if saved_units_stage:
                     # Fail before saving a new candidate; never fall back to a
                     # router or reassess/repack the frozen three-unit schedule.
@@ -466,6 +475,14 @@ class UnifiedPlanningService:
                         raise ValueError("saved-units requires exact-input unchanged schedule continuation")
                     record["saved_units_admission"] = saved_units_admission
                     record["repair_agenda"] = repair_agenda
+                if pending_architecture_stage:
+                    if resumed_units is None:
+                        raise ValueError("pending continuation requires exact input/source continuation")
+                    record["pending_architecture_admission"] = pending_admission
+                    record["compilations"] = deepcopy(previous["compilations"])
+                    record["unit_request"] = None
+                    if schedule_findings({**record, "work_units": resumed_units}, candidate):
+                        raise ValueError("pending continuation preflight failed before candidate save")
                 if resumed_units is not None:
                     record["work_units"] = resumed_units
             record = self.store.save(record)
@@ -478,7 +495,7 @@ class UnifiedPlanningService:
             facade.agent.system_prompt = ROUTER
             facade.agent.pre_resolved = resolved
             facade.agent.finish_review = False
-            facade.agent.defer_single_tool_response = saved_units_stage
+            facade.agent.defer_single_tool_response = saved_units_stage or pending_architecture_stage
             facade.agent.finalize_after_turn = False
             facade.agent.max_rounds, facade.agent.max_calls = 4, 16
             facade.agent.initial_context = lambda p: {
@@ -511,7 +528,7 @@ class UnifiedPlanningService:
                                  "message": item["payload"].get("error", "规划调度清单无效")}
                                 for item in failed_manifests)
                 if selected_experiment and not findings and stage.record.get("work_units"):
-                    expected_units = 3 if saved_units_stage else 1
+                    expected_units = 5 if pending_architecture_stage else 3 if saved_units_stage else 1
                     if len(stage.record["work_units"]["units"]) != expected_units:
                         findings.append({"code": "experiment_requires_single_unit", "subject": "generation",
                                          "message": "有界实验只允许一个完整单元；未发送生成请求"})

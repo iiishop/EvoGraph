@@ -9,6 +9,8 @@ from .plan_budget import encoded_size
 COLD_START_EXPERIMENT = "bounded-empty-plan/v1"
 REPAIR_EXPERIMENT = "bounded-single-unit-repair/v1"
 SAVED_UNITS_EXPERIMENT = "bounded-saved-units/v1"
+PENDING_ARCHITECTURE_EXPERIMENT = "bounded-pending-architecture/v1"
+PINNED_CONTINUATIONS = {SAVED_UNITS_EXPERIMENT, PENDING_ARCHITECTURE_EXPERIMENT}
 BATCH_POLICY = {
     "version": COLD_START_EXPERIMENT,
     "bounds": {"operations": 32, "slices": 6, "contracts": 8, "field_atoms": 64,
@@ -25,13 +27,14 @@ EXPERIMENT_LIMITS = {"max_calls": 3, "max_request_bytes": 163840,
 
 
 def experiment_policy(name):
-    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT, SAVED_UNITS_EXPERIMENT}:
+    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT, *PINNED_CONTINUATIONS}:
         raise ValueError("unsupported bounded planning experiment")
     limits = deepcopy(EXPERIMENT_LIMITS)
     sequence = ["router", "generation", "semantic_review"]
-    if name == SAVED_UNITS_EXPERIMENT:
-        limits["max_calls"] = 4
-        sequence = ["generation", "generation", "generation", "semantic_review"]
+    if name in PINNED_CONTINUATIONS:
+        generations = 4 if name == PENDING_ARCHITECTURE_EXPERIMENT else 3
+        limits["max_calls"] = generations + 1
+        sequence = ["generation"] * generations + ["semantic_review"]
     return {"version": name, "limits": limits, "request_sequence": sequence}
 
 
@@ -177,6 +180,9 @@ def select_experiment(argument, project, previous, resume):
             raise ValueError("saved experimental candidate needs an explicit supported stage")
         return None
     keys = {"project_id", "version"}
+    if isinstance(argument, dict) and argument.get("version") == PENDING_ARCHITECTURE_EXPERIMENT:
+        from .plan_pending_continuation import PIN_KEYS
+        keys = PIN_KEYS
     if isinstance(argument, dict) and argument.get("version") == SAVED_UNITS_EXPERIMENT:
         keys |= {"predecessor_candidate_id", "schedule_hash"}
     if (not isinstance(argument, dict) or set(argument) != keys
@@ -186,6 +192,10 @@ def select_experiment(argument, project, previous, resume):
     if selected["version"] == COLD_START_EXPERIMENT:
         if resume or not empty_planning_base(project):
             raise ValueError("cold-start experiment requires a new strictly empty planning base")
+    elif selected["version"] == PENDING_ARCHITECTURE_EXPERIMENT:
+        if not resume:
+            raise ValueError("pending continuation requires a saved predecessor")
+        # Complete evidence validation is performed before any candidate write.
     elif selected["version"] == SAVED_UNITS_EXPERIMENT:
         from .plan_units import _hash, schedule_findings
         schedule = previous.get("work_units", {}) if previous else {}
@@ -222,7 +232,7 @@ def request_stage_rejection(metrics, tools, purpose):
         expected = {"project_id": selected["project_id"], **experiment_policy(selected["version"])}
         if selected != expected:
             return "experiment_policy_changed"
-        if selected["version"] == SAVED_UNITS_EXPERIMENT and (
+        if selected["version"] in PINNED_CONTINUATIONS and (
                 metrics.get("experiment_stopped") or any(
                     call.get("error_type") or call.get("termination_reason") != "stream_end"
                     for call in metrics.get("calls", []))):

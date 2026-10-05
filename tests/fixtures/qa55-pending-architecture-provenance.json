@@ -1,0 +1,17 @@
+{
+  "source": "QA55 stopped add-reminders candidate572e49cdf1654727, canonicalR2, 2026-10-05",
+  "immutable_code_base": "96e78479bbb8cb03ed6d8094db0748fd15544150",
+  "scope": "Exact historical input for offline continuation admission; synthetic outputs do not assess model quality. No credentials.",
+  "files": {
+    "project.json": {
+      "compressed_file": "qa55-pending-architecture-project.json.gz",
+      "bytes": 50883,
+      "sha256": "5af58ece060e18190fe107c282021b8be160584f8d5e4557a30b11d164268fbe"
+    },
+    "candidates.json": {
+      "compressed_file": "qa55-pending-architecture-candidates.json.gz",
+      "bytes": 2016500,
+      "sha256": "ba32cc036771d6561865c3dba3aacb7fc41720cc422d0b25176ec4ea732739b8"
+    }
+  }
+}

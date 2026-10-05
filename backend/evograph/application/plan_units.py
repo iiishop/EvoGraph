@@ -579,6 +579,11 @@ def schedule_findings(record, project):
         from .plan_batch_policy import batch_record_errors, batch_schedule_errors
         findings.extend({"code": "invalid_unit_schedule", "message": message, **identity}
                         for message in [*batch_schedule_errors(schedule, project), *batch_record_errors(record, project)])
+    from .plan_batch_policy import PENDING_ARCHITECTURE_EXPERIMENT
+    if record.get("planning_experiment", {}).get("version") == PENDING_ARCHITECTURE_EXPERIMENT:
+        from .plan_pending_continuation import pending_continuation_errors
+        findings.extend({"code": "invalid_unit_schedule", "message": message, **identity}
+                        for message in pending_continuation_errors(record))
     if findings:
         return findings
     units = {unit["id"]: unit for unit in schedule["units"]}
