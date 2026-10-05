@@ -1,0 +1,81 @@
+"""Exact unfinished predecessor intents for explicitly selected routing contexts.
+
+This read-only projection is not a requirement source, schedule repair or gate.
+Do not call it from ordinary generator contexts or walk older candidate ancestry.
+"""
+from collections import Counter
+from copy import deepcopy
+
+_UNIT_FIELDS = ("id", "hash", "state", "contract_count", "existing_text_bytes",
+                "estimated_text_bytes", "depends_on", "holds")
+_PROVENANCE_FIELDS = ("version", "project_id", "source_id", "origin_source_id",
+                      "expected_revision", "expected_fingerprint")
+
+
+def _current_completions(record, prior):
+    current = record.get("work_units")
+    if not isinstance(current, dict) or any((
+        current.get("project_id") != prior.get("project_id"),
+        current.get("source_id") != record.get("id"),
+        not prior.get("origin_source_id"),
+        current.get("origin_source_id") != prior.get("origin_source_id"),
+        current.get("manifest_hash") != prior.get("manifest_hash"),
+    )):
+        return set()
+    checkpoints = {(c.get("unit_id"), c.get("unit_hash"))
+                   for c in current.get("checkpoints", [])}
+    return {(u["id"], u["hash"]) for u in current.get("units", [])
+            if u.get("state") == "completed" and u["id"] in current.get("completed_ids", [])
+            and (u["id"], u["hash"]) in checkpoints}
+
+
+def prior_pending_intent_context(record, project_id):
+    """Return an enriched prior summary without mutating record or its schedules.
+
+    The caller must explicitly opt in only for routing. ``prior_work_units`` is
+    the immediate predecessor's own schedule, as supplied by the resume path.
+    A matching current checkpoint may finish a prior atom, but a different
+    manifest or lineage never silently cancels a previous model proposal.
+    """
+    prior = record.get("prior_work_units")
+    if (not isinstance(prior, dict) or prior.get("project_id") != project_id
+            or prior.get("source_id") != record.get("resumes_candidate_id")):
+        return None
+    completed = _current_completions(record, prior)
+    pending = [u for u in prior.get("units", [])
+               if u["id"] in prior.get("pending_ids", []) and u.get("state") != "completed"]
+    remaining = [u for u in pending if (u["id"], u["hash"]) not in completed]
+    if not remaining:
+        return None
+    result = {"manifest_hash": prior["manifest_hash"],
+              "completed_ids": list(prior["completed_ids"]),
+              "pending_ids": list(prior["pending_ids"]),
+              "units": [{k: deepcopy(u[k]) for k in _UNIT_FIELDS} for u in prior["units"]],
+              **{k: deepcopy(prior[k]) for k in _PROVENANCE_FIELDS}}
+    changes = {u["id"]: deepcopy(u["changes"]) for u in remaining}
+    counts = Counter(c["intent"] for rows in changes.values() for c in rows)
+    texts = list(dict.fromkeys(c["intent"] for rows in changes.values() for c in rows
+                              if counts[c["intent"]] > 1))
+    for unit in result["units"]:
+        if unit["id"] not in changes:
+            continue
+        unit["changes"] = changes[unit["id"]]
+        for change in unit["changes"]:
+            if change["intent"] in texts:
+                change["intent_ref"] = texts.index(change.pop("intent"))
+    if texts:
+        result["intent_texts"] = texts
+    finished = [u["id"] for u in pending if (u["id"], u["hash"]) in completed]
+    if finished:
+        current = record["work_units"]
+        result["completed_in_current"] = {
+            **{k: deepcopy(current[k]) for k in _PROVENANCE_FIELDS},
+            "manifest_hash": current["manifest_hash"], "unit_ids": finished,
+        }
+    result["pending_changes_note"] = (
+        "Exact unfinished model-planned changes at this prior snapshot, not binding requirements. "
+        "Reconcile with current saved facts and the latest user direction, which may supersede them. "
+        "intent_ref indexes exact text in intent_texts. Completed prior work and matching current "
+        "checkpoint completions are excluded from changes; prior counts/states remain historical."
+    )
+    return result

@@ -149,6 +149,17 @@ transitive traversal, owner text, history or inferred references. Exact text is
 never truncated; the existing whole-request budget still decides admission.
 These facts improve visibility, not proof that generated contracts are compatible.
 
+Fresh routing contexts also receive the immediate predecessor's exact unfinished
+change atoms, including stable IDs, fields, references, intent text and origin
+hashes. This read-only projection carries schedule/source provenance, excludes
+completed work (including matching current checkpoints), and uses exact references
+for repeated intent text. It is explicitly enabled only for routers, not ordinary
+generator contexts. Prior model proposals are not requirements: current facts and
+the latest user direction can supersede them. No ancestor union, forced manifest
+retention, repacking, new gate or budget increase is introduced. Empty completed
+schedules add no pending payload; full objects and historical mechanisms are not
+replayed. Existing request limits still apply without truncating these intents.
+
 During an agent turn, the existing review tool and automatic review also receive
 a read-only `change_context` comparing the turn-start and current saved milestone
 contracts. It includes eligible prerequisites across both snapshots, including

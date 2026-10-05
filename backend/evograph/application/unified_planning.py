@@ -400,7 +400,7 @@ class UnifiedPlanningService:
             facade.agent.finalize_after_turn = False
             facade.agent.max_rounds, facade.agent.max_calls = 4, 16
             facade.agent.initial_context = lambda p: {
-                **initial_unit_context(stage),
+                **initial_unit_context(stage, include_prior_pending=True),
                 "allowed_requirement_source_ids": sorted(stage.requirement_source_ids),
             }
             facade.agent.include_history = False
@@ -461,7 +461,7 @@ class UnifiedPlanningService:
                 return route
 
             def router_context():
-                return {**initial_unit_context(stage),
+                return {**initial_unit_context(stage, include_prior_pending=True),
                         "schedule_admission_findings": stage.record.get("schedule_admission_findings", []),
                         "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
 

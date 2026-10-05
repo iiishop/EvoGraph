@@ -14,6 +14,7 @@ from pydantic import Field, model_validator
 from ..agent_tools.base import ToolSpec
 from ..domain.models import Model, Project
 from ..domain.plan_contracts import active_behaviors, candidate_hash, planning_payload
+from .plan_continuation_context import prior_pending_intent_context
 from .plan_ir import PlanDelta, architecture_delta_fields, required_plan_fields
 
 MAX_UNIT_BYTES = 6144
@@ -664,10 +665,15 @@ def _schedule_view(schedule):
                       for u in schedule["units"]]}
 
 
-def initial_unit_context(db):
+def initial_unit_context(db, *, include_prior_pending=False):
     project = db.get(db.project.id)
     objects = _objects(project)
-    return _initial_unit_context(db, project, objects)
+    result = _initial_unit_context(db, project, objects)
+    if include_prior_pending:
+        prior = prior_pending_intent_context(db.record, project.id)
+        if prior is not None:
+            result["prior_work_units"] = prior
+    return result
 
 
 def carry_review_findings(previous):
