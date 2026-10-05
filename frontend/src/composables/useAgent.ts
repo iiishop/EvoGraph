@@ -1,15 +1,26 @@
 import { reactive, readonly, watch } from 'vue';
+import { command } from '../api/client';
 import { agentStream } from '../api/agentStream';
 import { bestEffortRefresh, waitForTurnResult } from '../api/turnResult';
 import { parseTurnSummary, turnSummaryStatus } from '../lib/turnSummary';
 import { useWorkspace } from './useWorkspace';
-import type { ComposerDocument, AgentEvent, Project, ReviewRecheck } from '../types';
+import type {
+  ComposerDocument,
+  AgentEvent,
+  Project,
+  ReviewRecheck,
+  PlanningJobRequest,
+  PlanningJobPins,
+  PlanningJobView,
+} from '../types';
 import { agentDrafts, type DraftAttempt } from './useAgentDrafts';
 import { useNotifications } from './useNotifications';
 import { changeSummary } from '../lib/changeSummary';
 
 const state = reactive({
   running: false,
+  planningJobId: '',
+  cancellingJobId: '',
   projectId: '',
   turnId: '',
   label: '',
@@ -83,6 +94,18 @@ function reconcileReceipts(project: Project | null) {
 function receive(event: AgentEvent) {
   const workspace = useWorkspace();
   if (event.type === 'started') state.turnId = event.turn_id ?? '';
+  if (event.type === 'planning_job_changed') {
+    // Job progress is its own domain; even a malformed frame cannot replace
+    // canonical project data. Bind it to this stream's admitted job.
+    if (
+      event.job &&
+      event.project_id === state.projectId &&
+      event.job.id === state.planningJobId &&
+      (!event.turn_id || event.turn_id === state.turnId)
+    )
+      workspace.applyPlanningJob(event.project_id, event.job);
+    return;
+  }
   if (event.type === 'candidate_changed') {
     // Even a malformed frame with an accidental top-level project must not
     // overwrite the accepted plan. Preview events have their own route.
@@ -181,11 +204,13 @@ async function send(
   submission?: DraftAttempt,
   sourceAnalysis = false,
   reviewRecheck?: ReviewRecheck,
+  planningJob?: PlanningJobRequest,
 ): Promise<boolean> {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return false;
   // Pin the candidate in this accepted workspace view before starting either transport.
   const repairFrom =
+    !planningJob &&
     !reviewRecheck &&
     !sourceAnalysis &&
     !verificationMilestone &&
@@ -215,6 +240,7 @@ async function send(
   runFailed = false;
   receivedDone = false;
   state.turnId = '';
+  state.planningJobId = planningJob?.job_id ?? '';
   state.running = true;
   state.projectId = projectId;
   state.label = '连接 Agent…';
@@ -225,7 +251,9 @@ async function send(
   controller = new AbortController();
   const receiveForRun = (event: AgentEvent) => {
     if (
-      (event.type === 'candidate_changed' || event.project) &&
+      (event.type === 'candidate_changed' ||
+        event.type === 'planning_job_changed' ||
+        event.project) &&
       (latestRun !== receipt.owner || !receipt.isCurrent())
     )
       return;
@@ -256,6 +284,7 @@ async function send(
         project_id: projectId,
         content,
         ...(reviewRecheck ? { review_recheck: reviewRecheck } : {}),
+        ...(planningJob ? { planning_job: planningJob } : {}),
         ...(repairFrom ? { repair_from: repairFrom } : {}),
         attachment_ids: attachmentIds,
         ...(composerDocument ? { composer_document: composerDocument } : {}),
@@ -310,13 +339,88 @@ async function send(
   return receipt.outcome;
 }
 
+async function continuePlanningJob(projectId: string, jobId: string, pins: PlanningJobPins) {
+  const workspace = useWorkspace();
+  const project = workspace.state.project;
+  const job = project?.planning_job;
+  if (state.running || workspace.state.busy) return false;
+  if (
+    project?.id !== projectId ||
+    job?.id !== jobId ||
+    !job.can_continue ||
+    job.authorization_needed ||
+    job.status !== 'paused' ||
+    !job.continue_pins ||
+    JSON.stringify(job.continue_pins) !== JSON.stringify(pins)
+  ) {
+    workspace.setError('作业状态已变化，请刷新后重新确认可继续的阶段');
+    return false;
+  }
+  // Continue consumes the saved source and exact server pins, never a draft,
+  // previous user message, or a new authorization budget.
+  return send(projectId, '', undefined, [], undefined, undefined, undefined, false, undefined, {
+    action: 'continue',
+    job_id: jobId,
+    pins: JSON.parse(JSON.stringify(pins)),
+  });
+}
+
+async function cancelPlanningJob(projectId: string, jobId: string) {
+  const workspace = useWorkspace();
+  const project = workspace.state.project;
+  if (
+    state.cancellingJobId ||
+    project?.id !== projectId ||
+    project.planning_job?.id !== jobId ||
+    ['cancelled', 'applied'].includes(project.planning_job.status)
+  )
+    return false;
+  const isCurrent = agentDrafts.captureOwner(projectId);
+  const owner = latestRun;
+  state.cancellingJobId = jobId;
+  try {
+    // Unlike ordinary workspace commands this must remain available while a
+    // provider stream owns the busy lease. Cancellation is persisted first.
+    const job = await command<PlanningJobView>('plan.job_cancel', {
+      project_id: projectId,
+      job_id: jobId,
+    });
+    if (job.id !== jobId) throw new Error('取消结果与当前作业不匹配，请刷新确认');
+    if (isCurrent()) workspace.applyPlanningJob(projectId, job);
+    if (
+      job.status === 'cancelled' &&
+      owner === latestRun &&
+      state.projectId === projectId &&
+      state.planningJobId === jobId
+    )
+      controller?.abort();
+    return job.status === 'cancelled';
+  } catch (error) {
+    if (workspace.state.project?.id === projectId && isCurrent())
+      workspace.setError(error instanceof Error ? error.message : '取消结果待确认，请刷新作业状态');
+    return false;
+  } finally {
+    if (state.cancellingJobId === jobId) state.cancellingJobId = '';
+    await bestEffortRefresh(() => workspace.refresh());
+  }
+}
+
 export function useAgent() {
   return {
     state: readonly(state),
     send,
+    continuePlanningJob,
+    cancelPlanningJob,
     recheck: (projectId: string, pins: ReviewRecheck) =>
       send(projectId, '重新评审', undefined, [], undefined, undefined, undefined, false, pins),
     stop: () => {
+      if (
+        state.planningJobId &&
+        useWorkspace().state.project?.planning_job?.id === state.planningJobId
+      ) {
+        void cancelPlanningJob(state.projectId, state.planningJobId);
+        return;
+      }
       controller?.abort();
       state.label = '正在停止并保存已提交的修改…';
     },

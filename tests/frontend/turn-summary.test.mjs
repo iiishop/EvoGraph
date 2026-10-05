@@ -69,6 +69,7 @@ const imports = {
 for (const name of [
   '../attachments/AttachmentReceipt.vue',
   './AgentQuestion.vue',
+  './PlanningJobPanel.vue',
   '../graph/FollowAgentButton.vue',
   '../attachments/AttachmentPicker.vue',
   './ReferenceMentionPicker.vue',

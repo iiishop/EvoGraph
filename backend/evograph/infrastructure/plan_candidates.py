@@ -38,7 +38,7 @@ class CandidateStore:
             raise ValueError("候选规划不存在")
         return saved
 
-    def save(self, record):
+    def save(self, record, *, dispatch=False):
         data = deepcopy(record)
         data["candidate_hash"] = candidate_hash(Project.model_validate(data["project"]))
         with self.db.connect() as connection:
@@ -47,11 +47,62 @@ class CandidateStore:
             if previous and previous.get("review_attempts"):
                 raise ConflictError("候选已有独立评审轮次，旧写入不能覆盖评审记录")
             self._check_repair_phase(connection, data, previous)
+            self._check_prior_schedule_owner(connection, data, previous)
+            from .plan_jobs import guard_candidate_write
+            guard_candidate_write(self.db, connection, data, previous, dispatch=dispatch)
             connection.execute("INSERT INTO plan_candidates VALUES(?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", (
                     data["id"], data["project"]["id"], json.dumps(data, ensure_ascii=False), data["created_at"],
                 ))
         return data
+
+    def _check_prior_schedule_owner(self, connection, data, previous):
+        """Bind router-only predecessor context to saved job identity under the writer lock."""
+        from ..application.plan_phase import predecessor_schedule_owner
+        from .plan_jobs import PlanningJobStore, digest, latest_record
+
+        owner = data.get("prior_work_units_owner")
+        if previous:
+            if any(data.get(key) != previous.get(key) for key in (
+                    "prior_work_units_owner", "resumes_candidate_id", "prior_work_units")) and (
+                    owner is not None or previous.get("prior_work_units_owner") is not None):
+                raise ConflictError("前序任务调度归属不能修改或移除")
+            return
+        if owner is None and not data.get("resumes_candidate_id"):
+            return
+        predecessor = latest_record(connection, data["project_id"])
+        expected = (predecessor_schedule_owner(predecessor)
+                    if predecessor and predecessor["id"] == data.get("resumes_candidate_id") else None)
+        if owner != expected:
+            raise ConflictError("前序任务调度归属或来源凭据已改变")
+        if owner is None:
+            return
+        store = PlanningJobStore.__new__(PlanningJobStore)
+        store.db = self.db
+        job = store.read(connection, owner["job_id"])
+        # Historical ownership does not re-admit the old job. Question/answer
+        # transitions may advance revision while leaving its pinned plan intact.
+        before = self.db.read_project(connection, data["project_id"])
+        source = [s for s in predecessor["project"]["plan_contract"]["sources"]
+                  if s["id"] == owner["source_id"]]
+        phase = next((p for p in job["phases"] if p["kind"] == "generation"
+                      and p["id"] == predecessor["turn_id"]
+                      and p["candidate_id"] == predecessor["id"]), None)
+        if (job["project_id"] != data["project_id"] or job["source_id"] != owner["source_id"]
+                or candidate_hash(before) != job["pins"]["base_hash"]
+                or before.revision < job["pins"]["base_revision"]
+                or predecessor["base_revision"] != before.revision
+                or data["base_revision"] != before.revision
+                or predecessor.get("candidate_hash") != candidate_hash(Project.model_validate(predecessor["project"]))
+                or data.get("prior_work_units") != predecessor["work_units"]
+                or predecessor["work_units"].get("project_id") != data["project_id"]
+                or predecessor["work_units"].get("source_id") != owner["source_id"]
+                or len(source) != 1 or source[0]["text"] != job["input"]
+                or predecessor["input"] != job["input"]
+                or (job["source_message_id"] and source[0].get("message_id") != job["source_message_id"])
+                or not phase or not phase.get("closed_at")
+                or digest(predecessor) != owner["record_hash"]):
+            raise ConflictError("前序任务调度没有匹配的已保存来源与关闭阶段")
 
     def _repair_phase_admission(self, connection, before, predecessor):
         from ..application.plan_repair_phase import admit_repair_phase, closed_turn_ids
@@ -110,7 +161,7 @@ class CandidateStore:
                 raise ConflictError("新修复轮次的来源凭据已改变")
             validate_repair_start(data, predecessor)
 
-    def begin_review_attempt(self, project_id, pins, turn_id):
+    def begin_review_attempt(self, project_id, pins, turn_id, *, job_phase=None):
         from ..application.plan_recheck import (
             new_review_attempt,
             review_projection,
@@ -123,6 +174,8 @@ class CandidateStore:
             record = json.loads(row[0]) if row else None
             before = self.db.read_project(connection, project_id)
             validate_recheck(before, record, pins)
+            if record.get("planning_job") and not job_phase:
+                raise ConflictError("任务候选需要新的明确授权或有界任务评审阶段")
             prior_turn = record["review_attempts"][-1]["id"] if record.get("review_attempts") else record["turn_id"]
             receipt = connection.execute(
                 "SELECT 1 FROM events WHERE project_id=? AND kind='agent_turn_finished' "
@@ -130,13 +183,16 @@ class CandidateStore:
                 (project_id, prior_turn)).fetchone()
             if not receipt:
                 raise ConflictError("前一轮尚无已结束记录，不能启动重新评审")
-            record.setdefault("review_attempts", []).append(new_review_attempt(record, turn_id, pins))
+            attempt = new_review_attempt(record, turn_id, pins)
+            if job_phase:
+                attempt["audit"]["metrics"]["job_phase_id"] = job_phase["phase_id"]
+            record.setdefault("review_attempts", []).append(attempt)
             record["status"] = "reviewing"
             connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
                 json.dumps(record, ensure_ascii=False), record["id"]))
         return before, review_projection(record)
 
-    def save_review_attempt(self, record, *, close=False):
+    def save_review_attempt(self, record, *, close=False, dispatch=False):
         from ..application.plan_recheck import protected_record, review_audit, review_projection
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -154,6 +210,8 @@ class CandidateStore:
                     or record.get("review_attempt") != {k: v for k, v in attempt.items() if k != "audit"}
                     or protected_record(saved) != protected_record(record)):
                 raise ConflictError("评审轮次或候选已改变，迟到结果未覆盖当前状态")
+            from .plan_jobs import guard_candidate_write
+            guard_candidate_write(self.db, connection, record, saved, dispatch=dispatch)
             attempt["audit"] = review_audit(record, saved)
             attempt["status"] = saved["status"] = record["status"]
             attempt["write_version"] += 1
@@ -196,10 +254,21 @@ class CandidateStore:
             current = self.db.read_project(connection, record["project"]["id"])
             if current.revision != record["base_revision"]:
                 raise ConflictError("正式规划已改变，候选问题未覆盖当前状态")
+            if data.get("planning_job"):
+                from .plan_jobs import guard_candidate_write
+
+                # Validate source, budget and call ownership before the existing
+                # question CAS changes canonical revision. This grants no call.
+                guard_candidate_write(self.db, connection, data, prior, question=question is not None)
             current.question = question
             current.revision += 1
             current.updated_at = now()
             data.update(base_revision=current.revision, status=status)
+            if data.get("planning_job") and question is not None:
+                data["planning_job_question"] = {
+                    "phase_id": data["turn_id"], "question_id": question.id,
+                    "base_revision": current.revision, "canonical_hash": candidate_hash(current),
+                }
             self.db.write_project(connection, current, expected_revision=record["base_revision"])
             connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
                 json.dumps(data, ensure_ascii=False), data["id"],
@@ -296,6 +365,8 @@ class CandidateStore:
                 raise ConflictError("项目状态已改变，候选未应用")
             if candidate_hash(current) != candidate_hash(before):
                 raise ConflictError("评审前快照与当前正式规划不一致，候选需要重新校验")
+            from .plan_jobs import guard_candidate_write
+            guard_candidate_write(self.db, connection, saved, durable, commit=True)
             snapshot = seal_snapshot(before, staged, saved)
 
             def replay_model(sealed, certificate):
@@ -320,6 +391,12 @@ class CandidateStore:
             # Candidate costs have not yet been applied. Count generation plus
             # each explicitly admitted review once, in this same atomic commit.
             costs = [durable["metrics"], *[a["audit"]["metrics"] for a in durable.get("review_attempts", [])]]
+            if saved.get("planning_job"):
+                from .plan_jobs import PlanningJobStore, phase_metrics
+                jobs = PlanningJobStore.__new__(PlanningJobStore)
+                jobs.db = self.db
+                job = jobs.read(connection, saved["planning_job"]["job_id"])
+                costs = phase_metrics(connection, job)
             result.metrics["model_tokens"] += sum(m["tokens"] for m in costs)
             result.metrics["planning_seconds"] += sum(m["elapsed_seconds"] for m in costs)
             result.revision += 1
@@ -339,6 +416,11 @@ class CandidateStore:
             connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
                 json.dumps(stored, ensure_ascii=False), saved["id"],
             ))
+            if saved.get("planning_job"):
+                # Publication and job terminal state share the same transaction;
+                # a concurrent cancel cannot relabel an already applied plan.
+                job.update(status="applied", stop_reason=None)
+                jobs.put(connection, job)
             connection.execute("INSERT INTO events VALUES(?,?,?,?,?)", (
                 uid(), result.id, "agent_turn_finished", json.dumps(outcome, ensure_ascii=False), now(),
             ))

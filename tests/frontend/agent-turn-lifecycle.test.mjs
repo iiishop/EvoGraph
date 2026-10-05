@@ -278,6 +278,7 @@ async function agentHarness(label, realWorkspace = false) {
     }
     export const useWorkspace = () => workspace;
     export const agentStream = (...args) => env.run(...args);
+    export const command = (...args) => env.command(...args);
     export const waitForTurnResult = (...args) => { env.results++; return env.result(...args); };
     export const bestEffortRefresh = (refresh) => refresh().catch(() => {});
     export const useNotifications = () => ({ push() {} });
@@ -1204,4 +1205,183 @@ test('ordinary composer sends the exact displayed closed-candidate repair pins',
     receive({ type: 'done', turn_id: 'new-repair', summary: { turn_id: 'new-repair', status: 'failed', changed: false } });
   };
   await agent.send('P1', 'Tester feedback');
+});
+
+function planningJob(overrides = {}) {
+  return {
+    id: 'job-1', write_version: 1, created_at: '2026-10-05T10:00:00Z',
+    status: 'paused', source_id: 'source-1', phase_id: 'phase-1', phase_number: 1,
+    stop_reason: 'phase_budget_boundary', can_continue: true, authorization_needed: false,
+    continue_pins: { job_id: 'job-1', phase_id: 'phase-1', record_hash: 'exact-checkpoint' },
+    limits: { max_phases: 2, max_calls: 10, max_input_bytes: 786432 },
+    spend: { calls: 5, input_bytes: 390000, tokens: 0, usage_complete: false },
+    phase_spend: { calls: 5, input_bytes: 390000 },
+    phase_limits: { max_calls: 5, max_total_input_bytes: 393216 },
+    progress: { retained_checkpoints: 3, new_checkpoints: 2, completed_units: 5,
+      runnable_units: 2, held_units: 1, remaining_units: 3, remaining_call_lower_bound: null },
+    ...overrides,
+  };
+}
+
+test('planning job starts opt-in only and isolated lifecycle events never replace canonical data', async () => {
+  const h = await agentHarness('job-opt-in', true);
+  const original = structuredClone(h.records.get('P1'));
+  h.env.run = async (params, receive) => {
+    assert.equal(params.planning_job, undefined);
+    receive({ type: 'started', turn_id: 'ordinary' });
+    receive({ type: 'done', summary: { turn_id: 'ordinary', status: 'completed' } });
+  };
+  await h.agent.send('P1', 'ordinary input');
+  const request = { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: { base_hash: 'base' } };
+  h.env.run = async (params, receive) => {
+    assert.deepEqual(params.planning_job, request);
+    assert.equal(params.content, 'Substantive planning request');
+    assert.equal(params.repair_from, undefined);
+    receive({ type: 'started', turn_id: 'bounded' });
+    receive({ type: 'planning_job_changed', project_id: 'P2', job: planningJob() });
+    receive({ type: 'planning_job_changed', project_id: 'P1', job: planningJob({ id: 'other' }) });
+    assert.equal(h.workspace.state.project.planning_job, undefined);
+    receive({ type: 'planning_job_changed', project_id: 'P1', job: planningJob(), project: { ...original, revision: 99, name: 'forged' } });
+    assert.equal(h.workspace.state.project.revision, original.revision);
+    assert.equal(h.workspace.state.project.name, original.name);
+    assert.equal(h.workspace.state.project.planning_job.id, 'job-1');
+    h.records.set('P1', { ...original, planning_job: planningJob() });
+    receive({ type: 'done', summary: { turn_id: 'bounded', status: 'stopped' } });
+  };
+  await h.agent.send('P1', 'Substantive planning request', undefined, [], undefined, undefined, undefined, false, undefined, request);
+  assert.equal(h.workspace.state.project.planning_job.status, 'paused');
+});
+
+test('planning job continue consumes exact saved pins once with no input draft or new limits', async () => {
+  const h = await agentHarness('job-continue', true);
+  const saved = { ...h.records.get('P1'), planning_job: planningJob() };
+  h.records.set('P1', saved);
+  await h.workspace.refresh();
+  h.drafts.bind(() => 'P1').content.value = 'Unsent new request';
+  let finish, calls = 0;
+  h.env.run = async (params, receive) => {
+    calls++;
+    assert.equal(params.content, '');
+    assert.deepEqual(params.attachment_ids, []);
+    assert.equal(params.composer_document, undefined);
+    assert.deepEqual(params.planning_job, { action: 'continue', job_id: 'job-1', pins: saved.planning_job.continue_pins });
+    receive({ type: 'started', turn_id: 'next-phase' });
+    await new Promise(resolve => { finish = resolve; });
+    receive({ type: 'done', summary: { turn_id: 'next-phase', status: 'stopped' } });
+  };
+  const first = h.agent.continuePlanningJob('P1', 'job-1', saved.planning_job.continue_pins);
+  assert.equal(await h.agent.continuePlanningJob('P1', 'job-1', saved.planning_job.continue_pins), false);
+  assert.equal(calls, 1);
+  assert.equal(h.drafts.bind(() => 'P1').content.value, 'Unsent new request');
+  finish();
+  await first;
+  assert.equal(h.workspace.state.project.messages.length, 0);
+});
+
+test('planning job stale continue and exhausted authorization never start a stream', async () => {
+  const h = await agentHarness('job-stale-continue', true);
+  h.env.run = async () => { throw new Error('Must not call a provider stream'); };
+  for (const change of [
+    { can_continue: false }, { authorization_needed: true }, { continue_pins: null },
+    { status: 'cancelled' }, { status: 'running' }, { id: 'replacement' },
+    { continue_pins: { record_hash: 'newer' } },
+  ]) {
+    h.workspace.applyProject({ ...h.workspace.state.project, planning_job: null });
+    h.workspace.state.project.planning_job = planningJob(change);
+    assert.equal(await h.agent.continuePlanningJob('P1', 'job-1', planningJob().continue_pins), false);
+  }
+  assert.match(h.workspace.state.error, /状态已变化/);
+});
+
+test('planning job cancel persists while streaming and stale progress cannot undo cancellation', async () => {
+  const h = await agentHarness('job-cancel', true);
+  const original = structuredClone(h.records.get('P1'));
+  let emit, finish, cancelCalls = 0, releaseCancel;
+  const running = planningJob({ status: 'running', can_continue: false, continue_pins: null });
+  const cancelled = planningJob({ write_version: 2, status: 'cancelled', stop_reason: 'cancelled', can_continue: false, continue_pins: null });
+  h.env.command = async (action, params) => {
+    cancelCalls++;
+    assert.equal(action, 'plan.job_cancel');
+    assert.deepEqual(params, { project_id: 'P1', job_id: 'job-1' });
+    assert.equal(h.workspace.state.busy, true);
+    await new Promise(resolve => { releaseCancel = resolve; });
+    h.records.set('P1', { ...original, planning_job: cancelled });
+    return cancelled;
+  };
+  h.env.run = async (_, receive) => {
+    emit = receive;
+    receive({ type: 'started', turn_id: 'cancelling-phase' });
+    receive({ type: 'planning_job_changed', project_id: 'P1', job: running });
+    await new Promise(resolve => { finish = resolve; });
+    receive({ type: 'done', project: { ...original, planning_job: running }, summary: { turn_id: 'cancelling-phase', status: 'stopped' } });
+  };
+  const run = h.agent.send('P1', 'input', undefined, [], undefined, undefined, undefined, false, undefined,
+    { action: 'start', job_id: 'job-1', limits: running.limits, pins: {} });
+  const cancelling = h.agent.cancelPlanningJob('P1', 'job-1');
+  assert.equal(await h.agent.cancelPlanningJob('P1', 'job-1'), false);
+  assert.equal(cancelCalls, 1);
+  releaseCancel();
+  assert.equal(await cancelling, true);
+  emit({ type: 'planning_job_changed', project_id: 'P1', job: running });
+  assert.equal(h.workspace.state.project.planning_job.status, 'cancelled');
+  finish();
+  await run;
+  assert.equal(h.workspace.state.project.planning_job.status, 'cancelled');
+  assert.equal(h.workspace.state.project.planning_job.write_version, 2);
+});
+
+test('planning job refreshed snapshots retain job ordering and retire superseded IDs', async () => {
+  const h = await agentHarness('job-refresh-order', true);
+  const original = structuredClone(h.records.get('P1'));
+  const old = planningJob();
+  h.workspace.applyPlanningJob('P1', old);
+  const newer = planningJob({ write_version: 3, phase_number: 2 });
+  h.records.set('P1', { ...original, planning_job: newer });
+  await h.workspace.refresh();
+  h.workspace.applyProject({ ...original, planning_job: old });
+  h.workspace.applyPlanningJob('P1', old);
+  assert.equal(h.workspace.state.project.planning_job.write_version, 3);
+  const replacement = planningJob({ id: 'job-2', created_at: '2026-10-05T11:00:00Z' });
+  h.records.set('P1', { ...original, planning_job: replacement });
+  await h.workspace.refresh();
+  h.workspace.applyPlanningJob('P1', { ...old, write_version: 99 });
+  assert.equal(h.workspace.state.project.planning_job.id, 'job-2');
+  h.records.set('P1', { ...original, planning_job: null });
+  await h.workspace.refresh();
+  h.workspace.applyPlanningJob('P1', replacement);
+  assert.equal(h.workspace.state.project.planning_job, null);
+});
+
+test('planning job failed input cannot fall through ordinary retry or reuse authorization', () => {
+  const plan = planAgentRetry({ text: 'original input', ids: [], planningJob: { action: 'start', job_id: 'job-1', pins: {}, limits: planningJob().limits } }, { question: null, milestones: [] });
+  assert.equal(plan.kind, 'blocked');
+  assert.match(plan.message, /不会重发原输入/);
+});
+
+test('planning job exact request is preserved by native and browser transports without negotiation replay', async () => {
+  const request = { project_id: 'P1', content: '', planning_job: { action: 'continue', job_id: 'job-1', pins: { record_hash: 'exact' } } };
+  let nativeCalls=0;
+  const target = browser({
+    start_agent: async (id, body) => {
+      nativeCalls++;
+      assert.deepEqual(body, {...request,snapshot_mode:'compact-v1'});
+      queueMicrotask(()=>terminal(target,id,{type:'done'}));
+      return {started:true};
+    },
+  });
+  await agentStream(request,()=>{},new AbortController().signal);
+  assert.equal(nativeCalls,1);
+  globalThis.window=new EventTarget();
+  const originalFetch=globalThis.fetch;
+  let browserCalls=0;
+  try {
+    globalThis.fetch=async (url,options)=>{
+      browserCalls++;
+      assert.equal(url,'/api/agent/stream');
+      assert.deepEqual(JSON.parse(options.body),{...request,snapshot_mode:'compact-v1'});
+      return new Response('{"type":"done"}\n',{status:200});
+    };
+    await agentStream(request,()=>{},new AbortController().signal);
+    assert.equal(browserCalls,1);
+  } finally { globalThis.fetch=originalFetch; }
 });

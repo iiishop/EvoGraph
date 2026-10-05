@@ -240,9 +240,9 @@ async function harness() {
   const id = ++harnessSequence;
   const draftsUrl = moduleUrl(`${draftCode}\n// harness ${id}`);
   const agentUrl = moduleUrl(`import { reactive } from ${JSON.stringify(vueUrl)};
-    export const env = { calls: [], submissions: [], send: async () => true };
+    export const env = { calls: [], submissions: [], planningRequests: [], send: async () => true };
     export const agent = { state: reactive({ running: false, projectId: '', label: '', follow: {}, navigationTick: 0 }),
-      send: (...args) => { env.calls.push(args.slice(0, 6)); env.submissions.push(args[6]); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
+      send: (...args) => { env.calls.push(args.slice(0, 6)); env.submissions.push(args[6]); env.planningRequests.push(args[9]); return env.send(...args); }, stop() {}, freeView() {}, resumeFollow() {} };
     export const useAgent = () => agent; // ${id}`);
   const workspaceUrl = moduleUrl(`import { reactive, computed } from ${JSON.stringify(vueUrl)};
     const tabs = reactive({});
@@ -293,6 +293,7 @@ async function harness() {
   for (const name of [
     '../attachments/AttachmentReceipt.vue',
     './AgentTurnSummary.vue',
+    './PlanningJobPanel.vue',
     '../graph/FollowAgentButton.vue',
     './ReferenceMentionPicker.vue',
     './WorkspaceHeader.vue',
@@ -1794,4 +1795,159 @@ test('unsent edits, blocked Send and duplicate completion leave failure ordering
   } finally {
     h.dispose();
   }
+});
+
+async function boundedComposer(h) {
+  h.workspace.state.project.unified_planning = true;
+  h.workspace.state.project.planning_job_start_pins = { version: 'job-start/v1', base_hash: 'base-1' };
+  await h.input('Substantive request');
+  const inputs = () => all(h.root).filter(node => node.tag === 'input');
+  const optIn = () => inputs().find(node => node.type === 'checkbox');
+  optIn()['onUpdate:modelValue'](true);
+  await tick();
+  return {
+    inputs,
+    confirm: async () => { inputs().filter(node => node.type === 'checkbox').at(-1)['onUpdate:modelValue'](true); await tick(); },
+    limits: () => inputs().filter(node => node.type === 'number'),
+  };
+}
+
+test('planning job composer defaults conservative and requires explicit confirmation before send', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    assert.deepEqual(ui.limits().map(node => node.value), [1, 5, 393216]);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    assert.match(textOf(h.root), /确认本次作业的总额度/);
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.env.calls[0][1], 'Substantive request');
+    assert.equal(h.env.calls[0][5], undefined, 'plain bounded input must omit the rich composer envelope');
+    assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 1, max_calls: 5, max_input_bytes: 393216 });
+    assert.deepEqual(h.env.planningRequests[0].pins, { version: 'job-start/v1', base_hash: 'base-1' });
+    assert.equal(h.env.planningRequests[0].action, 'start');
+    assert.ok(h.env.planningRequests[0].job_id);
+    await h.input('ordinary follow-up');
+    await h.submit();
+    assert.equal(h.env.planningRequests[1], undefined, 'expanded authorization never becomes the default');
+  } finally { h.dispose(); }
+});
+
+test('planning job edits invalidate consent and higher limits are sent only after reconfirming', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    await ui.confirm();
+    ui.limits()[0]['onUpdate:modelValue'](3);
+    ui.limits()[1]['onUpdate:modelValue'](12);
+    ui.limits()[2]['onUpdate:modelValue'](1179648);
+    await tick();
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    await h.input('Edited substantive request');
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    h.workspace.state.project.planning_job_start_pins = { base_hash: 'base-2' };
+    await tick();
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 3, max_calls: 12, max_input_bytes: 1179648 });
+    assert.equal(h.env.planningRequests[0].pins.base_hash, 'base-2');
+  } finally { h.dispose(); }
+});
+
+test('planning job composer refuses invalid limits and an unfinished existing job', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    for (const value of [0, -1, 1.5, 4, '', Number.MAX_SAFE_INTEGER + 1]) {
+      ui.limits()[0]['onUpdate:modelValue'](value);
+      await tick();
+      await ui.confirm();
+      await h.submit();
+      assert.equal(h.env.calls.length, 0);
+    }
+    ui.limits()[0]['onUpdate:modelValue'](1);
+    await tick();
+    for (const status of ['authorized', 'running', 'paused']) {
+      h.workspace.state.project.planning_job = { status };
+      await tick();
+      await ui.confirm();
+      await h.submit();
+      assert.equal(h.env.calls.length, 0);
+    }
+    assert.match(textOf(h.root), /已有未结束作业/);
+  } finally { h.dispose(); }
+});
+
+test('planning job failed draft requires new authorization instead of ordinary retry', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    h.env.send = async () => false;
+    await ui.confirm();
+    await h.submit();
+    await tick();
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].planningJob.action, 'start');
+    await h.button('重试这条请求').onClick();
+    await tick();
+    assert.equal(h.env.calls.length, 1);
+    assert.match(textOf(h.root), /有界作业不会重发原输入/);
+  } finally { h.dispose(); }
+});
+
+test('planning job composer preserves unsupported attachment and reference drafts without sending', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    await h.attach(['saved-file']);
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    assert.deepEqual(h.agentDrafts.bind(() => 'A').attachmentIds.value, ['saved-file']);
+    assert.match(textOf(h.root), /有界作业目前只接收纯文字/);
+    await h.attach([]);
+    h.agentDrafts.bind(() => 'A').composerDocument.value = {
+      version: 1, parts: [{ type: 'text', text: 'Use ' }, { type: 'reference',
+        kind: 'milestone', project_id: 'A', id: 'M1', label: 'Saved milestone' }],
+    };
+    await tick();
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    assert.match(textOf(h.root), /有界作业目前只接收纯文字/);
+  } finally { h.dispose(); }
+});
+
+test('planning job composer rejects aggregate allowances exceeding the authorized phase count', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    for (const [calls, bytes] of [[12, 393216], [5, 393217]]) {
+      ui.limits()[1]['onUpdate:modelValue'](calls);
+      ui.limits()[2]['onUpdate:modelValue'](bytes);
+      await tick();
+      assert.equal(ui.limits()[1].max, 5);
+      assert.equal(ui.limits()[2].max, 393216);
+      await ui.confirm();
+      await h.submit();
+      assert.equal(h.env.calls.length, 0);
+      assert.match(textOf(h.root), /总调用不得超过阶段数 × 5，总输入不得超过阶段数 × 393,216 B/);
+    }
+    ui.limits()[0]['onUpdate:modelValue'](2);
+    ui.limits()[1]['onUpdate:modelValue'](10);
+    ui.limits()[2]['onUpdate:modelValue'](786432);
+    await tick();
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 2, max_calls: 10, max_input_bytes: 786432 });
+  } finally { h.dispose(); }
 });

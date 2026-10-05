@@ -30,6 +30,7 @@ from .plan_harness import (
     validate_review_sources,
 )
 from .plan_ir import DELTA_TOOL
+from .plan_phase import predecessor_schedule_owner
 from .plan_repair_context import (
     REPAIR_INSTRUCTIONS,
     auto_repair_context,
@@ -436,10 +437,12 @@ class UnifiedPlanningService:
         return run
 
     async def stream(self, project_id, content, *, question_id=None, attachment_ids=None,
-                     composer_document=None, snapshot_mode="full", experiment=None, repair_from=None):
+                     composer_document=None, snapshot_mode="full", experiment=None, repair_from=None, _job_phase=None):
         if snapshot_mode not in {"full", "compact-v1"}:
             raise ValueError("未知的 Agent 快照格式")
-        turn_id = uid()
+        turn_id = _job_phase["phase_id"] if _job_phase else uid()
+        job_continuation = bool(_job_phase and _job_phase["phase_number"] > 1)
+        source_id = _job_phase["source_id"] if _job_phase else turn_id
         lock = self.app.operation_lock(project_id)
         if not lock.acquire(blocking=False):
             yield {"type": "error", "message": "此项目的 Agent 或其他操作仍在运行"}
@@ -512,9 +515,10 @@ class UnifiedPlanningService:
                  "excerpt_limit_reached": len(a.excerpt) >= MAX_EXCERPT_CHARS}
                 for a in before.attachments if a.id in resolved.attachment_ids
             ]}
-            candidate.plan_contract.sources.append(IntentSource(
-                id=turn_id, text=content, reference_context=reference_context,
-            ))
+            if not job_continuation:
+                candidate.plan_contract.sources.append(IntentSource(
+                    id=source_id, text=content, reference_context=reference_context,
+                ))
             metrics = {"provider_calls": 0, "tokens": 0, "elapsed_seconds": 0, "usage_reported": False,
                 "budget": {"max_calls": 5, "max_request_bytes": 163840,
                            "max_review_request_bytes": 163840,
@@ -533,7 +537,7 @@ class UnifiedPlanningService:
                 "work_unit_schedule_history": retained_unit_schedule_history(previous) if resume else [],
                 "reviews": [], "metrics": metrics,
                 "resumes_candidate_id": previous["id"] if resume else None,
-                "allowed_requirement_source_ids": sorted(pending_sources | {turn_id}),
+                "allowed_requirement_source_ids": sorted(pending_sources | {source_id}),
                 "checker_version": CHECKER_VERSION,
                 "reference_context": reference_context,
                 "capability_move_audits": capability_move_context(before, candidate, previous) if resume else [],
@@ -547,11 +551,25 @@ class UnifiedPlanningService:
                 "validation_requested": False,
                 "validation_receipt": build_validation_receipt(candidate),
             }
+            prior_owner = predecessor_schedule_owner(durable_previous) if resume else None
+            if prior_owner:
+                record["prior_work_units_owner"] = prior_owner
+            if _job_phase:
+                record["planning_job"] = {"job_id": _job_phase["job_id"], "source_id": source_id}
+                metrics["job_phase_id"] = turn_id
+            if job_continuation:
+                for key in ("work_units", "compilations", "tool_attempts", "source_message_id",
+                            "schedule_repair_requests", "generation_progress", "validation_requested",
+                            "allowed_requirement_source_ids"):
+                    if key in previous:
+                        record[key] = deepcopy(previous[key])
+                record["unit_request"] = None
+                record["inherited_findings"] = []
             if selected_experiment:
                 record["planning_experiment"] = selected_experiment
             if repair_phase:
                 record["repair_phase"] = repair_phase
-            if resume and not repair_phase and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
+            if resume and not _job_phase and not repair_phase and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
                 resumed_units = resume_unit_schedule(transformed_previous, candidate, turn_id, content)
                 if saved_units_stage:
                     # Fail before saving a new candidate; never fall back to a
@@ -574,7 +592,7 @@ class UnifiedPlanningService:
             record = self.store.save(record)
             if before.question:
                 record = self.store.pause_question(record, None, status="generating")
-            stage = StagedDatabase(self.app.db, self.store, record, turn_id)
+            stage = StagedDatabase(self.app.db, self.store, record, source_id)
             stage.segmented_planning = True
             manifest_tool = manifest_tool_for(stage.record)
             facade = staged_application(self.app, stage, metrics)
@@ -589,6 +607,8 @@ class UnifiedPlanningService:
                 "allowed_requirement_source_ids": sorted(stage.requirement_source_ids),
             }
             facade.agent.include_history = False
+            if job_continuation:
+                facade.agent.record_user = False
             facade.agent.tool_registry = {n: t for n, t in tools().items() if n in ALLOWED_TOOLS}
             facade.agent.tool_registry["schedule_plan_changes"] = manifest_tool
             facade.agent.tool_registry["submit_plan_delta"] = DELTA_TOOL
@@ -637,7 +657,7 @@ class UnifiedPlanningService:
                     "admitted_calls": metrics["provider_calls"],
                 })
                 completed = has_completed_units(stage.record.get("work_units") or {})
-                can_repair = (not selected_experiment and not completed and not stage.record.get("schedule_repair_requests")
+                can_repair = (not _job_phase and not selected_experiment and not completed and not stage.record.get("schedule_repair_requests")
                     and metrics["budget"]["max_calls"] - metrics["provider_calls"] > 1)
                 if can_repair:
                     stage.record["schedule_repair_requests"] = 1
@@ -663,6 +683,9 @@ class UnifiedPlanningService:
                 facade.agent.extra_context = REPAIR_PHASE_INSTRUCTIONS if repair_phase else REPAIR_INSTRUCTIONS
 
             def next_segment_context(project, completed_round, tool_results):
+                if _job_phase and any(item["status"] == "failed" for item in tool_results):
+                    stage.record["generation_pause_reason"] = "invalid_tool_output"
+                    return None
                 remaining = metrics["budget"]["max_calls"] - metrics["provider_calls"]
                 if selected_experiment:
                     remaining = min(remaining, selected_experiment["limits"]["max_calls"] - metrics["provider_calls"])
@@ -729,7 +752,8 @@ class UnifiedPlanningService:
             except ValueError:
                 # Cost-saving admission checks use the same plugin runner and
                 # retain its unknown/block evidence without dispatching a model.
-                stage.message(project_id, "user", content, composer_document)
+                if not job_continuation:
+                    stage.message(project_id, "user", content, composer_document)
                 early = await run_harness(seal_snapshot(before, stage.project, stage.record), None)
                 stage.record["harness_snapshots"] = [seal_snapshot(
                     before, stage.project, stage.record).model_dump(mode="json")]
@@ -742,7 +766,8 @@ class UnifiedPlanningService:
                 yield self.candidate_event(stage, turn_id, "程序检查无法确认完整依据，未调用模型")
             async def generation_events(attempt):
                 if attempt == 0 and resume and stage.record.get("work_units"):
-                    stage.message(project_id, "user", content, composer_document)
+                    if not job_continuation:
+                        stage.message(project_id, "user", content, composer_document)
                     facade.agent.record_user = False
                     route = schedule_admission(stage.get(project_id))
                     if route == "stop":
@@ -779,7 +804,7 @@ class UnifiedPlanningService:
                     async for event in generated:
                         yield event
 
-            for attempt in range(0 if source_preflight_blocked else 1 if selected_experiment else 2):
+            for attempt in range(0 if source_preflight_blocked else 1 if selected_experiment or _job_phase else 2):
                 generator_status = None
                 initial_candidate = stage.get(project_id)
                 async with aclosing(generation_events(attempt)) as stream:
@@ -811,7 +836,7 @@ class UnifiedPlanningService:
                                     "code": event.get("code", "generation_incomplete"),
                                     "subject": "generation", "message": event["message"],
                                     "unit_id": (stage.record.get("unit_request") or {}).get("unit_id"),
-                                    "source_id": turn_id,
+                                    "source_id": source_id,
                                 })
                             yield event
                 candidate = stage.get(project_id)
@@ -846,6 +871,11 @@ class UnifiedPlanningService:
                     if any(a["status"] == "failed" and a["name"] in {"submit_plan_delta", "propose_plan_patch", "schedule_plan_changes"}
                            for a in stage.record.get("tool_attempts", [])):
                         stage.record["status"] = "failed"
+                        terminal = "failed"
+                        break
+                    if _job_phase:
+                        stage.record["status"] = "needs_resolution"
+                        stage.record["generation_pause_reason"] = "no_safe_progress"
                         terminal = "failed"
                         break
                     stage.record["metrics"] = {**metrics, "elapsed_seconds": time.monotonic() - started}
@@ -904,8 +934,8 @@ class UnifiedPlanningService:
                     } for row in unavailable)
                     terminal = "failed"
                     break
-                if selected_experiment:
-                    stage.record["generation_pause_reason"] = "experiment_review_complete"
+                if selected_experiment or _job_phase:
+                    stage.record["generation_pause_reason"] = "experiment_review_complete" if selected_experiment else "job_review_complete"
                     terminal = "failed"
                     break
                 if attempt == 0:

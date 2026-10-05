@@ -46,6 +46,8 @@ class Application:
         self.uml = UmlService(self.db)
         self.agent = AgentRuntime(self)
         self.unified = UnifiedPlanningService(self)
+        from .plan_jobs import PlanningJobService
+        self.planning_jobs = PlanningJobService(self)
         self._locks = {}
         self._lock_guard = threading.Lock()
         # A service method is registered once. HTTP and pywebview share this table.
@@ -82,6 +84,7 @@ class Application:
             "agent.turn_result": self.agent.turn_result,
             "plan.unified_enable": self.unified.enable,
             "plan.candidate_discard": self.unified.discard,
+            "plan.job_cancel": self.planning_jobs.cancel,
             "plan.apply": self.planning.apply,
             "plan.discard": self.planning.discard,
             "baseline.refresh": self.execution.refresh,
@@ -132,7 +135,7 @@ class Application:
             "agent.turn_result",
             "implementation.brief",
         }
-        if not readonly:
+        if not readonly and action != "plan.job_cancel":
             key = params.get("project_id", "__global__")
             with self._lock_guard:
                 lock = self._locks.setdefault(key, threading.Lock())

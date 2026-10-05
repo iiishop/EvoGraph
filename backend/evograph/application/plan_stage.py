@@ -24,16 +24,17 @@ class StagedDatabase:
         self.project = Project.model_validate(record["project"])
         self.saved_events = []
         self.requirement_source_ids = set(record.get("allowed_requirement_source_ids", [source_id]))
-        self.user_message_id = None
+        self.user_message_id = record.get("source_message_id")
         self.metrics_ref = None
         self.started = time.monotonic()
 
-    def checkpoint_metrics(self, *, request=None):
+    def checkpoint_metrics(self, *, request=None, dispatch=False):
+        record = copy.deepcopy(self.record)
         if self.metrics_ref is not None:
-            self.record["metrics"] = copy.deepcopy({**self.metrics_ref, "elapsed_seconds": time.monotonic() - self.started})
+            record["metrics"] = copy.deepcopy({**self.metrics_ref, "elapsed_seconds": time.monotonic() - self.started})
         if request is not None:
-            self.record.setdefault("model_inputs", []).append(request)
-        self.record = self.store.save(self.record)
+            record.setdefault("model_inputs", []).append(request)
+        self.record = self.store.save(record, dispatch=True) if dispatch else self.store.save(record)
 
     def get(self, project_id):
         if project_id != self.project.id:
@@ -104,6 +105,7 @@ class StagedDatabase:
             "id": identity, "name": name, "raw_arguments": arguments,
             "status": "started", "source_id": self.source_id,
             "generation_call": (self.metrics_ref or {}).get("provider_calls", 0),
+            **({"phase_id": self.metrics_ref["job_phase_id"]} if (self.metrics_ref or {}).get("job_phase_id") else {}),
         })
         for source in self.project.plan_contract.sources:
             if source.id == self.source_id:

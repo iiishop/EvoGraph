@@ -135,11 +135,11 @@ class ReviewAttemptStore:
     def __init__(self, store):
         self.store = store
 
-    def save(self, record):
-        return self.store.save_review_attempt(record)
+    def save(self, record, *, dispatch=False):
+        return self.store.save_review_attempt(record, dispatch=dispatch)
 
 
-async def stream_recheck(service, project_id, pins, snapshot_mode="full"):
+async def stream_recheck(service, project_id, pins, snapshot_mode="full", *, _job_phase=None):
     """Use the ordinary turn transport/cancellation with no router or source write."""
     import asyncio
     import time
@@ -151,7 +151,7 @@ async def stream_recheck(service, project_id, pins, snapshot_mode="full"):
     from .plan_validation import build_validation_receipt
     from .turn_summary import build_turn_summary
 
-    turn_id = uid()
+    turn_id = _job_phase["phase_id"] if _job_phase else uid()
     app, store = service.app, service.store
     lock = app.operation_lock(project_id)
     if not lock.acquire(blocking=False):
@@ -165,7 +165,7 @@ async def stream_recheck(service, project_id, pins, snapshot_mode="full"):
     try:
         if snapshot_mode not in {"full", "compact-v1"}:
             raise ValueError("未知的 Agent 快照格式")
-        before, record = store.begin_review_attempt(project_id, pins, turn_id)
+        before, record = store.begin_review_attempt(project_id, pins, turn_id, job_phase=_job_phase)
         stage = StagedDatabase(app.db, ReviewAttemptStore(store), record, record["id"])
         metrics = stage.metrics_ref = record["metrics"]
         yield {"type": "started", "turn_id": turn_id, "project_id": project_id,

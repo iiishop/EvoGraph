@@ -501,8 +501,45 @@ export interface PlanCandidate {
     usage_reported?: boolean;
   };
 }
+export interface PlanningJobLimits {
+  max_phases: number;
+  max_calls: number;
+  max_input_bytes: number;
+}
+export type PlanningJobPins = Record<string, unknown>;
+export type PlanningJobRequest =
+  | { action: 'start'; job_id: string; limits: PlanningJobLimits; pins: PlanningJobPins }
+  | { action: 'continue'; job_id: string; pins: PlanningJobPins };
+export interface PlanningJobView {
+  id: string;
+  write_version: number;
+  created_at?: string;
+  status: 'authorized' | 'running' | 'paused' | 'stopped' | 'applied' | 'cancelled';
+  source_id: string;
+  phase_id: string;
+  phase_number: number;
+  stop_reason: string | null;
+  can_continue: boolean;
+  authorization_needed: boolean;
+  continue_pins: PlanningJobPins | null;
+  limits: PlanningJobLimits;
+  spend: { calls: number; input_bytes: number; tokens: number; usage_complete: boolean };
+  phase_spend: { calls: number; input_bytes: number };
+  phase_limits: { max_calls: number; max_total_input_bytes: number };
+  progress: {
+    retained_checkpoints: number;
+    new_checkpoints: number;
+    completed_units: number;
+    runnable_units: number;
+    held_units: number;
+    remaining_units: number;
+    remaining_call_lower_bound: number | null;
+  };
+}
 export interface Project extends ProjectSummary {
   unified_planning?: boolean;
+  planning_job?: PlanningJobView | null;
+  planning_job_start_pins?: PlanningJobPins | null;
   plan_contract?: PlanContract;
   plan_candidate?: PlanCandidate | null;
   created_at: string;
@@ -575,6 +612,7 @@ export type CompactProjectSnapshot = Omit<Project, 'messages' | 'events'> & {
 };
 export type ProjectSnapshot = Project | CompactProjectSnapshot;
 export interface AgentEvent {
+  job?: PlanningJobView;
   source_analysis?: boolean;
   candidate?: PlanCandidate;
   snapshot_mode?: 'full' | 'compact-v1';

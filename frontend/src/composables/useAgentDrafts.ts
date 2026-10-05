@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue';
-import type { Attachment, ComposerDocument, PendingQuestion } from '../types';
+import type { Attachment, ComposerDocument, PendingQuestion, PlanningJobRequest } from '../types';
 import {
   cloneComposerDocument,
   normalizeComposerDocument,
@@ -10,6 +10,7 @@ import {
 import type { AttachmentUploadResult } from '../lib/attachmentUpload';
 
 type DraftContent = {
+  planningJob?: PlanningJobRequest;
   text: string;
   composerDocument?: ComposerDocument;
   ids: string[];
@@ -158,6 +159,7 @@ export function createAgentDraftStore() {
       question: attempt.question ? { ...attempt.question } : undefined,
       verificationMilestone: attempt.verificationMilestone,
       ...(attempt.sourceAnalysis ? { sourceAnalysis: true } : {}),
+      ...(attempt.planningJob ? { planningJob: attempt.planningJob } : {}),
     };
     const restored = attempt.restoreRevision === draft.revision;
     if (restored) {

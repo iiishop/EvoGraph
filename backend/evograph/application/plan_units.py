@@ -16,6 +16,7 @@ from ..domain.models import Model, Project
 from ..domain.plan_contracts import active_behaviors, candidate_hash, planning_payload
 from .plan_continuation_context import prior_pending_intent_context
 from .plan_ir import PlanDelta, architecture_delta_fields, required_plan_fields
+from .plan_phase import intent_source_id
 
 MAX_UNIT_BYTES = 6144
 MAX_UNIT_CONTRACTS = 3
@@ -572,7 +573,7 @@ def schedule_findings(record, project):
     if (record.get("planning_experiment", {}).get("version") == COLD_START_EXPERIMENT
             and schedule.get("version") != BATCH_UNIT_VERSION):
         findings.append({"code": "invalid_unit_schedule", "message": "bounded batch schedule policy was removed", **identity})
-    source_id = record.get("turn_id", record.get("id"))
+    source_id = intent_source_id(record)
     if not _valid_schedule(record, project, source_id):
         findings.append({"code": "invalid_unit_schedule", "message": "schedule candidate or source is stale", **identity})
     if schedule.get("version") == BATCH_UNIT_VERSION:
@@ -1095,7 +1096,7 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
     """Called inside the existing atomic save, and its NO_PROGRESS audit path."""
     result = deepcopy(record)
     schedule, pin = result.get("work_units"), result.get("unit_request")
-    source_id = result.get("turn_id", result.get("id"))
+    source_id = intent_source_id(result)
     if not schedule or schedule.get("source_id") != source_id:
         return result
     if compiler_audit is None:
@@ -1162,7 +1163,7 @@ def all_units_complete(record):
         return False
     try:
         project = Project.model_validate(record["project"])
-        source_id = record.get("turn_id", record.get("id"))
+        source_id = intent_source_id(record)
         if not _valid_schedule(record, project, source_id):
             return False
         units = schedule["units"]

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
+import PlanningJobPanel from './PlanningJobPanel.vue';
 import AgentQuestion from './AgentQuestion.vue';
 import AgentReviewTray from './AgentReviewTray.vue';
 import { latestTurnSummary, parseTurnSummary, turnSummaryHeadline } from '../../lib/turnSummary';
@@ -26,7 +27,7 @@ import {
   type FailedDraft,
 } from '../../composables/useAgentDrafts';
 import { useWorkspace } from '../../composables/useWorkspace';
-import type { Project, ReferenceItem } from '../../types';
+import type { Project, ReferenceItem, PlanningJobLimits, PlanningJobRequest } from '../../types';
 
 const props = defineProps<{
   project: Project;
@@ -36,6 +37,44 @@ const props = defineProps<{
 }>();
 defineEmits<{ resume: []; locate: [id: string] }>();
 const dockCollapsed = ref(false);
+// Expanded planning is never selected implicitly or carried to another project.
+const boundedJob = ref(false);
+const jobConfirmed = ref(false);
+const jobLimits = ref<PlanningJobLimits>({ max_phases: 1, max_calls: 5, max_input_bytes: 393216 });
+const jobSupported = computed(
+  () =>
+    Boolean(props.project.unified_planning && props.project.planning_job_start_pins) &&
+    !props.project.question,
+);
+const jobLimitsValid = computed(
+  () =>
+    Object.values(jobLimits.value).every((value) => Number.isSafeInteger(value) && value > 0) &&
+    jobLimits.value.max_phases <= 3 &&
+    jobLimits.value.max_calls <= 12 &&
+    jobLimits.value.max_calls <= 5 * jobLimits.value.max_phases &&
+    jobLimits.value.max_input_bytes <= 1179648 &&
+    jobLimits.value.max_input_bytes <= 393216 * jobLimits.value.max_phases,
+);
+watch(
+  () => [props.project.id, props.project.created_at],
+  () => {
+    boundedJob.value = false;
+    jobConfirmed.value = false;
+    jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
+  },
+  { flush: 'sync' },
+);
+watch(
+  () => [
+    boundedJob.value,
+    JSON.stringify(jobLimits.value),
+    JSON.stringify(props.project.planning_job_start_pins),
+  ],
+  () => {
+    jobConfirmed.value = false;
+  },
+  { flush: 'sync' },
+);
 const review = ref<HTMLElement>();
 watch(
   () => props.project.id,
@@ -256,7 +295,40 @@ const blocker = computed(
         }
       : null),
 );
-const canSend = computed(() => Boolean(content.value.trim()) && !blocker.value);
+const jobBlocker = computed(() =>
+  !boundedJob.value
+    ? ''
+    : !jobSupported.value
+      ? '当前状态不支持启动有界作业，请刷新或先回答待确认问题'
+      : referencedAttachmentIds.value.length ||
+          composerDocument.value?.parts.some((part) => part.type === 'reference')
+        ? '有界作业目前只接收纯文字；请移除资料和引用，或关闭有界模式以保留原发送方式'
+        : ['authorized', 'running', 'paused'].includes(props.project.planning_job?.status ?? '')
+          ? '已有未结束作业，请先继续或取消该作业，再授权新作业'
+          : !jobLimitsValid.value
+            ? '额度须为正整数，最多 3 阶段、12 次调用和 1,179,648 B 累计输入；总调用不得超过阶段数 × 5，总输入不得超过阶段数 × 393,216 B'
+            : !jobConfirmed.value
+              ? '请勾选确认本次作业的总额度'
+              : '',
+);
+const canSend = computed(
+  () => Boolean(content.value.trim()) && !blocker.value && !jobBlocker.value,
+);
+watch(
+  [content, composerDocument, attachmentIds],
+  () => {
+    jobConfirmed.value = false;
+  },
+  { deep: true, flush: 'sync' },
+);
+async function openJobAuthorization() {
+  dockCollapsed.value = false;
+  boundedJob.value = true;
+  jobConfirmed.value = false;
+  jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
+  await nextTick();
+  if (mounted) message.value?.focus();
+}
 
 const placeholder = computed(() =>
   answering.value
@@ -284,9 +356,11 @@ async function deliver(attempt: DraftAttempt) {
       attempt.request ? attempt.request.questionId : attempt.questionId,
       attempt.ids,
       attempt.request ? attempt.request.verificationMilestone : attempt.verificationMilestone,
-      outgoingDocument,
+      attempt.planningJob ? undefined : outgoingDocument,
       attempt,
       attempt.request ? attempt.request.sourceAnalysis : attempt.sourceAnalysis,
+      undefined,
+      attempt.planningJob,
     );
   } catch (error) {
     setError(error instanceof Error ? error.message : '请求未完成');
@@ -306,8 +380,18 @@ async function submit(
   message.value?.closeSuggestions();
   // Keep the exact draft for recovery; trim only the submitted payload.
   if (!text.trim() || (chosenOption ? operationBlocker.value : blocker.value)) return;
+  if (!chosenOption && boundedJob.value && jobBlocker.value) return;
+  const planningJob: PlanningJobRequest | undefined =
+    !chosenOption && boundedJob.value && props.project.planning_job_start_pins
+      ? {
+          action: 'start',
+          job_id: crypto.randomUUID(),
+          limits: { ...jobLimits.value },
+          pins: JSON.parse(JSON.stringify(props.project.planning_job_start_pins)),
+        }
+      : undefined;
   const restored = restoredFailure.value;
-  if (!chosenOption && restored && text === content.value) {
+  if (!planningJob && !chosenOption && restored && text === content.value) {
     // Sending the untouched restored answer is also a retry, not permission to
     // silently bind it to a different question that arrived in the meantime.
     agentDrafts.recoverComposer(props.project.id);
@@ -323,6 +407,7 @@ async function submit(
     props.project.id,
     {
       text,
+      ...(planningJob ? { planningJob } : {}),
       composerDocument: chosenOption
         ? textDocument(text)
         : cloneComposerDocument(composerDocument.value),
@@ -340,7 +425,12 @@ async function submit(
     },
     text === content.value || content.value === '',
   );
-  if (attempt) await deliver(attempt);
+  if (attempt) {
+    boundedJob.value = false;
+    jobConfirmed.value = false;
+    jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
+    await deliver(attempt);
+  }
 }
 
 async function retry(failure: FailedDraft | undefined = failedAttempt.value, fromComposer = false) {
@@ -497,6 +587,12 @@ function choose(option: string) {
         @resume="$emit('resume')"
       />
     </div>
+    <PlanningJobPanel
+      v-if="project.planning_job"
+      :project-id="project.id"
+      :job="project.planning_job"
+      @authorize="openJobAuthorization"
+    />
     <AgentQuestion
       v-if="project.question"
       :question="project.question"
@@ -561,6 +657,59 @@ function choose(option: string) {
     <div v-if="draggingFiles" class="agent-drop-overlay" aria-live="polite">
       松开以上传并保存到项目 · 本条最多引用6份资料内容
     </div>
+    <div v-if="jobSupported || boundedJob" class="planning-job-authorization">
+      <label class="planning-job-opt-in"
+        ><input v-model="boundedJob" type="checkbox" :disabled="Boolean(operationBlocker)" />
+        <span>本次使用有界规划作业（可选）</span></label
+      >
+      <fieldset v-if="boundedJob" :disabled="Boolean(operationBlocker)">
+        <legend>本次作业总额度</legend>
+        <div class="planning-job-limits">
+          <label
+            >最多阶段<input
+              v-model.number="jobLimits.max_phases"
+              type="number"
+              min="1"
+              max="3"
+              step="1"
+          /></label>
+          <label
+            >最多模型调用<input
+              v-model.number="jobLimits.max_calls"
+              type="number"
+              min="1"
+              :max="Math.min(12, 5 * jobLimits.max_phases)"
+              step="1"
+          /></label>
+          <label
+            >累计输入字节（B）<input
+              v-model.number="jobLimits.max_input_bytes"
+              type="number"
+              min="1"
+              :max="Math.min(1179648, 393216 * jobLimits.max_phases)"
+              step="1"
+          /></label>
+        </div>
+        <p>
+          每阶段仍最多 5 次调用、393,216 B 输入；本原型总授权最多 3 阶段、12 次调用、1,179,648
+          B。不会自动扩额；token 用量可能不完整。
+        </p>
+        <label class="planning-job-opt-in"
+          ><input
+            v-model="jobConfirmed"
+            type="checkbox"
+            :disabled="!jobLimitsValid || !jobSupported"
+          />
+          <span
+            >确认按以上总额度自动推进这次输入，允许最多 {{ jobLimits.max_phases }} 阶段、{{
+              jobLimits.max_calls
+            }}
+            次调用和 {{ jobLimits.max_input_bytes }} B 累计输入</span
+          ></label
+        >
+      </fieldset>
+      <p v-if="jobBlocker" class="agent-blocker" role="status">{{ jobBlocker }}</p>
+    </div>
     <form style="position: relative" class="agent-input" @submit.prevent="submit()">
       <ComposerEditor
         :key="project.id"
@@ -602,7 +751,7 @@ function choose(option: string) {
           v-else
           type="submit"
           class="send-button"
-          :aria-label="answering ? '发送回答' : '发送修改建议'"
+          :aria-label="boundedJob ? '确认额度并启动作业' : answering ? '发送回答' : '发送修改建议'"
           :disabled="!canSend"
         >
           <ArrowUp :size="20" aria-hidden="true" />
@@ -624,6 +773,66 @@ function choose(option: string) {
 </template>
 
 <style scoped>
+.planning-job-authorization {
+  font-size: 12px;
+  margin-bottom: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 24px;
+  max-height: min(230px, 29dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+.planning-job-opt-in {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 7px;
+}
+.planning-job-opt-in input[type='checkbox'] {
+  /* Global text-field width/padding must never size these native controls. */
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0;
+  margin: 2px 0 0;
+}
+.planning-job-opt-in > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.planning-job-authorization fieldset {
+  min-width: 0;
+  border: 1px solid var(--line, #dbe1e5);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+.planning-job-authorization p {
+  margin: 7px 0;
+}
+.planning-job-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.planning-job-limits label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 110px;
+}
+.planning-job-limits input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 /* Recovery actions remain reachable when small-window styles hide passive hints. */
 .agent-dock-note.failed {
   display: block;

@@ -108,7 +108,17 @@ class AgentRuntime:
         source_analysis: bool = False,
         review_recheck: dict | None = None,
         repair_from: dict | None = None,
+        planning_job: dict | None = None,
     ):
+        if planning_job is not None:
+            if question_id or attachment_ids or verification_milestone or composer_document or source_analysis or repair_from or review_recheck:
+                yield {"type": "error", "message": "有界任务不能与其他动作合并"}
+                yield {"type": "done", "changed": False}
+                return
+            async with aclosing(self.app.planning_jobs.stream(project_id, content, planning_job, snapshot_mode)) as events:
+                async for event in events:
+                    yield event
+            return
         if review_recheck is not None:
             from .plan_recheck import stream_recheck
             if (content != "重新评审" or question_id or attachment_ids or verification_milestone

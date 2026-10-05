@@ -143,6 +143,8 @@ class BudgetedSettings:
             raise BudgetExceededError(rejection[1])
         call = {
             "number": self.metrics["provider_calls"] + 1,
+            **({"phase_call_id": f"{self.metrics['job_phase_id']}:{self.metrics['provider_calls'] + 1}"}
+               if self.metrics.get("job_phase_id") else {}),
             "purpose": self.purpose, "request_limit_bytes": request_limit,
             "input_bytes": request_bytes, "schema_bytes": encoded_size(tools),
             "message_bytes": encoded_size(messages),
@@ -172,7 +174,19 @@ class BudgetedSettings:
         self.metrics["provider_calls"] += 1
         self.metrics["input_bytes"] = self.metrics.get("input_bytes", 0) + request_bytes
         if self.checkpoint:
-            self.checkpoint(request=copy.deepcopy(request))
+            try:
+                self.checkpoint(request=copy.deepcopy(request))
+            except Exception as exc:
+                self.metrics["calls"].pop()
+                self.metrics["provider_calls"] -= 1
+                self.metrics["input_bytes"] -= request_bytes
+                if self.metrics.get("job_phase_id") and isinstance(exc, BudgetExceededError):
+                    self.metrics.setdefault("admission_rejections", []).append({
+                        "purpose": self.purpose, "input_bytes": request_bytes,
+                        "request_sha256": request_hash, "reason": getattr(exc, "reason", "aggregate_input_or_call_limit"),
+                        "dispatched": False})
+                    self.checkpoint()
+                raise
         started = time.monotonic()
         cumulative = {}
         active_error = None
@@ -183,7 +197,10 @@ class BudgetedSettings:
             self.metrics["dispatched_calls"] = self.metrics.get("dispatched_calls", 0) + 1
             self.metrics["dispatched_input_bytes"] = self.metrics.get("dispatched_input_bytes", 0) + request_bytes
             if self.checkpoint:
-                self.checkpoint()
+                if self.metrics.get("job_phase_id"):
+                    self.checkpoint(dispatch=True)
+                else:
+                    self.checkpoint()
             async with asyncio.timeout(budget.get("call_timeout_seconds", 180)):
                 async with aclosing(self.settings.stream(messages, tools, **options)) as stream:
                     async for event in stream:

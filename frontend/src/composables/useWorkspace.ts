@@ -5,6 +5,7 @@ import type {
   Message,
   Project,
   PlanCandidate,
+  PlanningJobView,
   ProjectOpenResult,
   ProjectSnapshot,
   ProjectSummary,
@@ -142,6 +143,38 @@ function olderCandidate(project: Project, incoming?: PlanCandidate | null) {
   );
 }
 
+// Job writes do not advance the canonical planning revision. Keep their own
+// monotonic ordering so a delayed stream frame cannot undo a saved cancel.
+const retiredJobs = new Map<string, Set<string>>();
+function olderPlanningJob(project: Project, incoming?: PlanningJobView | null) {
+  if (!incoming) return false;
+  if (retiredJobs.get(candidateIncarnation(project))?.has(incoming.id)) return true;
+  const current = project.planning_job;
+  if (!current) return false;
+  if (current.id !== incoming.id)
+    return Boolean(
+      current.created_at && incoming.created_at && current.created_at > incoming.created_at,
+    );
+  if ((current.write_version ?? 0) > (incoming.write_version ?? 0)) return true;
+  return ['cancelled', 'applied'].includes(current.status) && current.status !== incoming.status;
+}
+function reconcilePlanningJob(project: Project, authoritative = false): Project {
+  const current = state.project;
+  if (!current || candidateIncarnation(current) !== candidateIncarnation(project)) return project;
+  if (
+    olderPlanningJob(current, project.planning_job) ||
+    (!authoritative && current.planning_job && !project.planning_job)
+  )
+    return { ...project, planning_job: current.planning_job };
+  if (current.planning_job && current.planning_job.id !== project.planning_job?.id) {
+    const key = candidateIncarnation(current);
+    const retired = retiredJobs.get(key) ?? new Set<string>();
+    retired.add(current.planning_job.id);
+    retiredJobs.set(key, retired);
+  }
+  return project;
+}
+
 function reconcileWorkflowDrafts(project: Project, authoritative = false) {
   if (
     authoritative &&
@@ -204,7 +237,7 @@ async function loadProject(id: string, navigate = false): Promise<ProjectOpenRes
         agentDrafts.activate(id);
         workflowDrafts.activate(id);
         reconcileWorkflowDrafts(project, true);
-        state.project = project;
+        state.project = reconcilePlanningJob(project, true);
         localStorage.setItem('evograph.project', id);
         return 'accepted';
       } catch (error) {
@@ -227,6 +260,7 @@ async function loadProject(id: string, navigate = false): Promise<ProjectOpenRes
 function discardProject(id: string) {
   for (const key of retiredCandidates.keys())
     if (key.startsWith(`${id}:`)) retiredCandidates.delete(key);
+  for (const key of retiredJobs.keys()) if (key.startsWith(`${id}:`)) retiredJobs.delete(key);
   workspaceTabs.delete(id);
   architectureBrowse.discard(id);
   agentDrafts.discard(id);
@@ -281,7 +315,7 @@ async function refresh() {
       project.revision >= state.project.revision
     ) {
       reconcileWorkflowDrafts(project, true);
-      state.project = project;
+      state.project = reconcilePlanningJob(project, true);
     }
   } catch (error) {
     // Superseded refresh failures are as stale as superseded project data.
@@ -533,7 +567,7 @@ export function useWorkspace() {
           project = { ...project, plan_candidate: state.project.plan_candidate };
         snapshotSequence++;
         reconcileWorkflowDrafts(project);
-        state.project = project;
+        state.project = reconcilePlanningJob(project);
       }
     },
     // Candidate payloads carry planning snapshots, but never become canonical
@@ -557,6 +591,16 @@ export function useWorkspace() {
       if (olderCandidate(state.project, candidate)) return;
       snapshotSequence++;
       state.project = { ...state.project, plan_candidate: candidate };
+    },
+    applyPlanningJob: (projectId: string, job: PlanningJobView) => {
+      if (!job?.id || !Number.isInteger(job.write_version) || job.write_version < 0) return;
+      if (state.project?.id !== projectId) {
+        noteSelectionActivity(projectId);
+        return;
+      }
+      if (olderPlanningJob(state.project, job)) return;
+      snapshotSequence++;
+      state.project = reconcilePlanningJob({ ...state.project, planning_job: job });
     },
     appendMessage: (projectId: string, message: Message) => {
       if (

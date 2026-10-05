@@ -118,12 +118,23 @@ class ProjectService:
             from ..infrastructure.plan_candidates import CandidateStore
             store = CandidateStore(self.db)
             record = store.latest(project_id)
+            from ..infrastructure.plan_jobs import PlanningJobStore, start_pins
+            from .plan_jobs import PlanningJobService
+            result["planning_job_start_pins"] = start_pins(project, record)
+            jobs = PlanningJobStore(self.db)
+            job = jobs.latest(project_id)
+            if job:
+                from types import SimpleNamespace
+                service = PlanningJobService.__new__(PlanningJobService)
+                service.app = SimpleNamespace(db=self.db, unified=SimpleNamespace(store=store))
+                service.store = jobs
+                result["planning_job"] = service.view(job)
             if record:
                 from .plan_recheck import recheck_offer, review_projection
                 offer = recheck_offer(project, record)
                 repair_from = store.repair_phase_offer(project, record) if offer else None
                 record = review_projection(record)
-                record["review_recheck"] = offer
+                record["review_recheck"] = None if record.get("planning_job") else offer
                 record["repair_from"] = repair_from
                 from ..domain.plan_harness import CURRENT_POLICY
                 record["current_harness_policy_version"] = CURRENT_POLICY.version

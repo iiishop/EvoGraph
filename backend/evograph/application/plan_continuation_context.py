@@ -6,6 +6,8 @@ Do not call it from ordinary generator contexts or walk older candidate ancestry
 from collections import Counter
 from copy import deepcopy
 
+from .plan_phase import intent_source_id
+
 _UNIT_FIELDS = ("id", "hash", "state", "contract_count", "existing_text_bytes",
                 "estimated_text_bytes", "depends_on", "holds")
 _PROVENANCE_FIELDS = ("version", "project_id", "source_id", "origin_source_id",
@@ -16,7 +18,7 @@ def _current_completions(record, prior):
     current = record.get("work_units")
     if not isinstance(current, dict) or any((
         current.get("project_id") != prior.get("project_id"),
-        current.get("source_id") != record.get("id"),
+        current.get("source_id") != intent_source_id(record),
         not prior.get("origin_source_id"),
         current.get("origin_source_id") != prior.get("origin_source_id"),
         current.get("manifest_hash") != prior.get("manifest_hash"),
@@ -38,8 +40,20 @@ def prior_pending_intent_context(record, project_id):
     manifest or lineage never silently cancels a previous model proposal.
     """
     prior = record.get("prior_work_units")
-    if (not isinstance(prior, dict) or prior.get("project_id") != project_id
-            or prior.get("source_id") != record.get("resumes_candidate_id")):
+    if not isinstance(prior, dict) or prior.get("project_id") != project_id:
+        return None
+    source_id = record.get("resumes_candidate_id")
+    owner = record.get("prior_work_units_owner")
+    if owner is not None:
+        from .plan_units import _hash
+
+        if (not isinstance(owner, dict)
+                or set(owner) != {"candidate_id", "record_hash", "source_id", "schedule_hash", "job_id"}
+                or owner["candidate_id"] != record.get("resumes_candidate_id")
+                or owner["schedule_hash"] != _hash(prior)):
+            return None
+        source_id = owner["source_id"]
+    if prior.get("source_id") != source_id:
         return None
     completed = _current_completions(record, prior)
     pending = [u for u in prior.get("units", [])
