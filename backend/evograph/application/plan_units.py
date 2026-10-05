@@ -31,6 +31,8 @@ REMOVALS = {"remove_contract": "remove_contract_keys", "remove_slice": "remove_s
             "remove_component": "remove_component_ids"}
 ARCH_FIELDS = architecture_delta_fields()
 UNIT_VERSION = "plan-units/v2"
+BATCH_UNIT_VERSION = "plan-units/bounded-empty-v1"
+FIELD_UNIT_VERSIONS = {UNIT_VERSION, BATCH_UNIT_VERSION}
 ARCHITECTURE_KINDS = {"component", "architecture", "relation", "remove_relation", "remove_component", "retirement"}
 BOOTSTRAP_FIELDS = required_plan_fields(PlanDelta, new=True) & ARCH_FIELDS
 
@@ -500,8 +502,15 @@ def _partition_errors(schedule):
     """Validate the exact, lossless manifest partition before pinning or closure."""
     try:
         version = schedule.get("version")
-        if version not in {"plan-units/v1", UNIT_VERSION}:
+        if version not in {"plan-units/v1", *FIELD_UNIT_VERSIONS}:
             return ["unsupported unit schedule version"]
+        if version == BATCH_UNIT_VERSION or "batch_admission" in schedule:
+            from .plan_batch_policy import batch_schedule_errors
+            if version != BATCH_UNIT_VERSION:
+                return ["bounded batch schedule version changed"]
+            errors = batch_schedule_errors(schedule)
+            if errors:
+                return errors
         manifest = schedule["manifest"]
         if not manifest or schedule["manifest_hash"] != _hash(manifest):
             return ["original manifest hash changed"]
@@ -509,7 +518,7 @@ def _partition_errors(schedule):
             {key: row[key] for key in ("kind", "id", "fields", "uses", "intent")} for row in manifest]})
         if _manifest_rows(args) != manifest:
             return ["original manifest is not canonical"]
-        expected = _unit_changes(manifest) if version == UNIT_VERSION else manifest
+        expected = _unit_changes(manifest) if version in FIELD_UNIT_VERSIONS else manifest
         units = schedule["units"]
         changes = [row for unit in units for row in unit["changes"]]
         expected_map = {row["change_id"]: row for row in expected}
@@ -537,7 +546,7 @@ def _partition_errors(schedule):
             if (checkpoint.get("unit_hash") != unit["hash"] or not checkpoint.get("delta_hash")
                     or not checkpoint.get("candidate_hash")
                     or checkpoint.get("change_ids") != [row["change_id"] for row in unit["changes"]]
-                    or (version == UNIT_VERSION and any(
+                    or (version in FIELD_UNIT_VERSIONS and any(
                         checkpoint.get("submitted_fields", {}).get(row["change_id"]) != row["fields"]
                         for row in unit["changes"] if row["kind"] == "architecture"))):
                 return ["completed unit checkpoint does not cover its assigned changes: " + unit["id"]]
@@ -559,9 +568,17 @@ def schedule_findings(record, project):
     identity = {"manifest_hash": schedule.get("manifest_hash"), "subject": "generation"}
     findings = [{"code": "invalid_unit_schedule", "message": message, **identity}
                 for message in _partition_errors(schedule)]
+    from .plan_batch_policy import COLD_START_EXPERIMENT
+    if (record.get("planning_experiment", {}).get("version") == COLD_START_EXPERIMENT
+            and schedule.get("version") != BATCH_UNIT_VERSION):
+        findings.append({"code": "invalid_unit_schedule", "message": "bounded batch schedule policy was removed", **identity})
     source_id = record.get("turn_id", record.get("id"))
     if not _valid_schedule(record, project, source_id):
         findings.append({"code": "invalid_unit_schedule", "message": "schedule candidate or source is stale", **identity})
+    if schedule.get("version") == BATCH_UNIT_VERSION:
+        from .plan_batch_policy import batch_record_errors, batch_schedule_errors
+        findings.extend({"code": "invalid_unit_schedule", "message": message, **identity}
+                        for message in [*batch_schedule_errors(schedule, project), *batch_record_errors(record, project)])
     if findings:
         return findings
     units = {unit["id"]: unit for unit in schedule["units"]}
@@ -648,12 +665,18 @@ def schedule_plan_changes(ctx, args):
     if old and old.get("source_id") == db.source_id and has_completed_units(old):
         raise ValueError("this request already has completed units; preserve them and rebuild only on a new user direction")
     source = next(s for s in project.plan_contract.sources if s.id == db.source_id)
-    units = _schedule(project, _unit_changes(rows))
+    from .plan_batch_policy import COLD_START_EXPERIMENT, batch_unit, new_batch_admission
+    experiment = db.record.get("planning_experiment", {})
+    admission = (new_batch_admission(project, db.record, rows)
+                 if experiment.get("version") == COLD_START_EXPERIMENT else None)
+    units = [batch_unit(rows)] if admission else _schedule(project, _unit_changes(rows))
     schedule = {"version": UNIT_VERSION, "project_id": project.id, "source_id": db.source_id,
                 "origin_source_id": db.source_id, "input_text": source.text, "manifest": rows,
                 "manifest_hash": manifest_hash, "base_fingerprint": _identity(project),
                 "expected_revision": project.revision, "expected_fingerprint": _identity(project),
                 "units": units, "completed_ids": [], "pending_ids": [u["id"] for u in units], "checkpoints": []}
+    if admission:
+        schedule.update(version=BATCH_UNIT_VERSION, batch_admission=admission)
     record = {**db.record, "work_units": schedule, "unit_request": None}
     if old:
         record["work_unit_schedule_history"] = [*db.record.get("work_unit_schedule_history", []), deepcopy(old)]
@@ -672,6 +695,11 @@ def initial_unit_context(db, *, include_prior_pending=False):
     project = db.get(db.project.id)
     objects = _objects(project)
     result = _initial_unit_context(db, project, objects)
+    if db.record.get("planning_experiment"):
+        from .plan_batch_policy import BATCH_POLICY, COLD_START_EXPERIMENT
+        result["planning_experiment"] = deepcopy(db.record["planning_experiment"])
+        if db.record["planning_experiment"]["version"] == COLD_START_EXPERIMENT:
+            result["packing_policy"] = deepcopy(BATCH_POLICY)
     if include_prior_pending:
         prior = prior_pending_intent_context(db.record, project.id)
         if prior is not None:
@@ -822,6 +850,15 @@ def current_unit_context(db):
         keys |= {_key(use["kind"], use["id"]) for r in unit["changes"] for use in r["uses"]}
         result["current_unit"] = {**deepcopy(unit), "objects": {k: deepcopy(objects[k]) for k in sorted(keys) if k in objects},
                                   "instruction": "Submit exactly these record identities as one complete PlanDelta. Architecture fragments require exactly their assigned top-level fields, each bound to its original manifest hash. Other listed fields are intent/size hints: update any necessary canonical field on those records, including a mechanism contradicted by the new acceptance. Preserve unchanged fields. Uses guides ordering and context, not reference authorization; existing legal objects may be linked, while all references still require compiler validation. Do not add records assigned to later units. Never submit the whole manifest as a full plan."}
+        if schedule.get("version") == BATCH_UNIT_VERSION:
+            from .plan_batch_policy import BATCH_POLICY
+            result["current_unit"]["instruction"] = (
+                "Draft the ONE assigned bounded empty-plan batch as one complete PlanDelta. "
+                "This unit intentionally contains the full admitted manifest, within the recorded policy. "
+                "Preserve its distinct delivery slices; one drafting response does not merge delivery outcomes. "
+                "Use exactly the assigned identities and architecture field atoms; references stay inside admitted definitions. "
+                "Keep exact source IDs/quotes. All compiler, atomic checkpoint and independent review checks apply.")
+            result["current_unit"]["packing_policy"] = deepcopy(BATCH_POLICY)
         result["completed_contract_mechanisms"] = [item for item in result["completed_contract_mechanisms"]
                                                   if _key("contract", item["key"]) not in keys]
         architecture = result["current_unit"]["objects"].get("architecture:architecture")
@@ -942,6 +979,12 @@ def prepare_unit_request(db):
             "manifest_hash": db.record["work_units"]["manifest_hash"],
             "revision": project.revision, "planning_fingerprint": _identity(project),
             "candidate_hash": candidate_hash(project), "accepted_delta_hash": None} if unit else None)
+    if pin and db.record["work_units"].get("version") == BATCH_UNIT_VERSION:
+        from .plan_batch_policy import BATCH_POLICY
+        from .plan_budget import encoded_size
+        if encoded_size(current_unit_context(db)) > BATCH_POLICY["bounds"]["context_bytes"]:
+            raise ValueError("bounded batch actual context bytes exceed policy")
+        pin["batch_admission"] = deepcopy(db.record["work_units"]["batch_admission"])
     record = {**db.record, "unit_request": pin}
     db.record = db.store.save(record)
     return current_unit_context(db)
@@ -984,7 +1027,7 @@ def validate_unit_delta(db, args):
     project = db.get(db.project.id)
     args = PlanDelta.model_validate(args.model_dump(exclude_unset=True) if isinstance(args, PlanDelta) else args)
     schedule, pin = db.record.get("work_units"), db.record.get("unit_request")
-    raw, actual = _delta_rows(args, fragmented=bool(schedule and schedule.get("version") == UNIT_VERSION))
+    raw, actual = _delta_rows(args, fragmented=bool(schedule and schedule.get("version") in FIELD_UNIT_VERSIONS))
     if not schedule or not pin or pin.get("source_id") != db.source_id or schedule.get("source_id") != db.source_id:
         raise ValueError("schedule changes first; only the exact unit assigned before this provider request may be submitted")
     findings = schedule_findings(db.record, project)
@@ -992,8 +1035,11 @@ def validate_unit_delta(db, args):
         raise ValueError("invalid unit schedule: " + "; ".join(f["message"] for f in findings))
     unit = next((u for u in schedule["units"] if u["id"] == pin.get("unit_id")), None)
     if (not unit or unit["hash"] != pin.get("unit_hash")
-            or (schedule.get("version") == UNIT_VERSION and pin.get("manifest_hash") != schedule["manifest_hash"])):
+            or (schedule.get("version") in FIELD_UNIT_VERSIONS and pin.get("manifest_hash") != schedule["manifest_hash"])):
         raise ValueError("assigned unit is unavailable or held; unit or manifest pin changed")
+    if schedule.get("version") == BATCH_UNIT_VERSION:
+        from .plan_batch_policy import validate_batch_delta
+        validate_batch_delta(schedule, pin, raw, actual)
     if pin.get("accepted_delta_hash"):
         if pin["accepted_delta_hash"] != _hash(raw) or not _valid_schedule(db.record, project, db.source_id):
             raise ValueError("this request already completed its unit; it cannot write the next unseen unit")
@@ -1010,7 +1056,7 @@ def validate_unit_delta(db, args):
     for key, row in actual.items():
         wanted = expected[key]
         kind = wanted["kind"]
-        if kind == "architecture" and schedule.get("version") == UNIT_VERSION and row["fields"] != set(wanted["fields"]):
+        if kind == "architecture" and schedule.get("version") in FIELD_UNIT_VERSIONS and row["fields"] != set(wanted["fields"]):
             raise ValueError("submit exactly assigned architecture fields: " + key)
         # Routing fields estimate work; they cannot lock an acceptance change
         # away from its own mechanism. The assigned record identity stays fixed.
@@ -1062,8 +1108,16 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
         "candidate_hash": candidate_hash(new_project), "delta_hash": digest,
         "change_ids": [r["change_id"] for r in unit["changes"]],
         "submitted_fields": {key: sorted(row["fields"]) for key, row in _delta_rows(
-            PlanDelta.model_validate(raw), fragmented=schedule.get("version") == UNIT_VERSION)[1].items()},
+            PlanDelta.model_validate(raw), fragmented=schedule.get("version") in FIELD_UNIT_VERSIONS)[1].items()},
         "changed": _identity(old_project) != _identity(new_project)})
+    if schedule.get("version") == BATCH_UNIT_VERSION:
+        from .plan_batch_policy import batch_checkpoint_provenance, batch_record_errors
+        schedule["checkpoints"][-1].update(
+            batch_admission_hash=_hash(schedule["batch_admission"]),
+            **batch_checkpoint_provenance(old_project, new_project))
+        errors = batch_record_errors(result, new_project)
+        if errors:
+            raise ValueError("invalid bounded batch checkpoint: " + "; ".join(errors))
     # A successful compiler checkpoint resolves this unit's transport/schema
     # rejections only. Never clear semantic findings because a field was touched.
     findings = result.get("report", {}).get("findings", [])
@@ -1100,6 +1154,10 @@ def all_units_complete(record):
 def resume_unit_schedule(previous, candidate, new_source_id, content):
     """Exact-input continuation only; keep original provenance and completed units."""
     old = previous.get("work_units")
+    if old and old.get("version") == BATCH_UNIT_VERSION:
+        from .plan_batch_policy import batch_schedule_errors
+        if _partition_errors(old) or batch_schedule_errors(old):
+            return None
     if not old or old.get("input_text") != content:
         return None
     original = candidate.model_copy(deep=True)
@@ -1152,3 +1210,17 @@ MANIFEST_TOOL = ToolSpec(
     "only the assigned unit in the NEXT model request; no read-scope loop. Existing compiler checks remain mandatory.",
     SchedulePlanChanges, schedule_plan_changes, "安排小型规划工作单元", "inspect", None,
 )
+
+
+def manifest_tool_for(record):
+    from dataclasses import replace
+
+    from .plan_batch_policy import COLD_START_EXPERIMENT
+    if record.get("planning_experiment", {}).get("version") != COLD_START_EXPERIMENT:
+        return MANIFEST_TOOL
+    return replace(MANIFEST_TOOL, description=MANIFEST_TOOL.description.replace(
+        "The server targets <=3-contract/6-KiB-existing-text units, isolating indivisible singleton records "
+        "and holding oversized multi-record atomic groups. Submit ",
+        "This explicit empty-plan experiment admits one complete closed new-plan batch only within "
+        "32 identities, 6 delivery slices, 8 contracts and the supplied field/reference/byte bounds. "
+        "Declare ALL actual graph references; partial or over-bound manifests stop the experiment. Submit "))

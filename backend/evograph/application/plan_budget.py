@@ -93,6 +93,14 @@ class BudgetedSettings:
             options["request_controls"] = self.request_controls
         request_bytes = encoded_size(request)
         budget = self.metrics.get("budget", {})
+        # A lower experiment envelope is additional to the unchanged product caps.
+        from .plan_batch_policy import EXPERIMENT_LIMITS
+        if self.metrics.get("planning_experiment") is not None:
+            budget = {**budget, **{key: min(budget.get(key, limit), limit)
+                                  for key, limit in EXPERIMENT_LIMITS.items()}}
+            budget["max_review_request_bytes"] = min(
+                budget.get("max_review_request_bytes", budget["max_request_bytes"]),
+                EXPERIMENT_LIMITS["max_request_bytes"])
         request_limit = budget.get("max_request_bytes", 98304)
         if self.purpose == "semantic_review":
             request_limit = budget.get("max_review_request_bytes", request_limit)
@@ -105,6 +113,10 @@ class BudgetedSettings:
             rejection = ("request_input_limit", f"完整{label}输入 {request_bytes} B 超过单请求预算 {request_limit} B；候选保留，未截断或发送")
         elif self.metrics.get("input_bytes", 0) + request_bytes > budget.get("max_total_input_bytes", 262144):
             rejection = ("total_input_limit", "累计输入已达到本轮预算，候选保留，未发送额外模型请求")
+        from .plan_batch_policy import request_stage_rejection
+        experiment_rejection = request_stage_rejection(self.metrics, tools, self.purpose)
+        if rejection is None and experiment_rejection:
+            rejection = (experiment_rejection, "有界实验阶段已停止；未发送重试或额外模型请求")
         if rejection:
             self.metrics.setdefault("admission_rejections", []).append({
                 "purpose": self.purpose, "input_bytes": request_bytes,
