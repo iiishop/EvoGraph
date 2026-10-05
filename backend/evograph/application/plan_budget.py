@@ -94,13 +94,20 @@ class BudgetedSettings:
         request_bytes = encoded_size(request)
         budget = self.metrics.get("budget", {})
         # A lower experiment envelope is additional to the unchanged product caps.
-        from .plan_batch_policy import EXPERIMENT_LIMITS
-        if self.metrics.get("planning_experiment") is not None:
+        from .plan_batch_policy import EXPERIMENT_LIMITS, experiment_policy
+        selected = self.metrics.get("planning_experiment")
+        if selected is not None:
+            # Resolve trusted constants, not caller-provided limits. The dispatch
+            # gate below also checks the complete persisted policy for tampering.
+            try:
+                limits = experiment_policy(selected["version"])["limits"]
+            except (KeyError, TypeError, ValueError):
+                limits = EXPERIMENT_LIMITS
             budget = {**budget, **{key: min(budget.get(key, limit), limit)
-                                  for key, limit in EXPERIMENT_LIMITS.items()}}
+                                  for key, limit in limits.items()}}
             budget["max_review_request_bytes"] = min(
                 budget.get("max_review_request_bytes", budget["max_request_bytes"]),
-                EXPERIMENT_LIMITS["max_request_bytes"])
+                limits["max_request_bytes"])
         request_limit = budget.get("max_request_bytes", 98304)
         if self.purpose == "semantic_review":
             request_limit = budget.get("max_review_request_bytes", request_limit)

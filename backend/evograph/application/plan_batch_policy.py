@@ -8,6 +8,7 @@ from .plan_budget import encoded_size
 
 COLD_START_EXPERIMENT = "bounded-empty-plan/v1"
 REPAIR_EXPERIMENT = "bounded-single-unit-repair/v1"
+SAVED_UNITS_EXPERIMENT = "bounded-saved-units/v1"
 BATCH_POLICY = {
     "version": COLD_START_EXPERIMENT,
     "bounds": {"operations": 32, "slices": 6, "contracts": 8, "field_atoms": 64,
@@ -24,10 +25,14 @@ EXPERIMENT_LIMITS = {"max_calls": 3, "max_request_bytes": 163840,
 
 
 def experiment_policy(name):
-    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT}:
+    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT, SAVED_UNITS_EXPERIMENT}:
         raise ValueError("unsupported bounded planning experiment")
-    return {"version": name, "limits": deepcopy(EXPERIMENT_LIMITS),
-            "request_sequence": ["router", "generation", "semantic_review"]}
+    limits = deepcopy(EXPERIMENT_LIMITS)
+    sequence = ["router", "generation", "semantic_review"]
+    if name == SAVED_UNITS_EXPERIMENT:
+        limits["max_calls"] = 4
+        sequence = ["generation", "generation", "generation", "semantic_review"]
+    return {"version": name, "limits": limits, "request_sequence": sequence}
 
 
 def empty_planning_base(project):
@@ -171,13 +176,33 @@ def select_experiment(argument, project, previous, resume):
         if resume and previous.get("planning_experiment"):
             raise ValueError("saved experimental candidate needs an explicit supported stage")
         return None
-    if (not isinstance(argument, dict) or set(argument) != {"project_id", "version"}
+    keys = {"project_id", "version"}
+    if isinstance(argument, dict) and argument.get("version") == SAVED_UNITS_EXPERIMENT:
+        keys |= {"predecessor_candidate_id", "schedule_hash"}
+    if (not isinstance(argument, dict) or set(argument) != keys
             or argument["project_id"] != project.id):
         raise ValueError("planning experiment project/stage mismatch")
     selected = {"project_id": project.id, **experiment_policy(argument["version"])}
     if selected["version"] == COLD_START_EXPERIMENT:
         if resume or not empty_planning_base(project):
             raise ValueError("cold-start experiment requires a new strictly empty planning base")
+    elif selected["version"] == SAVED_UNITS_EXPERIMENT:
+        from .plan_units import _hash, schedule_findings
+        schedule = previous.get("work_units", {}) if previous else {}
+        if (not resume or previous.get("id") != argument["predecessor_candidate_id"]
+                or _hash(schedule) != argument["schedule_hash"]
+                or previous.get("planning_experiment") != {
+                    "project_id": project.id, **experiment_policy(REPAIR_EXPERIMENT)}
+                or previous.get("status") != "needs_resolution"
+                or previous.get("generation_pause_reason") != "schedule_admission_blocked"
+                or previous.get("metrics", {}).get("provider_calls") != 1
+                or previous.get("compilations") or previous.get("reviews") or previous.get("harness_run")
+                or schedule.get("version") != "plan-units/v2"
+                or schedule.get("completed_ids") != [] or schedule.get("checkpoints") != []
+                or len(schedule.get("units", [])) != 3
+                or any(u.get("state") != "pending" for u in schedule.get("units", []))
+                or schedule_findings(previous, Project.model_validate(previous["project"]))):
+            raise ValueError("saved-units experiment requires the pinned stopped repair and three valid pending units")
     else:
         if (not resume or previous.get("planning_experiment", {}).get("version") != COLD_START_EXPERIMENT
                 or not previous.get("reviews") or not previous.get("report", {}).get("semantic_batch", {}).get("issues")):
@@ -197,6 +222,11 @@ def request_stage_rejection(metrics, tools, purpose):
         expected = {"project_id": selected["project_id"], **experiment_policy(selected["version"])}
         if selected != expected:
             return "experiment_policy_changed"
+        if selected["version"] == SAVED_UNITS_EXPERIMENT and (
+                metrics.get("experiment_stopped") or any(
+                    call.get("error_type") or call.get("termination_reason") != "stream_end"
+                    for call in metrics.get("calls", []))):
+            return "experiment_first_failure"
         index = metrics["provider_calls"]
         if index >= selected["limits"]["max_calls"]:
             return "experiment_call_limit"

@@ -34,6 +34,7 @@ from .plan_repair_context import (
     auto_repair_context,
     build_repair_agenda,
     explicit_repair_agenda,
+    saved_units_repair_context,
 )
 from .plan_review import (
     CHECKER_VERSION,
@@ -397,10 +398,18 @@ class UnifiedPlanningService:
             if previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] != before.revision:
                 raise ConflictError("保留的候选基于旧正式版本，未自动合并或覆盖；请先查看并放弃旧候选，再从当前方案重新生成")
             resume = previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] == before.revision
-            from .plan_batch_policy import REPAIR_EXPERIMENT, select_experiment
+            from .plan_batch_policy import (
+                REPAIR_EXPERIMENT,
+                SAVED_UNITS_EXPERIMENT,
+                select_experiment,
+            )
             selected_experiment = select_experiment(experiment, before, previous, resume)
+            saved_units_stage = bool(selected_experiment and selected_experiment["version"] == SAVED_UNITS_EXPERIMENT)
             repair_agenda = (explicit_repair_agenda(before, previous)
                 if selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT else None)
+            saved_units_admission = None
+            if saved_units_stage:
+                repair_agenda, saved_units_admission = saved_units_repair_context(before, previous, self.store)
             candidate = Project.model_validate(previous["project"]) if resume else before.model_copy(deep=True)
             candidate.question = before.question
             bootstrap_contract(candidate)
@@ -449,6 +458,14 @@ class UnifiedPlanningService:
                 record["planning_experiment"] = selected_experiment
             if resume and not (selected_experiment and selected_experiment["version"] == REPAIR_EXPERIMENT):
                 resumed_units = resume_unit_schedule(previous, candidate, turn_id, content)
+                if saved_units_stage:
+                    # Fail before saving a new candidate; never fall back to a
+                    # router or reassess/repack the frozen three-unit schedule.
+                    if (resumed_units is None or resumed_units["units"] != previous["work_units"]["units"]
+                            or schedule_findings({**record, "work_units": resumed_units}, candidate)):
+                        raise ValueError("saved-units requires exact-input unchanged schedule continuation")
+                    record["saved_units_admission"] = saved_units_admission
+                    record["repair_agenda"] = repair_agenda
                 if resumed_units is not None:
                     record["work_units"] = resumed_units
             record = self.store.save(record)
@@ -461,6 +478,7 @@ class UnifiedPlanningService:
             facade.agent.system_prompt = ROUTER
             facade.agent.pre_resolved = resolved
             facade.agent.finish_review = False
+            facade.agent.defer_single_tool_response = saved_units_stage
             facade.agent.finalize_after_turn = False
             facade.agent.max_rounds, facade.agent.max_calls = 4, 16
             facade.agent.initial_context = lambda p: {
@@ -493,7 +511,8 @@ class UnifiedPlanningService:
                                  "message": item["payload"].get("error", "规划调度清单无效")}
                                 for item in failed_manifests)
                 if selected_experiment and not findings and stage.record.get("work_units"):
-                    if len(stage.record["work_units"]["units"]) != 1:
+                    expected_units = 3 if saved_units_stage else 1
+                    if len(stage.record["work_units"]["units"]) != expected_units:
                         findings.append({"code": "experiment_requires_single_unit", "subject": "generation",
                                          "message": "有界实验只允许一个完整单元；未发送生成请求"})
                 if not findings:
@@ -545,6 +564,7 @@ class UnifiedPlanningService:
                     remaining = min(remaining, selected_experiment["limits"]["max_calls"] - metrics["provider_calls"])
                     if any(item["status"] == "failed" for item in tool_results):
                         stage.record["generation_pause_reason"] = "experiment_first_failure"
+                        metrics["experiment_stopped"] = "experiment_first_failure"
                         return None
                 manifests = [item for item in tool_results if item["name"] == "schedule_plan_changes"]
                 # A later successful call may replace an earlier invalid manifest
@@ -637,9 +657,9 @@ class UnifiedPlanningService:
                     else:
                         facade.agent.system_prompt = generator_prompt(stage.record)
                         prepare_unit_request(stage)
-                        facade.agent.initial_context = lambda project: {
+                        facade.agent.initial_context = lambda project: auto_repair_context({
                             **current_unit_context(stage),
-                            "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
+                            "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}, repair_agenda)
                         facade.agent.tool_registry = {"submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"]}
                     facade.agent.synthesis_registry = facade.agent.tool_registry
                     if route == "generator" and current_unit_context(stage).get("current_unit") is None:

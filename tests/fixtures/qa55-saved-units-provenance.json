@@ -1,0 +1,17 @@
+{
+  "source": "QA55 stopped repair snapshot 2026-10-05T11:37:17Z",
+  "immutable_code_base": "2d9d35fcc91b0726fff20474e30b316b6e3800d1",
+  "scope": "Exact historical input for offline admission/provenance replay; no new model outcome or credentials",
+  "files": {
+    "project.json": {
+      "sha256": "20ac6c5bd40b1abc8296d8929e31705f510c473e6403697ca4ca8962a007174e",
+      "bytes": 1613,
+      "compressed_file": "qa55-saved-units-project.json.gz"
+    },
+    "candidates.json": {
+      "sha256": "31d3cba9409d8285b36c9b0f808c662d8bfd1f96831f7f0e72dddbc2680925aa",
+      "bytes": 791020,
+      "compressed_file": "qa55-saved-units-candidates.json.gz"
+    }
+  }
+}

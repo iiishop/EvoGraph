@@ -68,6 +68,87 @@ def explicit_repair_agenda(before, record):
     return agenda
 
 
+
+def saved_units_repair_context(before, previous, store):
+    """Validate the one stopped-router hop, then replay its original full review.
+
+    The stopped candidate has no review of its own. Never promote inherited
+    findings into a certificate or relax explicit_repair_agenda's sealed checks.
+    """
+    from ..domain.plan_contracts import candidate_hash
+    from .plan_batch_policy import COLD_START_EXPERIMENT, experiment_policy
+    from .plan_units import (
+        SchedulePlanChanges,
+        _hash,
+        _identity,
+        _manifest_rows,
+        _schedule_view,
+        all_units_complete,
+    )
+
+    reviewed = store.get(previous["resumes_candidate_id"])
+    old = Project.model_validate(reviewed["project"])
+    candidate = Project.model_validate(previous["project"])
+    if (reviewed.get("project_id") != before.id or previous.get("project_id") != before.id
+            or old.id != before.id or candidate.id != before.id
+            or reviewed.get("base_revision") != before.revision
+            or previous.get("base_revision") != before.revision
+            or reviewed.get("planning_experiment") != {
+                "project_id": before.id, **experiment_policy(COLD_START_EXPERIMENT)}
+            or reviewed.get("candidate_hash") != candidate_hash(old)
+            or previous.get("candidate_hash") != candidate_hash(candidate)
+            or not all_units_complete(reviewed)
+            or previous.get("prior_work_units") != reviewed.get("work_units")
+            or previous.get("generation_progress", {}).get("checkpoint_count")
+                != reviewed.get("generation_progress", {}).get("checkpoint_count")
+            or candidate.revision != old.revision):
+        raise ValueError("saved-units review lineage changed")
+    agenda = explicit_repair_agenda(before, reviewed)
+    # The one allowed new source records the repair request, not planning work.
+    # Existing source content/evidence stays exact; only audit activity/message
+    # identity is excluded by the scheduler's established planning identity.
+    sources = candidate.plan_contract.sources
+    if (len(sources) != len(old.plan_contract.sources) + 1
+            or [s.id for s in sources[:-1]] != [s.id for s in old.plan_contract.sources]
+            or sources[-1].id != previous["id"] or sources[-1].origin != "user"
+            or sources[-1].text != previous["input"] or sources[-1].evidence
+            or sources[-1].reference_context != previous["reference_context"]):
+        raise ValueError("saved-units repair source lineage changed")
+    candidate.plan_contract.sources = sources[:-1]
+    if _identity(candidate) != _identity(old):
+        raise ValueError("saved-units planning changed since the verified review")
+    attempts = previous.get("tool_attempts", [])
+    calls = previous.get("metrics", {}).get("calls", [])
+    schedule = previous["work_units"]
+    if (len(calls) != 1 or calls[0].get("purpose") != "generation"
+            or calls[0].get("termination_reason") != "stream_end"
+            or calls[0].get("error_type") or not calls[0].get("normal_stream_end")
+            or previous.get("metrics", {}).get("admission_rejections")
+            or previous.get("work_unit_schedule_history")
+            or len(attempts) != 1 or attempts[0].get("name") != "schedule_plan_changes"
+            or attempts[0].get("status") != "succeeded"
+            or attempts[0].get("source_id") != previous["id"]
+            or attempts[0].get("generation_call") != 1
+            or _manifest_rows(SchedulePlanChanges.model_validate_json(attempts[0]["raw_arguments"]))
+                != schedule["manifest"]
+            or attempts[0].get("payload", {}).get("result", {}).get("schedule") != _schedule_view(schedule)
+            or schedule.get("origin_source_id") != previous["id"]
+            or schedule.get("input_text") != previous["input"]
+            or schedule.get("base_fingerprint") != schedule.get("expected_fingerprint")
+            or {f.get("code") for f in previous.get("schedule_admission_findings", [])}
+                != {"experiment_requires_single_unit"}):
+        raise ValueError("saved-units original router manifest or stop evidence changed")
+    return agenda, {
+        "predecessor_candidate_id": previous["id"],
+        "predecessor_candidate_hash": previous["candidate_hash"],
+        "schedule_hash": _hash(schedule), "manifest_hash": schedule["manifest_hash"],
+        "pending_ids": list(schedule["pending_ids"]),
+        "unit_hashes": [unit["hash"] for unit in schedule["units"]],
+        "reviewed_candidate_id": reviewed["id"], "reviewed_candidate_hash": reviewed["candidate_hash"],
+        "review_run_id": agenda["run_id"], "review_snapshot_id": agenda["snapshot_id"],
+        "repair_agenda_hash": _hash(agenda),
+    }
+
 def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
     """Project required, completed, policy-unsatisfied checks, without truncation.
 

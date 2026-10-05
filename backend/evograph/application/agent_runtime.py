@@ -84,6 +84,9 @@ class AgentRuntime:
         # Optional staged-planner seam. Return fresh messages after a completed
         # tool batch; the coordinator owns its snapshot, phase and model budget.
         self.round_context = None
+        # Explicit saved-units opt-in only. Buffer a complete response before
+        # admitting its sole tool; ordinary streamed execution stays unchanged.
+        self.defer_single_tool_response = False
 
     def turn_result(self, project_id: str, turn_id: str) -> dict:
         # Read activity first: a completion racing the event read may cause one
@@ -348,7 +351,8 @@ class AgentRuntime:
                                     self.round_context is not None
                                     and call["name"] == "validate_candidate"
                                 )
-                                if spec and call["execution"] is None and not defer_validation:
+                                if (spec and call["execution"] is None and not defer_validation
+                                        and not self.defer_single_tool_response):
                                     try:
                                         complete = isinstance(json.loads(call["arguments"]), dict)
                                     except ValueError:
@@ -380,6 +384,11 @@ class AgentRuntime:
                             # would strand this generator and its project lock.
                             if not round_interrupted:
                                 raise
+                if self.defer_single_tool_response and (
+                        len(calls) != 1 or any(type(index) is not int or index != 0 for index in calls)
+                        or calls[0]["name"] not in {"submit_plan_delta", "ask_user"}):
+                    raise ValueError("saved-units response rejected: exactly one index-0 submit_plan_delta "
+                                     "or ask_user is required; no tool from this response was executed")
                 if saved_message and compact_snapshots:
                     yield {
                         "type": "message_saved",
