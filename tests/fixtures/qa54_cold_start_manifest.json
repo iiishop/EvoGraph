@@ -1,0 +1,804 @@
+{
+  "description": "Frozen live QA54 router manifest; deployment slice has no owned contract and must remain held. No provider values or acceptance are synthesized.",
+  "source_sha256": "a6bcedaae53ec4959b385efea3b488309a074908270e07801c7767ff44df3f71",
+  "manifest": [
+    {
+      "kind": "requirement",
+      "id": "req-customer-mobile-self-booking",
+      "fields": [
+        "kind",
+        "quote",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "顾客在手机网页上选择服务与时间并留下联系方式完成预约",
+      "change_id": "requirement:req-customer-mobile-self-booking"
+    },
+    {
+      "kind": "requirement",
+      "id": "req-staff-view-adjust-appointments",
+      "fields": [
+        "kind",
+        "quote",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "店员可查看并调整已有预约",
+      "change_id": "requirement:req-staff-view-adjust-appointments"
+    },
+    {
+      "kind": "requirement",
+      "id": "req-technician-no-double-booking",
+      "fields": [
+        "kind",
+        "quote",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "同一技师同一时段不得被排入两单，需在占用时校验",
+      "change_id": "requirement:req-technician-no-double-booking"
+    },
+    {
+      "kind": "process_constraint",
+      "id": "pc-no-online-payment-now",
+      "fields": [
+        "quote",
+        "rule",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "当前阶段不接入线上支付，仅预留后续扩展位置",
+      "change_id": "process_constraint:pc-no-online-payment-now"
+    },
+    {
+      "kind": "process_constraint",
+      "id": "pc-single-developer-small-server",
+      "fields": [
+        "quote",
+        "rule",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "单开发者维护、单台小服务器部署，控制运维与依赖复杂度",
+      "change_id": "process_constraint:pc-single-developer-small-server"
+    },
+    {
+      "kind": "process_constraint",
+      "id": "pc-six-technicians-40-orders",
+      "fields": [
+        "quote",
+        "rule",
+        "source_id"
+      ],
+      "uses": [],
+      "intent": "规模基线为6位技师、每日约40单，避免过度设计",
+      "change_id": "process_constraint:pc-six-technicians-40-orders"
+    },
+    {
+      "kind": "slice",
+      "id": "slice-m1-customer-booking-mvp",
+      "fields": [
+        "intent",
+        "scope",
+        "title"
+      ],
+      "uses": [],
+      "intent": "首个可交付切片：顾客手机自助选服务与时间、留联系方式并生成预约",
+      "change_id": "slice:slice-m1-customer-booking-mvp"
+    },
+    {
+      "kind": "slice",
+      "id": "slice-m2-staff-console",
+      "fields": [
+        "intent",
+        "scope",
+        "title",
+        "dependencies"
+      ],
+      "uses": [
+        {
+          "field": "dependencies",
+          "kind": "slice",
+          "id": "slice-m1-customer-booking-mvp"
+        }
+      ],
+      "intent": "第二个切片：店员查看与调整预约，调整仍受技师时段互斥约束",
+      "change_id": "slice:slice-m2-staff-console"
+    },
+    {
+      "kind": "slice",
+      "id": "slice-m3-single-server-release",
+      "fields": [
+        "intent",
+        "scope",
+        "title",
+        "dependencies"
+      ],
+      "uses": [
+        {
+          "field": "dependencies",
+          "kind": "slice",
+          "id": "slice-m1-customer-booking-mvp"
+        }
+      ],
+      "intent": "第三个切片：部署到单台小服务器并建立最小运维基线",
+      "change_id": "slice:slice-m3-single-server-release"
+    },
+    {
+      "kind": "component",
+      "id": "comp-customer-booking-web",
+      "fields": [
+        "description",
+        "label"
+      ],
+      "uses": [],
+      "intent": "新增组件：顾客手机网页预约界面（选服务、选时间、填联系方式）",
+      "change_id": "component:comp-customer-booking-web"
+    },
+    {
+      "kind": "component",
+      "id": "comp-staff-console-web",
+      "fields": [
+        "description",
+        "label"
+      ],
+      "uses": [],
+      "intent": "新增组件：店员查看与调整预约的管理界面",
+      "change_id": "component:comp-staff-console-web"
+    },
+    {
+      "kind": "component",
+      "id": "comp-booking-scheduling-service",
+      "fields": [
+        "description",
+        "label"
+      ],
+      "uses": [],
+      "intent": "新增组件：预约与排班服务，集中校验技师时段互斥",
+      "change_id": "component:comp-booking-scheduling-service"
+    },
+    {
+      "kind": "component",
+      "id": "comp-appointment-store",
+      "fields": [
+        "description",
+        "label"
+      ],
+      "uses": [],
+      "intent": "新增组件：预约与技师占用的持久化存储",
+      "change_id": "component:comp-appointment-store"
+    },
+    {
+      "kind": "relation",
+      "id": "[\"comp-customer-booking-web\",\"comp-booking-scheduling-service\",\"调用\"]",
+      "fields": [
+        "label",
+        "source",
+        "target"
+      ],
+      "uses": [
+        {
+          "field": "source",
+          "kind": "component",
+          "id": "comp-customer-booking-web"
+        },
+        {
+          "field": "target",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        }
+      ],
+      "intent": "顾客预约界面须经由预约排班服务提交预约，不得直连存储",
+      "change_id": "relation:[\"comp-customer-booking-web\",\"comp-booking-scheduling-service\",\"调用\"]"
+    },
+    {
+      "kind": "relation",
+      "id": "[\"comp-staff-console-web\",\"comp-booking-scheduling-service\",\"调用\"]",
+      "fields": [
+        "label",
+        "source",
+        "target"
+      ],
+      "uses": [
+        {
+          "field": "source",
+          "kind": "component",
+          "id": "comp-staff-console-web"
+        },
+        {
+          "field": "target",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        }
+      ],
+      "intent": "店员调整预约须走同一互斥校验路径，保证两端规则一致",
+      "change_id": "relation:[\"comp-staff-console-web\",\"comp-booking-scheduling-service\",\"调用\"]"
+    },
+    {
+      "kind": "relation",
+      "id": "[\"comp-booking-scheduling-service\",\"comp-appointment-store\",\"读写\"]",
+      "fields": [
+        "label",
+        "source",
+        "target"
+      ],
+      "uses": [
+        {
+          "field": "source",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        },
+        {
+          "field": "target",
+          "kind": "component",
+          "id": "comp-appointment-store"
+        }
+      ],
+      "intent": "预约存储为排班服务的唯一写入方，作为互斥校验的事实来源",
+      "change_id": "relation:[\"comp-booking-scheduling-service\",\"comp-appointment-store\",\"读写\"]"
+    },
+    {
+      "kind": "contract",
+      "id": "contract-customer-create-appointment",
+      "fields": [
+        "statement",
+        "mechanism",
+        "owner",
+        "requirement_ids",
+        "component_ids"
+      ],
+      "uses": [
+        {
+          "field": "owner",
+          "kind": "slice",
+          "id": "slice-m1-customer-booking-mvp"
+        },
+        {
+          "field": "requirement_ids",
+          "kind": "requirement",
+          "id": "req-customer-mobile-self-booking"
+        },
+        {
+          "field": "requirement_ids",
+          "kind": "requirement",
+          "id": "req-technician-no-double-booking"
+        },
+        {
+          "field": "component_ids",
+          "kind": "component",
+          "id": "comp-customer-booking-web"
+        },
+        {
+          "field": "component_ids",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        }
+      ],
+      "intent": "定义顾客提交预约的对外契约：服务/时间/联系方式入参、技师互斥失败结果",
+      "change_id": "contract:contract-customer-create-appointment"
+    },
+    {
+      "kind": "contract",
+      "id": "contract-staff-adjust-appointment",
+      "fields": [
+        "statement",
+        "mechanism",
+        "owner",
+        "requirement_ids",
+        "component_ids"
+      ],
+      "uses": [
+        {
+          "field": "owner",
+          "kind": "slice",
+          "id": "slice-m2-staff-console"
+        },
+        {
+          "field": "requirement_ids",
+          "kind": "requirement",
+          "id": "req-staff-view-adjust-appointments"
+        },
+        {
+          "field": "requirement_ids",
+          "kind": "requirement",
+          "id": "req-technician-no-double-booking"
+        },
+        {
+          "field": "component_ids",
+          "kind": "component",
+          "id": "comp-staff-console-web"
+        },
+        {
+          "field": "component_ids",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        }
+      ],
+      "intent": "定义店员查看/调整预约契约，复用同一技师时段互斥判定",
+      "change_id": "contract:contract-staff-adjust-appointment"
+    },
+    {
+      "kind": "architecture",
+      "id": "architecture",
+      "fields": [
+        "architecture_summary",
+        "technologies",
+        "architecture_groups",
+        "architecture_milestone_ids",
+        "decisions",
+        "risks"
+      ],
+      "uses": [
+        {
+          "field": "architecture_groups",
+          "kind": "component",
+          "id": "comp-customer-booking-web"
+        },
+        {
+          "field": "architecture_groups",
+          "kind": "component",
+          "id": "comp-staff-console-web"
+        },
+        {
+          "field": "architecture_groups",
+          "kind": "component",
+          "id": "comp-booking-scheduling-service"
+        },
+        {
+          "field": "architecture_groups",
+          "kind": "component",
+          "id": "comp-appointment-store"
+        },
+        {
+          "field": "architecture_milestone_ids",
+          "kind": "slice",
+          "id": "slice-m1-customer-booking-mvp"
+        },
+        {
+          "field": "architecture_milestone_ids",
+          "kind": "slice",
+          "id": "slice-m2-staff-console"
+        },
+        {
+          "field": "architecture_milestone_ids",
+          "kind": "slice",
+          "id": "slice-m3-single-server-release"
+        }
+      ],
+      "intent": "给出这一阶段的整体架构、技术选型与分组，并挂接三个交付里程碑",
+      "change_id": "architecture:architecture"
+    },
+    {
+      "kind": "target",
+      "id": "target",
+      "fields": [
+        "target"
+      ],
+      "uses": [],
+      "intent": "声明目标态：6技师小店、手机自助预约、店员可调整、单服务器部署",
+      "change_id": "target:target"
+    }
+  ],
+  "legacy_units": [
+    {
+      "id": "unit-001",
+      "state": "pending",
+      "changes": [
+        {
+          "kind": "process_constraint",
+          "id": "pc-no-online-payment-now",
+          "fields": [
+            "quote",
+            "rule",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "当前阶段不接入线上支付，仅预留后续扩展位置",
+          "change_id": "process_constraint:pc-no-online-payment-now"
+        },
+        {
+          "kind": "process_constraint",
+          "id": "pc-single-developer-small-server",
+          "fields": [
+            "quote",
+            "rule",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "单开发者维护、单台小服务器部署，控制运维与依赖复杂度",
+          "change_id": "process_constraint:pc-single-developer-small-server"
+        },
+        {
+          "kind": "process_constraint",
+          "id": "pc-six-technicians-40-orders",
+          "fields": [
+            "quote",
+            "rule",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "规模基线为6位技师、每日约40单，避免过度设计",
+          "change_id": "process_constraint:pc-six-technicians-40-orders"
+        },
+        {
+          "kind": "component",
+          "id": "comp-staff-console-web",
+          "fields": [
+            "description",
+            "label"
+          ],
+          "uses": [],
+          "intent": "新增组件：店员查看与调整预约的管理界面",
+          "change_id": "component:comp-staff-console-web"
+        },
+        {
+          "kind": "component",
+          "id": "comp-booking-scheduling-service",
+          "fields": [
+            "description",
+            "label"
+          ],
+          "uses": [],
+          "intent": "新增组件：预约与排班服务，集中校验技师时段互斥",
+          "change_id": "component:comp-booking-scheduling-service"
+        },
+        {
+          "kind": "component",
+          "id": "comp-appointment-store",
+          "fields": [
+            "description",
+            "label"
+          ],
+          "uses": [],
+          "intent": "新增组件：预约与技师占用的持久化存储",
+          "change_id": "component:comp-appointment-store"
+        },
+        {
+          "kind": "target",
+          "id": "target",
+          "fields": [
+            "target"
+          ],
+          "uses": [],
+          "intent": "声明目标态：6技师小店、手机自助预约、店员可调整、单服务器部署",
+          "change_id": "target:target"
+        }
+      ],
+      "existing_text_bytes": 0,
+      "estimated_text_bytes": 3584,
+      "contract_count": 0,
+      "depends_on": [],
+      "holds": [],
+      "hash": "1e5888cd85300e55573269f36bed814a9752d289886b8d9373aaea2db645a1d6"
+    },
+    {
+      "id": "unit-002",
+      "state": "held",
+      "changes": [
+        {
+          "kind": "requirement",
+          "id": "req-customer-mobile-self-booking",
+          "fields": [
+            "kind",
+            "quote",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "顾客在手机网页上选择服务与时间并留下联系方式完成预约",
+          "change_id": "requirement:req-customer-mobile-self-booking"
+        },
+        {
+          "kind": "requirement",
+          "id": "req-staff-view-adjust-appointments",
+          "fields": [
+            "kind",
+            "quote",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "店员可查看并调整已有预约",
+          "change_id": "requirement:req-staff-view-adjust-appointments"
+        },
+        {
+          "kind": "requirement",
+          "id": "req-technician-no-double-booking",
+          "fields": [
+            "kind",
+            "quote",
+            "source_id"
+          ],
+          "uses": [],
+          "intent": "同一技师同一时段不得被排入两单，需在占用时校验",
+          "change_id": "requirement:req-technician-no-double-booking"
+        },
+        {
+          "kind": "slice",
+          "id": "slice-m1-customer-booking-mvp",
+          "fields": [
+            "intent",
+            "scope",
+            "title"
+          ],
+          "uses": [],
+          "intent": "首个可交付切片：顾客手机自助选服务与时间、留联系方式并生成预约",
+          "change_id": "slice:slice-m1-customer-booking-mvp"
+        },
+        {
+          "kind": "slice",
+          "id": "slice-m2-staff-console",
+          "fields": [
+            "intent",
+            "scope",
+            "title",
+            "dependencies"
+          ],
+          "uses": [
+            {
+              "field": "dependencies",
+              "kind": "slice",
+              "id": "slice-m1-customer-booking-mvp"
+            }
+          ],
+          "intent": "第二个切片：店员查看与调整预约，调整仍受技师时段互斥约束",
+          "change_id": "slice:slice-m2-staff-console"
+        },
+        {
+          "kind": "slice",
+          "id": "slice-m3-single-server-release",
+          "fields": [
+            "intent",
+            "scope",
+            "title",
+            "dependencies"
+          ],
+          "uses": [
+            {
+              "field": "dependencies",
+              "kind": "slice",
+              "id": "slice-m1-customer-booking-mvp"
+            }
+          ],
+          "intent": "第三个切片：部署到单台小服务器并建立最小运维基线",
+          "change_id": "slice:slice-m3-single-server-release"
+        },
+        {
+          "kind": "component",
+          "id": "comp-customer-booking-web",
+          "fields": [
+            "description",
+            "label"
+          ],
+          "uses": [],
+          "intent": "新增组件：顾客手机网页预约界面（选服务、选时间、填联系方式）",
+          "change_id": "component:comp-customer-booking-web"
+        },
+        {
+          "kind": "contract",
+          "id": "contract-customer-create-appointment",
+          "fields": [
+            "statement",
+            "mechanism",
+            "owner",
+            "requirement_ids",
+            "component_ids"
+          ],
+          "uses": [
+            {
+              "field": "owner",
+              "kind": "slice",
+              "id": "slice-m1-customer-booking-mvp"
+            },
+            {
+              "field": "requirement_ids",
+              "kind": "requirement",
+              "id": "req-customer-mobile-self-booking"
+            },
+            {
+              "field": "requirement_ids",
+              "kind": "requirement",
+              "id": "req-technician-no-double-booking"
+            },
+            {
+              "field": "component_ids",
+              "kind": "component",
+              "id": "comp-customer-booking-web"
+            },
+            {
+              "field": "component_ids",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            }
+          ],
+          "intent": "定义顾客提交预约的对外契约：服务/时间/联系方式入参、技师互斥失败结果",
+          "change_id": "contract:contract-customer-create-appointment"
+        },
+        {
+          "kind": "contract",
+          "id": "contract-staff-adjust-appointment",
+          "fields": [
+            "statement",
+            "mechanism",
+            "owner",
+            "requirement_ids",
+            "component_ids"
+          ],
+          "uses": [
+            {
+              "field": "owner",
+              "kind": "slice",
+              "id": "slice-m2-staff-console"
+            },
+            {
+              "field": "requirement_ids",
+              "kind": "requirement",
+              "id": "req-staff-view-adjust-appointments"
+            },
+            {
+              "field": "requirement_ids",
+              "kind": "requirement",
+              "id": "req-technician-no-double-booking"
+            },
+            {
+              "field": "component_ids",
+              "kind": "component",
+              "id": "comp-staff-console-web"
+            },
+            {
+              "field": "component_ids",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            }
+          ],
+          "intent": "定义店员查看/调整预约契约，复用同一技师时段互斥判定",
+          "change_id": "contract:contract-staff-adjust-appointment"
+        },
+        {
+          "kind": "architecture",
+          "id": "architecture",
+          "fields": [
+            "architecture_summary",
+            "technologies",
+            "architecture_groups",
+            "architecture_milestone_ids",
+            "decisions",
+            "risks"
+          ],
+          "uses": [
+            {
+              "field": "architecture_groups",
+              "kind": "component",
+              "id": "comp-customer-booking-web"
+            },
+            {
+              "field": "architecture_groups",
+              "kind": "component",
+              "id": "comp-staff-console-web"
+            },
+            {
+              "field": "architecture_groups",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            },
+            {
+              "field": "architecture_groups",
+              "kind": "component",
+              "id": "comp-appointment-store"
+            },
+            {
+              "field": "architecture_milestone_ids",
+              "kind": "slice",
+              "id": "slice-m1-customer-booking-mvp"
+            },
+            {
+              "field": "architecture_milestone_ids",
+              "kind": "slice",
+              "id": "slice-m2-staff-console"
+            },
+            {
+              "field": "architecture_milestone_ids",
+              "kind": "slice",
+              "id": "slice-m3-single-server-release"
+            }
+          ],
+          "intent": "给出这一阶段的整体架构、技术选型与分组，并挂接三个交付里程碑",
+          "change_id": "architecture:architecture"
+        }
+      ],
+      "existing_text_bytes": 0,
+      "estimated_text_bytes": 5120,
+      "contract_count": 2,
+      "depends_on": [
+        "unit-001"
+      ],
+      "holds": [
+        "new slice needs its first covering/owned contract",
+        "hard atomic group exceeds estimated 6 KiB, 3 contracts or 8 operations; held without splitting"
+      ],
+      "hash": "a9b7193374334784ac28ef3e13b22837f796ae48b8b8a3e3ece9fa4f64aeb558"
+    },
+    {
+      "id": "unit-003",
+      "state": "pending",
+      "changes": [
+        {
+          "kind": "relation",
+          "id": "[\"comp-staff-console-web\",\"comp-booking-scheduling-service\",\"调用\"]",
+          "fields": [
+            "label",
+            "source",
+            "target"
+          ],
+          "uses": [
+            {
+              "field": "source",
+              "kind": "component",
+              "id": "comp-staff-console-web"
+            },
+            {
+              "field": "target",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            }
+          ],
+          "intent": "店员调整预约须走同一互斥校验路径，保证两端规则一致",
+          "change_id": "relation:[\"comp-staff-console-web\",\"comp-booking-scheduling-service\",\"调用\"]"
+        },
+        {
+          "kind": "relation",
+          "id": "[\"comp-booking-scheduling-service\",\"comp-appointment-store\",\"读写\"]",
+          "fields": [
+            "label",
+            "source",
+            "target"
+          ],
+          "uses": [
+            {
+              "field": "source",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            },
+            {
+              "field": "target",
+              "kind": "component",
+              "id": "comp-appointment-store"
+            }
+          ],
+          "intent": "预约存储为排班服务的唯一写入方，作为互斥校验的事实来源",
+          "change_id": "relation:[\"comp-booking-scheduling-service\",\"comp-appointment-store\",\"读写\"]"
+        },
+        {
+          "kind": "relation",
+          "id": "[\"comp-customer-booking-web\",\"comp-booking-scheduling-service\",\"调用\"]",
+          "fields": [
+            "label",
+            "source",
+            "target"
+          ],
+          "uses": [
+            {
+              "field": "source",
+              "kind": "component",
+              "id": "comp-customer-booking-web"
+            },
+            {
+              "field": "target",
+              "kind": "component",
+              "id": "comp-booking-scheduling-service"
+            }
+          ],
+          "intent": "顾客预约界面须经由预约排班服务提交预约，不得直连存储",
+          "change_id": "relation:[\"comp-customer-booking-web\",\"comp-booking-scheduling-service\",\"调用\"]"
+        }
+      ],
+      "existing_text_bytes": 0,
+      "estimated_text_bytes": 1536,
+      "contract_count": 0,
+      "depends_on": [
+        "unit-001",
+        "unit-002"
+      ],
+      "holds": [],
+      "hash": "9bbd34c152600f7f03cf034b0834bfbfa85b39fab8b358a9974fb998bc7ba154"
+    }
+  ]
+}

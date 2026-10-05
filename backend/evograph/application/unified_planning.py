@@ -43,9 +43,11 @@ from .plan_units import (
     all_units_complete,
     carry_review_findings,
     current_unit_context,
+    has_completed_units,
     initial_unit_context,
     prepare_unit_request,
     resume_unit_schedule,
+    schedule_findings,
 )
 from .plan_validation import build_validation_receipt
 from .turn_summary import build_turn_summary
@@ -65,12 +67,15 @@ plan text belong in later assigned PlanDelta units, never this manifest. Keep ea
 Call schedule_plan_changes once. The service groups/orders work and supplies exact current-unit text
 later; you must not choose arbitrary large batches or repeat read-authorization calls. If an unavailable
 user-owned product decision is genuinely necessary, ask_user. Unknown technical facts stay unverified.
+Every new delivery slice needs at least one owned acceptance contract in the manifest. Product constraints
+and exclusions belong in requirements; process_constraints apply only to this planning request. When the
+service reports an unexecutable schedule, replace that manifest using its exact diagnostics, without
+weakening the user request, inventing checks or adding unrelated work.
 This only declares planned changes. It cannot certify coverage, semantic correctness, or publication.
 """
 GENERATOR = """You are EvoGraph. Communicate in Chinese. Build or evolve one coherent software plan
-linking the user's outcome, architecture, independently mergeable PR slices and observable acceptance.
-First use schedule_plan_changes exactly once to declare a SHORT ID/relationship/field intent list.
-Do not include acceptance, implementation mechanisms, scopes, or full plan prose in that list.
+linking the user's outcome, architecture, bounded single-coding-agent-session deliveries and observable acceptance.
+The service has already scheduled this request and supplies its current assigned unit.
 The service computes and assigns small atomic work units. During each subsequent request, write ONLY
 that assigned unit using the existing submit_plan_delta schema. Never combine the whole remaining plan
 into one response. Exact unchanged fields remain stored; references to previously saved units are reusable.
@@ -82,6 +87,8 @@ Only changed records are needed. requirements hold exact product-source quotes; 
 statement plus its owner slice, concrete mechanism, requirement/component/prerequisite IDs.
 Work within the server-assigned record IDs. The schedule field list is an intent/size hint, not a lock:
 use canonical field patches to update every necessary part of those records, including their mechanisms.
+Architecture metadata is the explicit exception: submit exactly its assigned field atoms. Other metadata
+fields remain unchanged and may belong to a later unit with prerequisites not yet available.
 Link product delivery contracts to the actual affected component_ids, reusing existing components;
 the compiler derives the owning slice mapping. Do not invent a component merely to satisfy a check.
 Preserve existing legal references. Any existing candidate target may be linked using canonical fields.
@@ -410,12 +417,64 @@ class UnifiedPlanningService:
             stage.record["unit_probe_limit"] = max(0, probe_limit)
             initial_checkpoints = stage.record["generation_progress"]["checkpoint_count"]
 
+            def schedule_admission(project, failed_manifests=()):
+                """One scheduler admission path for new rounds and saved continuations.
+
+                This decides which request can run, never whether a plan may publish.
+                An unexecutable manifest gets at most one router repair before any
+                unit is written; completed checkpoints are never silently repacked.
+                """
+                findings = schedule_findings(stage.record, project) if stage.record.get("work_units") else []
+                findings.extend({"code": "invalid_plan_manifest", "subject": "generation",
+                                 "message": item["payload"].get("error", "规划调度清单无效")}
+                                for item in failed_manifests)
+                if not findings:
+                    old = stage.record.get("schedule_admission_findings", [])
+                    if old:
+                        stage.record.setdefault("resolved_schedule_findings", []).extend(old)
+                        stage.record["schedule_admission_findings"] = []
+                        stage.record["report"]["findings"] = [f for f in stage.record["report"].get("findings", [])
+                            if f.get("code") not in {"work_units_held", "invalid_unit_schedule",
+                                                     "architecture_bootstrap_unavailable", "invalid_plan_manifest"}]
+                        stage.record = self.store.save(stage.record)
+                    return "generator" if stage.record.get("work_units") else "router"
+                stage.record["unit_request"] = None
+                stage.record["schedule_admission_findings"] = findings
+                stage.record.setdefault("schedule_admission_audit", []).append({
+                    "revision": project.revision,
+                    "manifest_hash": (stage.record.get("work_units") or {}).get("manifest_hash"),
+                    "findings": findings,
+                    "admitted_calls": metrics["provider_calls"],
+                })
+                completed = has_completed_units(stage.record.get("work_units") or {})
+                can_repair = (not completed and not stage.record.get("schedule_repair_requests")
+                    and metrics["budget"]["max_calls"] - metrics["provider_calls"] > 1)
+                if can_repair:
+                    stage.record["schedule_repair_requests"] = 1
+                    route = "router"
+                else:
+                    stage.record["generation_pause_reason"] = "schedule_admission_blocked"
+                    existing = stage.record["report"].setdefault("findings", [])
+                    existing.extend(f for f in findings if f not in existing)
+                    route = "stop"
+                stage.record = self.store.save(stage.record)
+                return route
+
+            def router_context():
+                return {**initial_unit_context(stage),
+                        "schedule_admission_findings": stage.record.get("schedule_admission_findings", []),
+                        "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
+
             def next_segment_context(project, completed_round, tool_results):
                 remaining = metrics["budget"]["max_calls"] - metrics["provider_calls"]
-                if any(item["name"] == "schedule_plan_changes" and item["status"] == "failed"
-                       for item in tool_results):
-                    stage.record["generation_pause_reason"] = "invalid_manifest_stop_loss"
-                    return None  # Do not spend another request guessing an undocumented schema.
+                manifests = [item for item in tool_results if item["name"] == "schedule_plan_changes"]
+                # A later successful call may replace an earlier invalid manifest
+                # in this same complete response. The saved replacement must still
+                # pass preflight; a final failed replacement remains unresolved.
+                failed = manifests[-1:] if manifests and manifests[-1]["status"] == "failed" else []
+                route = schedule_admission(project, failed)
+                if route == "stop":
+                    return None
                 if (probe_limit and stage.record["generation_progress"]["checkpoint_count"]
                         - initial_checkpoints >= probe_limit):
                     stage.record["generation_pause_reason"] = "controlled_first_unit_probe"
@@ -427,7 +486,7 @@ class UnifiedPlanningService:
                 if remaining <= 1:
                     stage.record["generation_pause_reason"] = "call_budget_reserved_for_review"
                     return None
-                scheduled = bool(stage.record.get("work_units"))
+                scheduled = route == "generator"
                 facade.agent.synthesis_registry = ({
                     "submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"],
                 } if scheduled else {
@@ -435,7 +494,7 @@ class UnifiedPlanningService:
                 })
                 if scheduled:
                     prepare_unit_request(stage)
-                data = current_unit_context(stage) if scheduled else initial_unit_context(stage)
+                data = current_unit_context(stage) if scheduled else router_context()
                 if scheduled and data.get("current_unit") is None:
                     stage.record["generation_pause_reason"] = "scheduled_units_held"
                     stage.record["report"]["findings"].append({"code": "work_units_held",
@@ -457,15 +516,6 @@ class UnifiedPlanningService:
                 "schedule_plan_changes": MANIFEST_TOOL, "ask_user": tools()["ask_user"],
             }
             facade.agent.synthesis_registry = facade.agent.tool_registry
-            if stage.record.get("work_units") and not all_units_complete(stage.record):
-                facade.agent.system_prompt = GENERATOR
-                def resumed_context(project):
-                    prepare_unit_request(stage)
-                    return {**current_unit_context(stage),
-                            "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
-                facade.agent.initial_context = resumed_context
-                facade.agent.tool_registry = {"submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"]}
-                facade.agent.synthesis_registry = facade.agent.tool_registry
             yield {"type": "started", "turn_id": turn_id, "project_id": project_id,
                    "snapshot_mode": snapshot_mode, "project": self.app.projects.get(project_id)}
             yield self.candidate_event(stage, turn_id, "正在构建候选规划")
@@ -490,14 +540,29 @@ class UnifiedPlanningService:
                 if attempt == 0 and resume and stage.record.get("work_units"):
                     stage.message(project_id, "user", content, composer_document)
                     facade.agent.record_user = False
+                    route = schedule_admission(stage.get(project_id))
+                    if route == "stop":
+                        yield {"type": "done", "summary": {"status": "completed"}}
+                        return
                     if all_units_complete(stage.record):
                         from ..agent_tools.base import ToolContext
                         validate_candidate(ToolContext(project_id, facade), ValidateCandidate())
                         stage.record["generation_continuation"] = "validate_saved_complete_schedule"
                         yield {"type": "done", "summary": {"status": "completed"}}
                         return
-                    prepare_unit_request(stage)
-                    if current_unit_context(stage).get("current_unit") is None:
+                    if route == "router":
+                        facade.agent.system_prompt = ROUTER
+                        facade.agent.initial_context = lambda project: router_context()
+                        facade.agent.tool_registry = {"schedule_plan_changes": MANIFEST_TOOL, "ask_user": tools()["ask_user"]}
+                    else:
+                        facade.agent.system_prompt = GENERATOR
+                        prepare_unit_request(stage)
+                        facade.agent.initial_context = lambda project: {
+                            **current_unit_context(stage),
+                            "allowed_requirement_source_ids": sorted(stage.requirement_source_ids)}
+                        facade.agent.tool_registry = {"submit_plan_delta": DELTA_TOOL, "ask_user": tools()["ask_user"]}
+                    facade.agent.synthesis_registry = facade.agent.tool_registry
+                    if route == "generator" and current_unit_context(stage).get("current_unit") is None:
                         stage.record["generation_pause_reason"] = "scheduled_units_held"
                         stage.record["report"]["findings"].append({"code": "work_units_held",
                             "subject": "generation", "message": "保留的调度仍有无法执行的单元，需要修订清单；未重放旧变更"})

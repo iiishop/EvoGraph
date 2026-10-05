@@ -29,6 +29,9 @@ COLLECTIONS = {
 REMOVALS = {"remove_contract": "remove_contract_keys", "remove_slice": "remove_slice_ids",
             "remove_component": "remove_component_ids"}
 ARCH_FIELDS = architecture_delta_fields()
+UNIT_VERSION = "plan-units/v2"
+ARCHITECTURE_KINDS = {"component", "architecture", "relation", "remove_relation", "remove_component", "retirement"}
+BOOTSTRAP_FIELDS = required_plan_fields(PlanDelta, new=True) & ARCH_FIELDS
 
 
 def _json(value):
@@ -237,6 +240,30 @@ def _manifest_rows(args, project=None):
     return rows
 
 
+def _unit_changes(rows):
+    """Server-owned field partition; the original provider manifest stays intact.
+
+    References on unmodified architecture fields remain in the source manifest
+    for provenance, but only a changed field's references order its atom.
+    """
+    result = []
+    for row in rows:
+        if row["kind"] != "architecture":
+            result.append(deepcopy(row))
+            continue
+        for field in row["fields"]:
+            result.append({**deepcopy(row), "change_id": row["change_id"] + "#" + field,
+                           "fields": [field],
+                           "uses": [deepcopy(u) for u in row["uses"] if u["field"] == field],
+                           "origin_change_id": row["change_id"], "origin_change_hash": _hash(row)})
+    return result
+
+
+def _operation_count(rows):
+    # Multiple assigned metadata fields still compile to one architecture edit.
+    return len({_key(row["kind"], row["id"]) for row in rows})
+
+
 def _schedule(project, rows):
     """Union only necessary companions; other new-reference edges stay ordered."""
     objects = _objects(project)
@@ -251,10 +278,11 @@ def _schedule(project, rows):
     def join(a, b):
         if a is not None and b is not None:
             parent[root(b)] = root(a)
-    def row_id(kind, identity):
-        return by_key.get(_key(kind, identity))
+    def row_id(kind, identity, field=None):
+        key = _key(kind, identity)
+        return by_key.get(key + "#" + field if kind == "architecture" and field else key)
     def need(index, kind, identity, field=None):
-        companion = row_id(kind, identity)
+        companion = row_id(kind, identity, field)
         if companion is None or (field and field not in rows[companion]["fields"]):
             problems.append((index, f"missing atomic repair: {kind}:{identity}" + (f".{field}" if field else "")))
         else:
@@ -360,19 +388,27 @@ def _schedule(project, rows):
                 need(i, "architecture", "architecture", "architecture_milestone_ids")
             if kind == "remove_component" and any(identity in g.member_node_ids for g in diagram.groups):
                 need(i, "architecture", "architecture", "architecture_groups")
-    if not project.architectures and any(r["kind"] in {"component", "architecture", "relation"} for r in rows):
-        architecture = row_id("architecture", "architecture")
+    bootstrap = None
+    if not project.architectures and any(r["kind"] in ARCHITECTURE_KINDS for r in rows):
         component = next((i for i, r in enumerate(rows) if r["kind"] == "component"), None)
-        if architecture is None or component is None:
-            problems.append((architecture if architecture is not None else component or 0,
-                             "new architecture needs summary, technologies and first component together"))
+        metadata = [row_id("architecture", "architecture", field) for field in sorted(BOOTSTRAP_FIELDS)]
+        if component is None or any(index is None for index in metadata):
+            for i, row in enumerate(rows):
+                if row["kind"] in ARCHITECTURE_KINDS:
+                    problems.append((i, "new architecture needs summary, technologies and first component together"))
         else:
-            join(architecture, component)
-            required = set(manifest_field_catalog()["architecture"]["required_new"])
-            if not required <= set(rows[architecture]["fields"]):
-                problems.append((architecture, "new architecture requires fields: " + ", ".join(sorted(required))))
-    # Unknown/new references order units. Existing references need no artificial batching.
+            bootstrap = component
+            for index in metadata:
+                join(component, index)
+    # Every architecture-creating operation follows the complete bootstrap.
+    # Optional metadata can therefore depend on later definitions without
+    # pulling those definitions back into the bootstrap's atomic group.
     dependencies = {root(i): set() for i in range(len(rows))}
+    if bootstrap is not None:
+        for i, row in enumerate(rows):
+            if row["kind"] in ARCHITECTURE_KINDS and root(i) != root(bootstrap):
+                dependencies[root(i)].add(root(bootstrap))
+    # Unknown/new references order units. Existing references need no artificial batching.
     for i, row in enumerate(rows):
         for use in row["uses"]:
             if use["field"] == "provides":
@@ -413,31 +449,32 @@ def _schedule(project, rows):
             break
         order.extend(ready)
         remaining.difference_update(ready)
+    def work_size(entries):
+        keys = {_key(r["kind"].removeprefix("remove_"), r["id"]) for r in entries}
+        old_bytes = sum(len(_json(objects[key]).encode()) for key in keys if key in objects)
+        return old_bytes, old_bytes + 512 * sum(key not in objects for key in keys)
     units, group_units = [], {}
     for group in order:
         indexes = groups[group]
         entries = [rows[i] for i in indexes]
-        object_keys = {_key(r["kind"].removeprefix("remove_"), r["id"]) for r in entries}
-        old_bytes = sum(len(_json(objects[k]).encode()) for k in object_keys if k in objects)
+        old_bytes, estimated_bytes = work_size(entries)
         contract_count = sum(r["kind"] in {"contract", "remove_contract"} for r in entries)
-        estimated_bytes = old_bytes + 512 * sum(k not in objects for k in object_keys)
         reasons = [message for index, message in problems if root(index) == group]
         # An indivisible record may exceed the packing target. Keep it alone;
         # actual provider byte budgets and complete-delta validation still apply.
-        if ((estimated_bytes > MAX_UNIT_BYTES and len(entries) > 1)
-                or contract_count > MAX_UNIT_CONTRACTS or len(entries) > MAX_UNIT_OPERATIONS):
+        if ((estimated_bytes > MAX_UNIT_BYTES and _operation_count(entries) > 1)
+                or contract_count > MAX_UNIT_CONTRACTS or _operation_count(entries) > MAX_UNIT_OPERATIONS):
             reasons.append(SIZE_HOLD)
         depends = {group_units[d] for d in dependencies[group] if d in group_units}
         # Pack independent or already-ordered small groups without merging their semantics.
         previous = units[-1] if units else None
         if (not reasons and previous and previous["state"] == "pending"
-                and previous["estimated_text_bytes"] + estimated_bytes <= MAX_UNIT_BYTES
+                and work_size(previous["changes"] + entries)[1] <= MAX_UNIT_BYTES
                 and previous["contract_count"] + contract_count <= MAX_UNIT_CONTRACTS
-                and len(previous["changes"]) + len(entries) <= MAX_UNIT_OPERATIONS):
+                and _operation_count(previous["changes"] + entries) <= MAX_UNIT_OPERATIONS):
             unit = previous
             unit["changes"].extend(entries)
-            unit["existing_text_bytes"] += old_bytes
-            unit["estimated_text_bytes"] += estimated_bytes
+            unit["existing_text_bytes"], unit["estimated_text_bytes"] = work_size(unit["changes"])
             unit["contract_count"] += contract_count
             unit["depends_on"] = sorted((set(unit["depends_on"]) | depends) - {unit["id"]})
         else:
@@ -450,6 +487,126 @@ def _schedule(project, rows):
     for unit in units:
         unit["hash"] = _hash(unit["changes"])
     return units
+
+
+def _partition_errors(schedule):
+    """Validate the exact, lossless manifest partition before pinning or closure."""
+    try:
+        version = schedule.get("version")
+        if version not in {"plan-units/v1", UNIT_VERSION}:
+            return ["unsupported unit schedule version"]
+        manifest = schedule["manifest"]
+        if not manifest or schedule["manifest_hash"] != _hash(manifest):
+            return ["original manifest hash changed"]
+        args = SchedulePlanChanges.model_validate({"changes": [
+            {key: row[key] for key in ("kind", "id", "fields", "uses", "intent")} for row in manifest]})
+        if _manifest_rows(args) != manifest:
+            return ["original manifest is not canonical"]
+        expected = _unit_changes(manifest) if version == UNIT_VERSION else manifest
+        units = schedule["units"]
+        changes = [row for unit in units for row in unit["changes"]]
+        expected_map = {row["change_id"]: row for row in expected}
+        actual_map = {row["change_id"]: row for row in changes}
+        if len(changes) != len(actual_map) or actual_map != expected_map:
+            return ["unit changes do not exactly partition the original manifest"]
+        ids = [unit["id"] for unit in units]
+        completed = schedule["completed_ids"]
+        if (not units or len(ids) != len(set(ids)) or len(completed) != len(set(completed))
+                or set(completed) != {unit["id"] for unit in units if unit["state"] == "completed"}
+                or schedule["pending_ids"] != [unit["id"] for unit in units if unit["state"] != "completed"]):
+            return ["unit identity or completion bookkeeping changed"]
+        for unit in units:
+            if (not unit["changes"] or unit["hash"] != _hash(unit["changes"])
+                    or unit["state"] not in {"pending", "held", "completed"}
+                    or set(unit["depends_on"]) - set(ids) or unit["id"] in unit["depends_on"]):
+                return ["unit hash, state or dependencies changed: " + unit["id"]]
+        checkpoints = {checkpoint["unit_id"]: checkpoint for checkpoint in schedule["checkpoints"]}
+        if len(checkpoints) != len(schedule["checkpoints"]) or set(checkpoints) != set(completed):
+            return ["unit checkpoints and completed identities disagree"]
+        for unit in units:
+            if unit["state"] != "completed":
+                continue
+            checkpoint = checkpoints[unit["id"]]
+            if (checkpoint.get("unit_hash") != unit["hash"] or not checkpoint.get("delta_hash")
+                    or not checkpoint.get("candidate_hash")
+                    or checkpoint.get("change_ids") != [row["change_id"] for row in unit["changes"]]
+                    or (version == UNIT_VERSION and any(
+                        checkpoint.get("submitted_fields", {}).get(row["change_id"]) != row["fields"]
+                        for row in unit["changes"] if row["kind"] == "architecture"))):
+                return ["completed unit checkpoint does not cover its assigned changes: " + unit["id"]]
+        return []
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return ["malformed unit manifest or partition"]
+
+
+def schedule_findings(record, project):
+    """Read-only structural preflight, including unsafe saved v1 cold starts.
+
+    A held unit makes the whole request unclosable. Do not spend generation
+    calls on unrelated runnable units until the manifest has been repaired.
+    This is never a semantic-review certificate or a compiler substitute.
+    """
+    schedule = record.get("work_units")
+    if not schedule:
+        return []
+    identity = {"manifest_hash": schedule.get("manifest_hash"), "subject": "generation"}
+    findings = [{"code": "invalid_unit_schedule", "message": message, **identity}
+                for message in _partition_errors(schedule)]
+    source_id = record.get("turn_id", record.get("id"))
+    if not _valid_schedule(record, project, source_id):
+        findings.append({"code": "invalid_unit_schedule", "message": "schedule candidate or source is stale", **identity})
+    if findings:
+        return findings
+    units = {unit["id"]: unit for unit in schedule["units"]}
+    ancestors = {}
+    for uid, unit in units.items():
+        seen, pending = set(), list(unit["depends_on"])
+        while pending:
+            other = pending.pop()
+            if other not in seen:
+                seen.add(other)
+                pending.extend(units[other]["depends_on"])
+        ancestors[uid] = seen
+        if uid in seen:
+            findings.append({"code": "invalid_unit_schedule", "unit_id": uid,
+                             "message": "cyclic unit dependencies", **identity})
+        if unit["state"] == "held" or unit["holds"]:
+            findings.append({"code": "work_units_held", "unit_id": uid,
+                             "message": "; ".join(unit["holds"]) or "unit is held",
+                             "holds": deepcopy(unit["holds"]), **identity})
+    objects = _objects(project)
+    definitions = {}
+    for uid, unit in units.items():
+        for row in unit["changes"]:
+            if row["kind"] in {"requirement", "slice", "contract", "component"}:
+                definitions[_key(row["kind"], row["id"])] = uid
+            for use in row["uses"]:
+                if use["field"] == "provides":
+                    definitions[_key("capability", use["id"])] = uid
+    for uid, unit in units.items():
+        if unit["state"] == "completed":
+            continue
+        for row in unit["changes"]:
+            for use in row["uses"]:
+                key = _key(use["kind"], use["id"])
+                if use["field"] == "provides" or key in objects:
+                    continue
+                definition = definitions.get(key)
+                if definition != uid and definition not in ancestors[uid]:
+                    findings.append({"code": "invalid_unit_schedule", "unit_id": uid,
+                                     "message": "new reference is not defined before use: " + key, **identity})
+    if not project.architectures:
+        bootstrap_units = {uid for uid, unit in units.items()
+                           if any(row["kind"] == "component" for row in unit["changes"])
+                           and BOOTSTRAP_FIELDS <= {field for row in unit["changes"]
+                               if row["kind"] == "architecture" for field in row["fields"]}}
+        for uid, unit in units.items():
+            if (unit["state"] != "completed" and any(row["kind"] in ARCHITECTURE_KINDS for row in unit["changes"])
+                    and not bootstrap_units & ({uid} | ancestors[uid])):
+                findings.append({"code": "architecture_bootstrap_unavailable", "unit_id": uid,
+                                 "message": "new architecture operation has no preceding summary, technologies and first component bootstrap",
+                                 **identity})
+    return findings
 
 
 def _valid_schedule(record, project, source_id):
@@ -465,6 +622,12 @@ def _next(schedule):
                  and set(u["depends_on"]) <= completed), None)
 
 
+def has_completed_units(schedule):
+    """Any checkpoint evidence forbids silently rebuilding this schedule."""
+    return bool(schedule and (schedule.get("completed_ids") or schedule.get("checkpoints")
+                or any(unit.get("state") == "completed" for unit in schedule.get("units", []))))
+
+
 def schedule_plan_changes(ctx, args):
     db = ctx.application.db
     if not getattr(db, "is_candidate", False):
@@ -473,18 +636,20 @@ def schedule_plan_changes(ctx, args):
     rows = _manifest_rows(args, project)
     manifest_hash = _hash(rows)
     old = db.record.get("work_units")
-    if _valid_schedule(db.record, project, db.source_id) and old["manifest_hash"] == manifest_hash:
+    if _valid_schedule(db.record, project, db.source_id) and old["manifest_hash"] == manifest_hash and not schedule_findings(db.record, project):
         return {"status": "NO_PROGRESS", "schedule": _schedule_view(old)}
-    if old and old.get("source_id") == db.source_id and old.get("completed_ids"):
+    if old and old.get("source_id") == db.source_id and has_completed_units(old):
         raise ValueError("this request already has completed units; preserve them and rebuild only on a new user direction")
     source = next(s for s in project.plan_contract.sources if s.id == db.source_id)
-    units = _schedule(project, rows)
-    schedule = {"version": "plan-units/v1", "project_id": project.id, "source_id": db.source_id,
+    units = _schedule(project, _unit_changes(rows))
+    schedule = {"version": UNIT_VERSION, "project_id": project.id, "source_id": db.source_id,
                 "origin_source_id": db.source_id, "input_text": source.text, "manifest": rows,
                 "manifest_hash": manifest_hash, "base_fingerprint": _identity(project),
                 "expected_revision": project.revision, "expected_fingerprint": _identity(project),
                 "units": units, "completed_ids": [], "pending_ids": [u["id"] for u in units], "checkpoints": []}
     record = {**db.record, "work_units": schedule, "unit_request": None}
+    if old:
+        record["work_unit_schedule_history"] = [*db.record.get("work_unit_schedule_history", []), deepcopy(old)]
     db.record = db.store.save(record)
     return {"node_ids": [], "status": "scheduled", "schedule": _schedule_view(schedule)}
 
@@ -611,13 +776,16 @@ def current_unit_context(db):
         result["current_unit"] = None
         return result
     schedule = db.record["work_units"]
+    findings = schedule_findings(db.record, project)
+    if findings:
+        return {**result, "current_unit": None, "schedule_findings": findings}
     pin = db.record.get("unit_request")
     unit = next((u for u in schedule["units"] if pin and u["id"] == pin.get("unit_id")), None) or _next(schedule)
     if unit:
         keys = {_key(r["kind"].removeprefix("remove_").removeprefix("retire_"), r["id"]) for r in unit["changes"]}
         keys |= {_key(use["kind"], use["id"]) for r in unit["changes"] for use in r["uses"]}
         result["current_unit"] = {**deepcopy(unit), "objects": {k: deepcopy(objects[k]) for k in sorted(keys) if k in objects},
-                                  "instruction": "Submit exactly these record identities as one complete PlanDelta. Listed fields are intent/size hints: update any necessary canonical field on those records, including a mechanism contradicted by the new acceptance. Preserve unchanged fields. Uses guides ordering and context, not reference authorization; existing legal objects may be linked, while all references still require compiler validation. Do not add records assigned to later units. Never submit the whole manifest as a full plan."}
+                                  "instruction": "Submit exactly these record identities as one complete PlanDelta. Architecture fragments require exactly their assigned top-level fields, each bound to its original manifest hash. Other listed fields are intent/size hints: update any necessary canonical field on those records, including a mechanism contradicted by the new acceptance. Preserve unchanged fields. Uses guides ordering and context, not reference authorization; existing legal objects may be linked, while all references still require compiler validation. Do not add records assigned to later units. Never submit the whole manifest as a full plan."}
         result["completed_contract_mechanisms"] = [item for item in result["completed_contract_mechanisms"]
                                                   if _key("contract", item["key"]) not in keys]
         architecture = result["current_unit"]["objects"].get("architecture:architecture")
@@ -663,8 +831,13 @@ def prepare_unit_request(db):
     project = db.get(db.project.id)
     if not _valid_schedule(db.record, project, db.source_id):
         return initial_unit_context(db)
+    findings = schedule_findings(db.record, project)
+    if findings:
+        db.record = db.store.save({**db.record, "unit_request": None})
+        return {**initial_unit_context(db), "current_unit": None, "schedule_findings": findings}
     unit = _next(db.record["work_units"])
     pin = ({"unit_id": unit["id"], "unit_hash": unit["hash"], "source_id": db.source_id,
+            "manifest_hash": db.record["work_units"]["manifest_hash"],
             "revision": project.revision, "planning_fingerprint": _identity(project),
             "candidate_hash": candidate_hash(project), "accepted_delta_hash": None} if unit else None)
     record = {**db.record, "unit_request": pin}
@@ -672,7 +845,7 @@ def prepare_unit_request(db):
     return current_unit_context(db)
 
 
-def _delta_rows(delta):
+def _delta_rows(delta, *, fragmented=False):
     raw = delta.model_dump(mode="json", exclude_unset=True)
     rows = []
     for kind, (field, identity) in COLLECTIONS.items():
@@ -688,7 +861,10 @@ def _delta_rows(delta):
     if "target" in raw:
         rows.append({"change_id": "target:target", "fields": {"target"}, "uses": []})
     metadata = {k: raw[k] for k in ARCH_FIELDS & raw.keys()}
-    if metadata:
+    if fragmented:
+        rows.extend({"change_id": "architecture:architecture#" + field, "fields": {field},
+                     "uses": _references("architecture", {field: value})} for field, value in sorted(metadata.items()))
+    elif metadata:
         rows.append({"change_id": "architecture:architecture", "fields": set(metadata), "uses": _references("architecture", metadata)})
     by_id = {r["change_id"]: r for r in rows}
     if len(by_id) != len(rows):
@@ -705,10 +881,17 @@ def validate_unit_delta(db, args):
 
     project = db.get(db.project.id)
     args = PlanDelta.model_validate(args.model_dump(exclude_unset=True) if isinstance(args, PlanDelta) else args)
-    raw, actual = _delta_rows(args)
     schedule, pin = db.record.get("work_units"), db.record.get("unit_request")
+    raw, actual = _delta_rows(args, fragmented=bool(schedule and schedule.get("version") == UNIT_VERSION))
     if not schedule or not pin or pin.get("source_id") != db.source_id or schedule.get("source_id") != db.source_id:
         raise ValueError("schedule changes first; only the exact unit assigned before this provider request may be submitted")
+    findings = schedule_findings(db.record, project)
+    if findings:
+        raise ValueError("invalid unit schedule: " + "; ".join(f["message"] for f in findings))
+    unit = next((u for u in schedule["units"] if u["id"] == pin.get("unit_id")), None)
+    if (not unit or unit["hash"] != pin.get("unit_hash")
+            or (schedule.get("version") == UNIT_VERSION and pin.get("manifest_hash") != schedule["manifest_hash"])):
+        raise ValueError("assigned unit is unavailable or held; unit or manifest pin changed")
     if pin.get("accepted_delta_hash"):
         if pin["accepted_delta_hash"] != _hash(raw) or not _valid_schedule(db.record, project, db.source_id):
             raise ValueError("this request already completed its unit; it cannot write the next unseen unit")
@@ -716,8 +899,7 @@ def validate_unit_delta(db, args):
     if (pin["revision"] != project.revision or pin["planning_fingerprint"] != _identity(project)
             or not _valid_schedule(db.record, project, db.source_id)):
         raise ValueError("assigned unit is stale; do not overwrite a changed candidate")
-    unit = next((u for u in schedule["units"] if u["id"] == pin["unit_id"]), None)
-    if not unit or unit["state"] != "pending" or unit["hash"] != pin["unit_hash"]:
+    if unit["state"] != "pending":
         raise ValueError("assigned unit is unavailable or held")
     expected = {r["change_id"]: r for r in unit["changes"]}
     if actual.keys() != expected.keys():
@@ -726,6 +908,8 @@ def validate_unit_delta(db, args):
     for key, row in actual.items():
         wanted = expected[key]
         kind = wanted["kind"]
+        if kind == "architecture" and schedule.get("version") == UNIT_VERSION and row["fields"] != set(wanted["fields"]):
+            raise ValueError("submit exactly assigned architecture fields: " + key)
         # Routing fields estimate work; they cannot lock an acceptance change
         # away from its own mechanism. The assigned record identity stays fixed.
         if row["fields"] - set(catalog[kind]["fields"]):
@@ -776,7 +960,7 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
         "candidate_hash": candidate_hash(new_project), "delta_hash": digest,
         "change_ids": [r["change_id"] for r in unit["changes"]],
         "submitted_fields": {key: sorted(row["fields"]) for key, row in _delta_rows(
-            PlanDelta.model_validate(raw))[1].items()},
+            PlanDelta.model_validate(raw), fragmented=schedule.get("version") == UNIT_VERSION)[1].items()},
         "changed": _identity(old_project) != _identity(new_project)})
     # A successful compiler checkpoint resolves this unit's transport/schema
     # rejections only. Never clear semantic findings because a field was touched.
@@ -802,17 +986,11 @@ def all_units_complete(record):
             return False
         units = schedule["units"]
         ids = [u["id"] for u in units]
-        changes = [r for u in units for r in u["changes"]]
         if (len(ids) != len(set(ids)) or schedule["pending_ids"]
                 or schedule["completed_ids"] != ids
-                or schedule["manifest_hash"] != _hash(schedule["manifest"])
-                or sorted(r["change_id"] for r in changes) != sorted(r["change_id"] for r in schedule["manifest"])):
+                or schedule_findings(record, project)):
             return False
-        return all(u["state"] == "completed" and u["hash"] == _hash(u["changes"])
-                   and any(c.get("unit_id") == u["id"] and c.get("unit_hash") == u["hash"]
-                           and c.get("delta_hash") and c.get("candidate_hash")
-                           and c.get("change_ids") == [r["change_id"] for r in u["changes"]]
-                           for c in schedule["checkpoints"]) for u in units)
+        return all(u["state"] == "completed" for u in units)
     except (KeyError, TypeError, AttributeError, ValueError):
         return False
 
@@ -859,7 +1037,8 @@ MANIFEST_TOOL = ToolSpec(
     "uses={field,kind,id} guides dependency ordering and read context, not reference authorization. "
     "uses may name unchanged reference fields for read context; fields lists only intended changes. "
     "Existing candidate objects may be linked; declare genuinely new targets for definition ordering. "
-    "fields are intent/size hints, not a lock against necessary same-record repairs; intent <=120 chars. Never include statements, "
+    "Architecture metadata is partitioned by the server into exact-field units; other fields are intent/size hints, "
+    "not a lock against necessary same-record repairs; intent <=120 chars. Never include statements, "
     "mechanisms, quotes or other field values. kind names match singular PlanDelta collections; remove_* "
     "kinds have fields=[]. target id=target and fields=[target]; architecture id=architecture names its "
     "changed global metadata fields. relation/remove_relation id is JSON [source,target,label], with "
