@@ -1,0 +1,13 @@
+{
+  "source": "QA55 stopped first router output, candidate eba20323555c4762, 2026-10-05",
+  "scope": "Exact selected historical candidate for offline input-contract and read-projection regression only. No credentials. Not model quality or semantic repair evidence.",
+  "source_candidates_sha256": "350ce9db14b0af0fd7d4fdc85714753e64522dcb8fb27105e406d8847331e113",
+  "candidate_id": "eba20323555c4762",
+  "fixture": {
+    "compressed_file": "qa55-invalid-router-candidate.json.gz",
+    "bytes": 396549,
+    "sha256": "cee19968c9d9df9b3bb4f9e6e6e23d8ea7437d88f2cf8eb6b8935df8f29b64d6"
+  },
+  "raw_arguments_sha256": "e7a20d1f599736fe0af7a59ec4e2a6349ccb40dd17d9f8344b3a4e7e1c29fc3b",
+  "frozen_request_sha256": "789d8837dc5233bd5fdf0a62fd3d8bbb8765cf542d1782cc655d70fb0ebd9046"
+}

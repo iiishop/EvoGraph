@@ -31,6 +31,50 @@ def _current_completions(record, prior):
             and (u["id"], u["hash"]) in checkpoints}
 
 
+def _group_architecture_atoms(changes):
+    """Losslessly factor same-origin field atoms in this read-only unit view.
+
+    Only the exact server-owned atom shape is grouped. Unknown shapes and
+    separate origins remain untouched; this is never an executable manifest.
+    """
+    groups = {}
+    required = {"kind", "id", "change_id", "fields", "uses", "intent",
+                "origin_change_id", "origin_change_hash"}
+    for change in changes:
+        if (set(change) != required or change["kind"] != "architecture"
+                or change["id"] != "architecture" or not isinstance(change["fields"], list)
+                or len(change["fields"]) != 1 or not isinstance(change["fields"][0], str)
+                or change["origin_change_id"] != "architecture:architecture"
+                or not isinstance(change["origin_change_hash"], str) or not change["origin_change_hash"]
+                or change["change_id"] != change["origin_change_id"] + "#" + change["fields"][0]
+                or not isinstance(change["uses"], list)
+                or any(not isinstance(use, dict) or use.get("field") != change["fields"][0]
+                       for use in change["uses"])):
+            continue
+        groups.setdefault(change["origin_change_hash"], []).append(change)
+    grouped = {}
+    for rows in groups.values():
+        fields = [row["fields"][0] for row in rows]
+        positions = [i for i, row in enumerate(changes) if any(row is item for item in rows)]
+        if (len(rows) < 2 or len(set(fields)) != len(fields)
+                or positions != list(range(positions[0], positions[-1] + 1))):
+            continue
+        first = rows[0]
+        item = {key: deepcopy(first[key]) for key in
+                ("kind", "id", "origin_change_id", "origin_change_hash")}
+        item.update(fields=fields, uses=[deepcopy(use) for row in rows for use in row["uses"]],
+                    pending_atom_ids=[row["change_id"] for row in rows])
+        if all(row["intent"] == first["intent"] for row in rows):
+            item["intent"] = first["intent"]
+        else:
+            item["field_intents"] = [{"field": row["fields"][0], "intent": row["intent"]}
+                                     for row in rows]
+        for row in rows:
+            grouped[id(row)] = item if row is first else None
+    return [grouped.get(id(row), row) for row in changes
+            if id(row) not in grouped or grouped[id(row)] is not None]
+
+
 def prior_pending_intent_context(record, project_id):
     """Return an enriched prior summary without mutating record or its schedules.
 
@@ -73,8 +117,10 @@ def prior_pending_intent_context(record, project_id):
     for unit in result["units"]:
         if unit["id"] not in changes:
             continue
-        unit["changes"] = changes[unit["id"]]
-        for change in unit["changes"]:
+        unit["changes"] = _group_architecture_atoms(changes[unit["id"]])
+        intents = [intent for change in unit["changes"]
+                   for intent in change.get("field_intents", [change])]
+        for change in intents:
             if change["intent"] in texts:
                 change["intent_ref"] = texts.index(change.pop("intent"))
     if texts:
@@ -89,7 +135,9 @@ def prior_pending_intent_context(record, project_id):
     result["pending_changes_note"] = (
         "Exact unfinished model-planned changes at this prior snapshot, not binding requirements. "
         "Reconcile with current saved facts and the latest user direction, which may supersede them. "
-        "intent_ref indexes exact text in intent_texts. Completed prior work and matching current "
+        "intent_ref indexes exact text in intent_texts. Grouped architecture fields retain ordered "
+        "pending_atom_ids and origin hash; each field keeps its exact shared or field_intents text "
+        "and uses. These read-only groups do not change the saved units. Completed prior work and matching current "
         "checkpoint completions are excluded from changes; prior counts/states remain historical."
     )
     return result

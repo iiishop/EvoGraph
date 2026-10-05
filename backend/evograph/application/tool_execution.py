@@ -78,6 +78,66 @@ def _plan_delta_input_failure(spec, arguments, error):
     }
 
 
+def _plan_manifest_input_failure(spec, arguments, error):
+    """Value-free, bounded diagnostics only; never repair or execute this input."""
+    errors = error.errors(include_input=False, include_context=False, include_url=False)
+    # Unknown property names can themselves contain private payload text. Show
+    # only protocol names and the three common misplaced source-value keys.
+    names = {"changes", "kind", "id", "fields", "intent", "uses", "field",
+             "quote", "source_id", "rule"}
+    groups = {}
+    for item in errors:
+        location = [part if type(part) is int else part if part in names else "<unknown>"
+                    for part in item["loc"][:8]]
+        path = tuple("*" if type(part) is int else part for part in location)
+        key = (path, item["type"])
+        if key not in groups:
+            if len(groups) >= 12:
+                continue
+            groups[key] = {"path": list(path), "type": item["type"], "count": 0, "locations": []}
+        group = groups[key]
+        group["count"] += 1
+        if len(group["locations"]) < 12:
+            group["locations"].append(location)
+    duplicates = []
+    invalid_json = any(item["type"] == "json_invalid" for item in errors)
+    try:
+        raw = json.loads(arguments)
+    except (ValueError, RecursionError):
+        raw = None
+    rows = raw.get("changes") if isinstance(raw, dict) else None
+    if isinstance(rows, list):
+        identities = {}
+        for index, row in enumerate(rows[:128]):
+            if not isinstance(row, dict) or not all(isinstance(row.get(k), str) for k in ("kind", "id")):
+                continue
+            identity = row["id"]
+            if row["kind"] in {"relation", "remove_relation"}:
+                try:
+                    triple = json.loads(identity)
+                except (ValueError, RecursionError):
+                    triple = None
+                if isinstance(triple, list) and len(triple) == 3 and all(isinstance(v, str) for v in triple):
+                    identity = json.dumps(triple, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            identities.setdefault((row["kind"], identity), []).append(["changes", index])
+        duplicates = [{"type": "duplicate_identity", "locations": locations}
+                      for locations in identities.values() if len(locations) > 1]
+    message = "规划清单格式不符合工具协议；规划内容未改动"
+    issues = list(groups.values())
+    return {
+        "events": [{"type": "tool_failed", "tool": spec.name,
+                    "code": "invalid_plan_manifest", "label": spec.label, "message": message}],
+        "progress": False,
+        "payload": {"ok": False, "error": message, "code": "invalid_plan_manifest",
+                    "failure_type": "invalid_json" if invalid_json else "schema_mismatch",
+                    "schema_issues": issues,
+                    "omitted_issue_count": len(errors) - sum(item["count"] for item in issues),
+                    "identity_issues": duplicates,
+                    "identity_scan_omitted_rows": max(0, len(rows) - 128) if isinstance(rows, list) else 0,
+                    "row_keys": ["kind", "id", "fields", "intent", "uses"]},
+    }
+
+
 async def _drain_worker(task: asyncio.Task) -> None:
     """Keep a thread's task alive until completion despite caller cancellation."""
     # AnyIO cancellation scopes repeatedly cancel unshielded checkpoints. Their
@@ -146,6 +206,8 @@ class ToolExecutor:
             except ValidationError as exc:
                 if name == "submit_plan_delta":
                     return _plan_delta_input_failure(spec, arguments, exc)
+                if name == "schedule_plan_changes":
+                    return _plan_manifest_input_failure(spec, arguments, exc)
                 raise
             mutation = spec.effect in {"created", "updated", "removed", "target"}
             task = asyncio.create_task(asyncio.to_thread(spec.handler, self.context, args))

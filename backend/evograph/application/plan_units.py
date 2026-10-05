@@ -80,7 +80,17 @@ class ManifestChange(Model):
 
 
 class SchedulePlanChanges(Model):
-    changes: list[ManifestChange] = Field(min_length=1, max_length=128)
+    changes: list[ManifestChange] = Field(min_length=1, max_length=128, description=(
+        "One row per (kind,id); combine all changed field names in that row, including architecture metadata. "
+        "Row keys are kind,id,fields,intent and optional uses. fields contains names only; never attach "
+        "PlanDelta values such as quote,rule,source_id,statement or mechanism to a row."))
+
+    @model_validator(mode="after")
+    def validate_manifest(self):
+        # The same project-free gate runs before handler entry, without changing
+        # the model or admitting a normalized/repaired manifest.
+        _manifest_rows(self)
+        return self
 
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
