@@ -38,12 +38,67 @@ class CandidateStore:
         data["candidate_hash"] = candidate_hash(Project.model_validate(data["project"]))
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._writable_candidate(connection, data["id"], required=False)
+            previous = self._writable_candidate(connection, data["id"], required=False)
+            if previous and previous.get("review_attempts"):
+                raise ConflictError("候选已有独立评审轮次，旧写入不能覆盖评审记录")
             connection.execute("INSERT INTO plan_candidates VALUES(?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", (
                     data["id"], data["project"]["id"], json.dumps(data, ensure_ascii=False), data["created_at"],
                 ))
         return data
+
+    def begin_review_attempt(self, project_id, pins, turn_id):
+        from ..application.plan_recheck import (
+            new_review_attempt,
+            review_projection,
+            validate_recheck,
+        )
+        with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT payload FROM plan_candidates WHERE project_id=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
+            record = json.loads(row[0]) if row else None
+            before = self.db.read_project(connection, project_id)
+            validate_recheck(before, record, pins)
+            prior_turn = record["review_attempts"][-1]["id"] if record.get("review_attempts") else record["turn_id"]
+            receipt = connection.execute(
+                "SELECT 1 FROM events WHERE project_id=? AND kind='agent_turn_finished' "
+                "AND json_extract(CASE WHEN json_valid(detail) THEN detail ELSE '{}' END, '$.turn_id')=? LIMIT 1",
+                (project_id, prior_turn)).fetchone()
+            if not receipt:
+                raise ConflictError("前一轮尚无已结束记录，不能启动重新评审")
+            record.setdefault("review_attempts", []).append(new_review_attempt(record, turn_id, pins))
+            record["status"] = "reviewing"
+            connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
+                json.dumps(record, ensure_ascii=False), record["id"]))
+        return before, review_projection(record)
+
+    def save_review_attempt(self, record, *, close=False):
+        from ..application.plan_recheck import protected_record, review_audit, review_projection
+        with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            saved = self._writable_candidate(connection, record["id"])
+            latest = connection.execute("SELECT id FROM plan_candidates WHERE project_id=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1", (saved["project_id"],)).fetchone()
+            attempt = saved.get("review_attempts", [{}])[-1]
+            current = self.db.read_project(connection, saved["project_id"])
+            pins = attempt.get("pins", {})
+            if (current.revision != pins.get("base_revision") or current.archived
+                    or not current.unified_planning or current.question
+                    or candidate_hash(current) != pins.get("base_hash")):
+                raise ConflictError("正式规划已改变，评审未覆盖当前状态")
+            if (latest[0] != record["id"] or attempt.get("closed_at")
+                    or record.get("review_attempt") != {k: v for k, v in attempt.items() if k != "audit"}
+                    or protected_record(saved) != protected_record(record)):
+                raise ConflictError("评审轮次或候选已改变，迟到结果未覆盖当前状态")
+            attempt["audit"] = review_audit(record, saved)
+            attempt["status"] = saved["status"] = record["status"]
+            attempt["write_version"] += 1
+            if close:
+                attempt["closed_at"] = now()
+            connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
+                json.dumps(saved, ensure_ascii=False), saved["id"]))
+        return review_projection(saved)
 
     def get(self, candidate_id):
         with self.db.connect() as connection:
@@ -72,7 +127,9 @@ class CandidateStore:
         data = deepcopy(record)
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._writable_candidate(connection, data["id"])
+            prior = self._writable_candidate(connection, data["id"])
+            if prior.get("review_attempts"):
+                raise ConflictError("独立评审候选不能由旧生成轮次覆盖")
             current = self.db.read_project(connection, record["project"]["id"])
             if current.revision != record["base_revision"]:
                 raise ConflictError("正式规划已改变，候选问题未覆盖当前状态")
@@ -119,7 +176,9 @@ class CandidateStore:
         data = deepcopy(record)
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._writable_candidate(connection, data["id"])
+            prior = self._writable_candidate(connection, data["id"])
+            if prior.get("review_attempts"):
+                raise ConflictError("独立评审候选不能由旧生成轮次覆盖")
             current = self.db.read_project(connection, before.id)
             if current.revision != data["base_revision"]:
                 raise ConflictError("正式规划已改变，候选保留")
@@ -148,6 +207,15 @@ class CandidateStore:
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             saved = self._writable_candidate(connection, record["id"])
+            durable = deepcopy(saved)
+            if saved.get("review_attempts"):
+                from ..application.plan_recheck import review_projection
+                saved = review_projection(saved)
+                latest = connection.execute("SELECT id FROM plan_candidates WHERE project_id=? "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT 1", (before.id,)).fetchone()
+                if (latest[0] != saved["id"] or saved.get("review_attempt") != record.get("review_attempt")
+                        or saved["review_attempt"].get("closed_at")):
+                    raise ConflictError("评审轮次已改变，迟到结果未应用")
             if not saved or saved["status"] != "ready" or saved["candidate_hash"] != record["candidate_hash"]:
                 raise ValueError("候选已变化，需要重新校验")
             if saved.get("work_units") is not None:
@@ -161,7 +229,7 @@ class CandidateStore:
             current = self.db.decode_project(connection, row[0]) if row else None
             if not current or current.revision != saved["base_revision"]:
                 raise ConflictError("正式规划已改变；候选保留，但不能覆盖较新的状态")
-            if current.archived or not current.unified_planning:
+            if current.archived or not current.unified_planning or (durable.get("review_attempts") and current.question):
                 raise ConflictError("项目状态已改变，候选未应用")
             if candidate_hash(current) != candidate_hash(before):
                 raise ConflictError("评审前快照与当前正式规划不一致，候选需要重新校验")
@@ -186,17 +254,31 @@ class CandidateStore:
             for field in PLANNING_FIELDS:
                 setattr(result, field, deepcopy(getattr(staged, field)))
             result.question = None
-            result.metrics["model_tokens"] += saved["metrics"]["tokens"]
-            result.metrics["planning_seconds"] += saved["metrics"]["elapsed_seconds"]
+            # Candidate costs have not yet been applied. Count generation plus
+            # each explicitly admitted review once, in this same atomic commit.
+            costs = [durable["metrics"], *[a["audit"]["metrics"] for a in durable.get("review_attempts", [])]]
+            result.metrics["model_tokens"] += sum(m["tokens"] for m in costs)
+            result.metrics["planning_seconds"] += sum(m["elapsed_seconds"] for m in costs)
             result.revision += 1
             result.updated_at = now()
             outcome = build_turn_summary(before, result, turn_id, "completed")
             saved.update(status="applied", applied_revision=result.revision, turn_summary=outcome)
+            if durable.get("review_attempts"):
+                from ..application.plan_recheck import review_audit
+                attempt = durable["review_attempts"][-1]
+                attempt["audit"] = review_audit(saved, durable)
+                attempt.update(status="applied", closed_at=now(), write_version=attempt["write_version"] + 1)
+                durable.update(status="applied", applied_revision=result.revision)
+                stored = durable
+            else:
+                stored = saved
             self.db.write_project(connection, result, expected_revision=current.revision)
             connection.execute("UPDATE plan_candidates SET payload=? WHERE id=?", (
-                json.dumps(saved, ensure_ascii=False), saved["id"],
+                json.dumps(stored, ensure_ascii=False), saved["id"],
             ))
             connection.execute("INSERT INTO events VALUES(?,?,?,?,?)", (
                 uid(), result.id, "agent_turn_finished", json.dumps(outcome, ensure_ascii=False), now(),
             ))
+        if durable.get("review_attempts"):
+            saved = review_projection(stored)
         return result, saved, outcome

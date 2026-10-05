@@ -112,11 +112,16 @@ class ProjectService:
         return self.db.save(p, "project_updated")
 
     def get(self, project_id, *, include_history=True):
-        result = project_view(self.db.get(project_id), self.db, include_history=include_history)
+        project = self.db.get(project_id)
+        result = project_view(project, self.db, include_history=include_history)
         if not getattr(self.db, "is_candidate", False):
             from ..infrastructure.plan_candidates import CandidateStore
             record = CandidateStore(self.db).latest(project_id)
             if record:
+                from .plan_recheck import recheck_offer, review_projection
+                offer = recheck_offer(project, record)
+                record = review_projection(record)
+                record["review_recheck"] = offer
                 from ..domain.plan_harness import CURRENT_POLICY
                 record["current_harness_policy_version"] = CURRENT_POLICY.version
                 if record["status"] not in {"applied", "discarded"} and record["base_revision"] != result["revision"]:

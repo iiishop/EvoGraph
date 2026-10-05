@@ -1,0 +1,20 @@
+{
+  "source": "Frozen 08-zero-write-retry-reviewed-result; no online provider replay. Synthetic tests do not establish semantic quality.",
+  "files": {
+    "project.json": {
+      "compressed_file": "qa55-complete-canonical.json.gz",
+      "bytes": 50883,
+      "sha256": "5af58ece060e18190fe107c282021b8be160584f8d5e4557a30b11d164268fbe"
+    },
+    "candidates.json": {
+      "compressed_file": "qa55-complete-candidate.json.gz",
+      "bytes": 1067614,
+      "sha256": "b7224db180705c0e31f24caf4c3225e637dfdc7a5855ae1cd931dd67e5dea383"
+    },
+    "receipt.json": {
+      "compressed_file": "qa55-complete-turn-receipt.json.gz",
+      "bytes": 880,
+      "sha256": "9471722c64edae3c67ecccdc0bd6a78e41292539ed43af01b662be1c8dd54877"
+    }
+  }
+}

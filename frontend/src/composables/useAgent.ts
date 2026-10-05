@@ -3,7 +3,7 @@ import { agentStream } from '../api/agentStream';
 import { bestEffortRefresh, waitForTurnResult } from '../api/turnResult';
 import { parseTurnSummary, turnSummaryStatus } from '../lib/turnSummary';
 import { useWorkspace } from './useWorkspace';
-import type { ComposerDocument, AgentEvent, Project } from '../types';
+import type { ComposerDocument, AgentEvent, Project, ReviewRecheck } from '../types';
 import { agentDrafts, type DraftAttempt } from './useAgentDrafts';
 import { useNotifications } from './useNotifications';
 import { changeSummary } from '../lib/changeSummary';
@@ -180,6 +180,7 @@ async function send(
   composerDocument?: ComposerDocument,
   submission?: DraftAttempt,
   sourceAnalysis = false,
+  reviewRecheck?: ReviewRecheck,
 ): Promise<boolean> {
   const workspace = useWorkspace();
   if (state.running || workspace.state.busy) return false;
@@ -214,7 +215,10 @@ async function send(
   workspace.setBusy(true);
   controller = new AbortController();
   const receiveForRun = (event: AgentEvent) => {
-    if (event.type === 'candidate_changed' && (latestRun !== receipt.owner || !receipt.isCurrent()))
+    if (
+      (event.type === 'candidate_changed' || event.project) &&
+      (latestRun !== receipt.owner || !receipt.isCurrent())
+    )
       return;
     if (event.type === 'started') {
       receipt.turnId = event.turn_id ?? '';
@@ -242,6 +246,7 @@ async function send(
       {
         project_id: projectId,
         content,
+        ...(reviewRecheck ? { review_recheck: reviewRecheck } : {}),
         attachment_ids: attachmentIds,
         ...(composerDocument ? { composer_document: composerDocument } : {}),
         verification_milestone: verificationMilestone,
@@ -299,6 +304,8 @@ export function useAgent() {
   return {
     state: readonly(state),
     send,
+    recheck: (projectId: string, pins: ReviewRecheck) =>
+      send(projectId, '重新评审', undefined, [], undefined, undefined, undefined, false, pins),
     stop: () => {
       controller?.abort();
       state.label = '正在停止并保存已提交的修改…';

@@ -366,10 +366,62 @@ class UnifiedPlanningService:
         current = self.app.db.get(project_id)
         if record["status"] not in {"applied", "discarded"} and current.revision != record["base_revision"]:
             record["status"] = "stale"
-        data = {**record, "project": project_view(Project.model_validate(record["project"]), self.app.db, include_history=False)}
+        from .plan_recheck import recheck_offer, review_projection
+        offer = recheck_offer(current, record) if not self.app.agent.active_turns.get(project_id) else None
+        data = {**review_projection(record), "project": project_view(Project.model_validate(record["project"]), self.app.db, include_history=False)}
+        data["review_recheck"] = offer
         data["current_harness_policy_version"] = CURRENT_POLICY.version
         data["project"].pop("plan_candidate", None)
         return data
+
+    async def run_review(self, stage, before, metrics):
+        """Shared frozen plugins, provider validation and durable review evidence."""
+        candidate = stage.project
+        project_id = candidate.id
+        snapshot = seal_snapshot(before, candidate, stage.record)
+        def checkpoint_harness(run):
+            snapshots = stage.record.setdefault("harness_snapshots", [])
+            if not any(item["snapshot_id"] == snapshot.snapshot_id for item in snapshots):
+                snapshots.append(snapshot.model_dump(mode="json"))
+            previous_run = stage.record.get("harness_run")
+            if previous_run and previous_run["run_id"] != run.run_id:
+                stage.record.setdefault("harness_runs", []).append(previous_run)
+            stage.record["harness_run"] = run.model_dump(mode="json")
+            stage.record["report"] = {"findings": [
+                finding.model_dump(mode="json")
+                for row in run.executions if row.kind == "deterministic" and row.result
+                for finding in row.result.findings]}
+            if run.semantic_review_json:
+                stage.record["report"]["semantic"] = json.loads(run.semantic_review_json)
+            if run.model_certificate_json:
+                certificate = json.loads(run.model_certificate_json)
+                stage.record["report"]["semantic_batch"] = certificate["batch"]
+            stage.record["validation_receipt"] = build_validation_receipt(
+                candidate, harness_run=run)
+            stage.record = stage.store.save(stage.record)
+
+        async def evaluate_semantics(sealed):
+            review_before = sealed.before_project()
+            review_candidate = sealed.candidate_project()
+            review_record = sealed.record_data()
+            packet = review_packet(review_before, review_candidate, review_record)
+            stage.record.setdefault("review_inputs", []).append(json.loads(packet))
+            stage.record = stage.store.save(stage.record)
+            reviewer = BudgetedSettings(
+                self.app.settings, metrics, stage.checkpoint_metrics,
+                request_controls=_review_request_controls(project_id), purpose="semantic_review")
+            try:
+                review, certificate = await challenge(reviewer, review_before, review_candidate, review_record)
+                return review, certificate, (f"/metrics/calls/{len(metrics.get('calls', [])) - 1}",)
+            except BudgetExceededError as exc:
+                raise HarnessExecutionError("budget_exhausted", str(exc)) from exc
+
+        run = await run_harness(snapshot, evaluate_semantics, checkpoint_harness)
+        if run.semantic_review_json:
+            stage.record["reviews"].append(json.loads(run.semantic_review_json))
+        if run.model_certificate_json:
+            stage.record.setdefault("batch_reviews", []).append(json.loads(run.model_certificate_json))
+        return run
 
     async def stream(self, project_id, content, *, question_id=None, attachment_ids=None,
                      composer_document=None, snapshot_mode="full", experiment=None):
@@ -399,7 +451,10 @@ class UnifiedPlanningService:
                 raise ValueError("请先回答待确认问题")
             if question_id and not before.question:
                 raise ValueError("问题已经失效，请刷新项目")
+            from .plan_recheck import review_projection
             previous = self.store.latest(project_id)
+            if previous:
+                previous = review_projection(previous)
             if previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] != before.revision:
                 raise ConflictError("保留的候选基于旧正式版本，未自动合并或覆盖；请先查看并放弃旧候选，再从当前方案重新生成")
             resume = previous and previous["status"] not in {"applied", "discarded"} and previous["base_revision"] == before.revision
@@ -795,54 +850,12 @@ class UnifiedPlanningService:
                 # One frozen snapshot, one registry/policy path. Every repair seals
                 # a new run; source activity and finalization are already complete.
                 stage.record["capability_move_audits"] = capability_move_context(before, candidate, stage.record)
-                snapshot = seal_snapshot(before, candidate, stage.record)
                 stage.record["status"] = "reviewing"
                 stage.record["metrics"] = {**metrics, "elapsed_seconds": time.monotonic() - started}
                 stage.record = self.store.save(stage.record)
                 yield self.candidate_event(stage, turn_id, "运行规划检查插件")
 
-                def checkpoint_harness(run):
-                    snapshots = stage.record.setdefault("harness_snapshots", [])
-                    if not any(item["snapshot_id"] == snapshot.snapshot_id for item in snapshots):
-                        snapshots.append(snapshot.model_dump(mode="json"))
-                    previous_run = stage.record.get("harness_run")
-                    if previous_run and previous_run["run_id"] != run.run_id:
-                        stage.record.setdefault("harness_runs", []).append(previous_run)
-                    stage.record["harness_run"] = run.model_dump(mode="json")
-                    stage.record["report"] = {"findings": [
-                        finding.model_dump(mode="json")
-                        for row in run.executions if row.kind == "deterministic" and row.result
-                        for finding in row.result.findings]}
-                    if run.semantic_review_json:
-                        stage.record["report"]["semantic"] = json.loads(run.semantic_review_json)
-                    if run.model_certificate_json:
-                        certificate = json.loads(run.model_certificate_json)
-                        stage.record["report"]["semantic_batch"] = certificate["batch"]
-                    stage.record["validation_receipt"] = build_validation_receipt(
-                        candidate, harness_run=run)
-                    stage.record = self.store.save(stage.record)
-
-                async def evaluate_semantics(sealed):
-                    review_before = sealed.before_project()
-                    review_candidate = sealed.candidate_project()
-                    review_record = sealed.record_data()
-                    packet = review_packet(review_before, review_candidate, review_record)
-                    stage.record.setdefault("review_inputs", []).append(json.loads(packet))
-                    stage.record = self.store.save(stage.record)
-                    reviewer = BudgetedSettings(
-                        self.app.settings, metrics, stage.checkpoint_metrics,
-                        request_controls=_review_request_controls(project_id), purpose="semantic_review")
-                    try:
-                        review, certificate = await challenge(reviewer, review_before, review_candidate, review_record)
-                        return review, certificate, (f"/metrics/calls/{len(metrics.get('calls', [])) - 1}",)
-                    except BudgetExceededError as exc:
-                        raise HarnessExecutionError("budget_exhausted", str(exc)) from exc
-
-                run = await run_harness(snapshot, evaluate_semantics, checkpoint_harness)
-                if run.semantic_review_json:
-                    stage.record["reviews"].append(json.loads(run.semantic_review_json))
-                if run.model_certificate_json:
-                    stage.record.setdefault("batch_reviews", []).append(json.loads(run.model_certificate_json))
+                run = await self.run_review(stage, before, metrics)
                 accepted = run.decision == "apply"
                 if accepted:
                     stage.record["status"] = "ready"
@@ -887,7 +900,7 @@ class UnifiedPlanningService:
                     # stopped small repairs with runnable units and unused budget.
                     facade.agent.max_rounds = metrics["budget"]["max_calls"] - metrics["provider_calls"] - 1
                     facade.agent.max_calls = 8
-                    repair_agenda = build_repair_agenda(run, snapshot)
+                    repair_agenda = build_repair_agenda(run, seal_snapshot(before, candidate, stage.record))
                     facade.agent.initial_context = lambda project: router_context()
                     facade.agent.extra_context = REPAIR_INSTRUCTIONS
                     stage.record["status"] = "generating"

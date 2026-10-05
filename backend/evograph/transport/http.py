@@ -25,6 +25,7 @@ class AgentRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=6)
     verification_milestone: str | None = None
     source_analysis: bool = False
+    review_recheck: dict | None = None
     composer_document: ComposerDocument | None = None
     snapshot_mode: Literal["full", "compact-v1"] = "full"
 

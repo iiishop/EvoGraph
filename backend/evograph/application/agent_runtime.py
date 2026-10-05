@@ -106,7 +106,19 @@ class AgentRuntime:
         composer_document: ComposerDocument | dict | None = None,
         snapshot_mode: str = "full",
         source_analysis: bool = False,
+        review_recheck: dict | None = None,
     ):
+        if review_recheck is not None:
+            from .plan_recheck import stream_recheck
+            if (content != "重新评审" or question_id or attachment_ids or verification_milestone
+                    or composer_document or source_analysis):
+                yield {"type": "error", "message": "重新评审不能同时提交新要求或执行其他操作"}
+                yield {"type": "done", "changed": False}
+                return
+            async with aclosing(stream_recheck(self.app.unified, project_id, review_recheck, snapshot_mode)) as events:
+                async for event in events:
+                    yield event
+            return
         routing_project = self.app.db.get(project_id)
         if routing_project.question and routing_project.question.id == question_id:
             if not verification_milestone:

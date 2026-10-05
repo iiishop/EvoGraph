@@ -404,7 +404,32 @@ export interface PlanSemanticObservation {
   execution_evidence_ids: string[];
   evidence_refs: string[];
 }
+export interface ReviewRecheck {
+  version: string;
+  candidate_id: string;
+  candidate_revision: number;
+  candidate_hash: string;
+  record_hash: string;
+  base_revision: number;
+  base_hash: string;
+  checker_version: string;
+  policy_version: string;
+}
 export interface PlanCandidate {
+  review_recheck?: ReviewRecheck | null;
+  review_attempt?: {
+    id: string;
+    started_at: string;
+    closed_at: string | null;
+    status: string;
+    write_version: number;
+  };
+  review_attempt_history?: {
+    id: string;
+    started_at: string;
+    closed_at: string | null;
+    status: string;
+  }[];
   id: string;
   generation_progress?: {
     state: 'staged' | 'ready';

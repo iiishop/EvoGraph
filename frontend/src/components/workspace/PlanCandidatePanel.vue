@@ -63,7 +63,7 @@ const live = computed(
     active.value &&
     agent.state.running &&
     agent.state.projectId === props.canonical.id &&
-    agent.state.turnId === props.candidate.id,
+    agent.state.turnId === (props.candidate.review_attempt?.id ?? props.candidate.id),
 );
 const clock = ref(Date.now());
 let clockTimer: ReturnType<typeof setInterval> | undefined;
@@ -83,7 +83,9 @@ watch(
 onUnmounted(() => clearInterval(clockTimer));
 const elapsedSeconds = computed(() => {
   const recorded = props.candidate.metrics?.elapsed_seconds ?? 0;
-  const start = Date.parse(props.candidate.created_at ?? '');
+  const start = Date.parse(
+    props.candidate.review_attempt?.started_at ?? props.candidate.created_at ?? '',
+  );
   return Math.round(
     live.value && Number.isFinite(start)
       ? Math.max(recorded, (clock.value - start) / 1000)
@@ -111,6 +113,20 @@ const reviewBasis = {
 };
 const source = (requirement: Parameters<typeof requirementSource>[1]) =>
   requirementSource({ ...project.value, messages: props.canonical.messages }, requirement);
+const canRecheck = computed(
+  () =>
+    Boolean(props.candidate.review_recheck) &&
+    props.candidate.generation_progress?.state === 'ready' &&
+    ['needs_resolution', 'failed', 'stopped'].includes(props.candidate.status) &&
+    props.candidate.base_revision === props.canonical.revision &&
+    !props.canonical.question &&
+    !state.busy &&
+    !agent.state.running,
+);
+async function recheck() {
+  if (!canRecheck.value || !props.candidate.review_recheck) return;
+  await agent.recheck(props.canonical.id, props.candidate.review_recheck);
+}
 async function discard() {
   if (state.busy || ['applied', 'discarded'].includes(props.candidate.status)) return;
   await perform('plan.candidate_discard', {
@@ -142,8 +158,12 @@ async function discard() {
           ·
           {{ candidate.generation_progress.state === 'ready' ? '已提交统一检查' : '尚待完成生成' }}
         </p>
+        <p v-if="candidate.review_attempt" class="candidate-eyebrow">
+          独立重新评审 · {{ candidate.review_attempt.id }} · 最多 1 次模型调用
+        </p>
         <PlanReviewDisclosure :candidate="candidate" />
       </div>
+      <button v-if="canRecheck" class="text-button" type="button" @click="recheck">重新评审</button>
       <button
         v-if="!['applied', 'discarded'].includes(candidate.status)"
         class="text-button"

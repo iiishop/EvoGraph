@@ -112,7 +112,49 @@ function bindWorkspaceTab(project: Project) {
   };
 }
 
-function reconcileWorkflowDrafts(project: Project) {
+// A confirmed absence after a visible candidate is a discard tombstone for
+// that project incarnation. Late same-revision stream snapshots cannot revive it.
+const retiredCandidates = new Map<string, Set<string>>();
+const candidateIncarnation = (project: Project) => `${project.id}:${project.created_at}`;
+function olderCandidate(project: Project, incoming?: PlanCandidate | null) {
+  if (!incoming) return false;
+  if (retiredCandidates.get(candidateIncarnation(project))?.has(incoming.id)) return true;
+  const current = project.plan_candidate;
+  if (!current) return false;
+  if (current.base_revision > incoming.base_revision) return true;
+  if (current.id !== incoming.id)
+    return Boolean(
+      current.created_at && incoming.created_at && current.created_at > incoming.created_at,
+    );
+  if (current.revision > incoming.revision) return true;
+  if (['applied', 'discarded'].includes(current.status) && current.status !== incoming.status)
+    return true;
+  if (current.review_attempt && !incoming.review_attempt) return true;
+  if (
+    current.review_attempt?.id === incoming.review_attempt?.id &&
+    (current.review_attempt?.write_version ?? 0) > (incoming.review_attempt?.write_version ?? 0)
+  )
+    return true;
+  return Boolean(
+    current.review_attempt &&
+    incoming.review_attempt &&
+    current.review_attempt.started_at > incoming.review_attempt.started_at,
+  );
+}
+
+function reconcileWorkflowDrafts(project: Project, authoritative = false) {
+  if (
+    authoritative &&
+    state.project &&
+    candidateIncarnation(state.project) === candidateIncarnation(project) &&
+    state.project.plan_candidate &&
+    !project.plan_candidate
+  ) {
+    const key = candidateIncarnation(project);
+    const retired = retiredCandidates.get(key) ?? new Set<string>();
+    retired.add(state.project.plan_candidate.id);
+    retiredCandidates.set(key, retired);
+  }
   reconcileWorkspaceTab(project);
   architectureBrowse.reconcile(project);
   workflowDrafts.reconcile(
@@ -161,7 +203,7 @@ async function loadProject(id: string, navigate = false): Promise<ProjectOpenRes
         architectureBrowse.activate(project);
         agentDrafts.activate(id);
         workflowDrafts.activate(id);
-        reconcileWorkflowDrafts(project);
+        reconcileWorkflowDrafts(project, true);
         state.project = project;
         localStorage.setItem('evograph.project', id);
         return 'accepted';
@@ -183,6 +225,8 @@ async function loadProject(id: string, navigate = false): Promise<ProjectOpenRes
 }
 
 function discardProject(id: string) {
+  for (const key of retiredCandidates.keys())
+    if (key.startsWith(`${id}:`)) retiredCandidates.delete(key);
   workspaceTabs.delete(id);
   architectureBrowse.discard(id);
   agentDrafts.discard(id);
@@ -236,7 +280,7 @@ async function refresh() {
       state.project?.id === projectId &&
       project.revision >= state.project.revision
     ) {
-      reconcileWorkflowDrafts(project);
+      reconcileWorkflowDrafts(project, true);
       state.project = project;
     }
   } catch (error) {
@@ -482,6 +526,11 @@ export function useWorkspace() {
           const { snapshot_mode: _mode, ...planning } = snapshot;
           project = { ...planning, messages: state.project.messages, events: state.project.events };
         } else project = snapshot as Project;
+        if (
+          (!project.plan_candidate && state.project.plan_candidate) ||
+          olderCandidate(state.project, project.plan_candidate)
+        )
+          project = { ...project, plan_candidate: state.project.plan_candidate };
         snapshotSequence++;
         reconcileWorkflowDrafts(project);
         state.project = project;
@@ -505,9 +554,7 @@ export function useWorkspace() {
         return;
       }
       if (candidate.project.created_at !== state.project.created_at) return;
-      const current = state.project.plan_candidate;
-      if (current?.id === candidate.id && current.revision > candidate.revision) return;
-      if (current && current.base_revision > candidate.base_revision) return;
+      if (olderCandidate(state.project, candidate)) return;
       snapshotSequence++;
       state.project = { ...state.project, plan_candidate: candidate };
     },

@@ -1100,3 +1100,88 @@ test('a failed source-question answer retains its resolved operation for explici
   };
   assert.equal(await h.agent.send('P1', 'Plan a new feature'), true);
 });
+
+test('recheck ordering survives refresh then delayed full snapshot and candidate frame', async () => {
+  const { workspace, records } = await agentHarness('recheck-full-order', true);
+  const original = structuredClone(records.get('P1'));
+  const old = planningCandidate(original, {
+    revision: 7,
+    review_attempt: { id: 'R1', started_at: '2026-10-05T10:00:00Z', write_version: 2 },
+  });
+  const newer = {
+    ...old,
+    review_attempt: { id: 'R2', started_at: '2026-10-05T10:01:00Z', write_version: 3 },
+  };
+  workspace.applyPlanCandidate('P1', old);
+  records.set('P1', { ...original, plan_candidate: newer });
+  await workspace.refresh();
+  workspace.applyProject({ ...original, plan_candidate: old });
+  workspace.applyPlanCandidate('P1', old);
+  assert.equal(workspace.state.project.plan_candidate.review_attempt.id, 'R2');
+  workspace.applyProject({
+    ...original,
+    plan_candidate: { ...newer, review_attempt: { ...newer.review_attempt, write_version: 1 } },
+  });
+  assert.equal(workspace.state.project.plan_candidate.review_attempt.write_version, 3);
+  records.set('P1', { ...original, plan_candidate: null });
+  await workspace.refresh();
+  assert.equal(workspace.state.project.plan_candidate, null);
+  workspace.applyProject({ ...original, plan_candidate: old });
+  workspace.applyPlanCandidate('P1', newer);
+  assert.equal(workspace.state.project.plan_candidate, null);
+});
+
+test('delayed done-project cannot visually resurrect a refreshed discarded review', async () => {
+  const { agent, env, workspace, records } = await agentHarness('recheck-done-discard', true);
+  const original = structuredClone(records.get('P1'));
+  const candidate = planningCandidate(original, {
+    revision: 7,
+    review_attempt: { id: 'review-turn', started_at: '2026-10-05T10:00:00Z', write_version: 4 },
+  });
+  env.run = async (params, receive) => {
+    assert.equal(params.review_recheck.candidate_id, 'candidate-1');
+    receive({ type: 'started', turn_id: 'review-turn' });
+    receive({ type: 'candidate_changed', turn_id: 'review-turn', project_id: 'P1', candidate });
+    records.set('P1', { ...original, plan_candidate: null });
+    await workspace.refresh();
+    receive({
+      type: 'done',
+      turn_id: 'review-turn',
+      project: { ...original, plan_candidate: candidate },
+      summary: { turn_id: 'review-turn', status: 'stopped', changed: false },
+    });
+    assert.equal(workspace.state.project.plan_candidate, null);
+  };
+  await agent.recheck('P1', { candidate_id: 'candidate-1' });
+  assert.equal(workspace.state.project.plan_candidate, null);
+});
+
+test('newer candidate ID survives old recovery frames and stream omission cannot invent discard', async () => {
+  const { workspace, records } = await agentHarness('recheck-new-candidate-order', true);
+  const original = structuredClone(records.get('P1'));
+  const old = planningCandidate(original, {
+    id: 'old-candidate',
+    revision: 7,
+    created_at: '2026-10-05T10:00:00Z',
+    review_attempt: { id: 'old-review', started_at: '2026-10-05T10:02:00Z', write_version: 4 },
+  });
+  const fresh = planningCandidate(original, {
+    id: 'new-candidate',
+    revision: 3,
+    created_at: '2026-10-05T10:01:00Z',
+  });
+  workspace.applyPlanCandidate('P1', old);
+  records.set('P1', { ...original, plan_candidate: fresh });
+  await workspace.refresh();
+  workspace.applyProject({ ...original, plan_candidate: old });
+  workspace.applyPlanCandidate('P1', old);
+  assert.equal(workspace.state.project.plan_candidate.id, 'new-candidate');
+  workspace.applyProject({ ...original, plan_candidate: null });
+  assert.equal(workspace.state.project.plan_candidate.id, 'new-candidate');
+  workspace.applyPlanCandidate('P1', { ...fresh, revision: 4 });
+  assert.equal(workspace.state.project.plan_candidate.revision, 4);
+  records.set('P1', { ...original, plan_candidate: null });
+  await workspace.refresh();
+  workspace.applyProject({ ...original, plan_candidate: fresh });
+  assert.equal(workspace.state.project.plan_candidate, null);
+});
