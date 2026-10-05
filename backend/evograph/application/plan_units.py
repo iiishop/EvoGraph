@@ -815,7 +815,9 @@ def _initial_unit_context(db, project, objects):
             "target": project.targets[-1].model_dump() if project.targets else None,
             "target_draft": project.target_draft, "acceptance_directory": directory,
             "inactive_behavior_history": list(inactive.values()),
-            "slices": [{"id": m.id, "title": m.title, "dependencies": list(m.dependencies)} for m in project.milestones],
+            "slices": [m.model_dump(include={"id", "title", "intent", "scope", "dependencies"})
+                       for m in project.milestones],
+            "slices_note": "Exact current saved delivery intent, scope and dependency IDs, joined by id to contract owners. Other milestone fields and history are omitted. This read projection is not proof of stage availability or semantic preservation.",
             "architecture_context": _architecture_context(objects.get("architecture:architecture")),
             "components": components,
             "components_note": ("Read-only current component responsibilities, included exactly."
@@ -895,6 +897,7 @@ def _compact_unit_directories(context):
     for name, identity, prefix, keep in (
         ("acceptance_directory", "key", "contract:", ("key", "owner", "revision_id")),
         ("components", "id", "component:", ("id", "label")),
+        ("slices", "id", "slice:", ("id", "title", "dependencies")),
     ):
         compacted = []
         for index, entry in enumerate(context[name]):
@@ -908,7 +911,7 @@ def _compact_unit_directories(context):
             context[name + "_note"] = (
                 "Complete exact definitions for " + _json(compacted)
                 + " are in current_unit.objects under those same keys. Their directory entries retain identity only, "
-                  "without repeating those definitions. Other entries are unchanged; no acceptance or interface fact is removed."
+                  "without repeating those definitions. Other entries are unchanged; no acceptance, interface or delivery-boundary fact is removed."
             )
 
 
