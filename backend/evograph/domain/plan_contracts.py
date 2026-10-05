@@ -54,6 +54,18 @@ class ProvidedCapability(TypedContractModel):
     key: str = Field(min_length=1, max_length=80)
     kind: Literal["command", "query"]
     action: str = Field(min_length=1, max_length=80)
+    # None is unmodeled; [] declares no runtime use in this modeled surface only.
+    consumes: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = Field(
+        default=None, max_length=16,
+    )
+
+    @field_validator("consumes")
+    @classmethod
+    def valid_consumption_keys(cls, value):
+        if value is not None and (any(not key.strip() for key in value)
+                                  or len(value) != len(set(value))):
+            raise ValueError("consumes must contain unique nonblank capability keys")
+        return value
 
 class InvokeCapabilityStep(TypedContractModel):
     kind: Literal["invoke_command", "invoke_query"]

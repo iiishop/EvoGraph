@@ -5,7 +5,7 @@ import time
 
 from ..domain.models import now
 from ..domain.plan_contracts import PLANNING_FIELDS, planning_fingerprint
-from ..domain.typed_capabilities import declared_typed_keys
+from ..domain.typed_capabilities import declared_consumption_keys, declared_typed_keys
 from ..infrastructure.database import ConflictError
 from .baseline_milestones import BaselineMilestoneService
 from .design import DesignService
@@ -54,7 +54,10 @@ class StagedDatabase:
         record = {**self.record, "project": updated.model_dump(), "revision": updated.revision,
                   "typed_obligation_keys": sorted(set(self.record.get("typed_obligation_keys", []))
                                                    | declared_typed_keys(self.project)
-                                                   | declared_typed_keys(updated))}
+                                                   | declared_typed_keys(updated)),
+                  "consumption_obligation_keys": sorted(
+                      {tuple(key) for key in self.record.get("consumption_obligation_keys", [])}
+                      | declared_consumption_keys(self.project) | declared_consumption_keys(updated))}
         if compiler_audit is not None:
             record = copy.deepcopy(record)
             record.setdefault("compilations", []).append(compiler_audit)

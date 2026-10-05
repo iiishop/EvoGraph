@@ -367,6 +367,9 @@ def _schedule(project, rows):
             for ckey, contract in contracts.items():
                 if any(s.get("capability_key") in caps for s in contract.get("steps") or []):
                     repair_contract(i, ckey, "steps")
+                if any(key in caps for provided in contract.get("provides", [])
+                       for key in provided.get("consumes") or []):
+                    repair_contract(i, ckey, "provides")
         if kind == "remove_slice":
             for milestone in project.milestones:
                 if identity in milestone.dependencies:

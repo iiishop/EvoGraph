@@ -14,7 +14,7 @@ from ..domain.plan_contracts import (
     planning_fingerprint,
     planning_payload,
 )
-from ..domain.typed_capabilities import declared_typed_keys
+from ..domain.typed_capabilities import declared_consumption_keys, declared_typed_keys
 from ..infrastructure.database import ConflictError
 from ..infrastructure.plan_candidates import CandidateStore
 from .agent_errors import agent_error_event
@@ -98,6 +98,11 @@ Use the exact saved mechanisms provided for completed units as existing interfac
 Necessary impact on other record IDs remains unresolved; never silently omit it or write beyond the unit. Capability provides/steps are OPTIONAL experimental annotations: do not
 create or migrate them for ordinary requests. Where annotations already exist, preserve their validity;
 a changed typed statement requires explicit refreshed steps. Never clear declarations to bypass a check.
+Optional provides[].consumes describes declared runtime use of meaningful shared/public capabilities.
+An omitted consumes is unmodeled; [] declares none in this modeled surface only. Do not inventory helpers.
+Own-slice planned work is structurally available, not executed. A query may require write-owned data/schema
+without invoking a command. Use existing prerequisite ordering or the same atomic unit for new providers;
+manifest provides uses are definitions, not consumption references.
 slices hold
 short purpose and work boundaries, not another copy of acceptance. components hold concise owned
 responsibilities, relations are separate records. A short target names the outcome; contracts carry its
@@ -154,7 +159,13 @@ Compare target, acceptance statements, owner intent/scope, mechanisms, architect
 risks/quality scenarios. contract_delta and capability_delta are server-computed references, not proof;
 resolve them against the complete before/current snapshots and inspect affected owners and consumers.
 Typed capability checks cover only declared operations: check omitted actions, misleading action quotes,
-misclassified inspect steps and consumer effects. Historical capability_move_audits are not user permission.
+misclassified inspect steps and consumer effects. provides[].consumes is runtime use, distinct from
+acceptance steps and data/schema prerequisites. A fixture command followed by a query is valid; a query
+consuming a command is an effect contradiction. Omitted consumes is unmodeled and [] declares none only
+within the modeled surface. Declared typing never proves shared predicate semantics, complete mechanisms,
+or one-session feasibility. Different predicate keys require semantic review only where a shared-rule
+promise makes them relevant; same keys alone do not prove equivalence. Own-slice planned work is available
+structurally, not already executed. Historical capability_move_audits are not user permission.
 Each slice_activation checks its exact owning slice plus declared ancestors in slice_availability; SRC
 capability pointers are separate and are not verified implementation evidence. Both target and milestone
 acceptance must hold at that delivery stage. Never borrow future guards/screens/capabilities. A foundation
@@ -380,6 +391,9 @@ class UnifiedPlanningService:
                 "capability_move_audits": capability_move_context(before, candidate, previous) if resume else [],
                 "typed_obligation_keys": sorted(declared_typed_keys(before) | declared_typed_keys(candidate)
                     | set(previous.get("typed_obligation_keys", []) if resume else [])),
+                "consumption_obligation_keys": sorted(
+                    declared_consumption_keys(before) | declared_consumption_keys(candidate)
+                    | {tuple(key) for key in (previous.get("consumption_obligation_keys", []) if resume else [])}),
                 "generation_progress": {"state": "staged", "checkpoint_count":
                     previous.get("generation_progress", {}).get("checkpoint_count", 0) if resume else 0},
                 "validation_requested": False,

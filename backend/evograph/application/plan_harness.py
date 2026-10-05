@@ -54,7 +54,7 @@ from .provider_output import ProviderOutputError
 _PROJECT_FIELDS = {*PLANNING_FIELDS, "id", "name", "description", "revision", "archived",
                    "unified_planning", "baselines", "evidence", "attachments"}
 _RECORD_FIELDS = ("id", "project_id", "base_revision", "input", "reference_context", "checker_version",
-                  "capability_move_audits", "typed_obligation_keys", "work_units")
+                  "capability_move_audits", "typed_obligation_keys", "consumption_obligation_keys", "work_units")
 
 
 def _project_data(project):
@@ -321,6 +321,7 @@ def _typed_capability_flow(snapshot):
     report = typed_capability_report(
         snapshot.candidate_project(), snapshot.before_project(),
         obligation_keys=snapshot.record_data().get("typed_obligation_keys", ()),
+        consumption_obligation_keys=snapshot.record_data().get("consumption_obligation_keys", ()),
     )
     findings = [_finding(f["code"], f["subject"], f["message"], severity=f["severity"], refs=f["refs"])
                 for f in report["findings"]]
@@ -349,9 +350,9 @@ BUILTIN_REGISTRY = (
     BuiltinPlugin(PluginManifest(id="declared_availability", version="1", kind="deterministic",
                                 prerequisites=("graph_identity",),
                                 scope="declared_owner_prerequisite_capabilities"), _declared_availability),
-    BuiltinPlugin(PluginManifest(id="typed_capability_flow", version="2", kind="deterministic",
+    BuiltinPlugin(PluginManifest(id="typed_capability_flow", version="3", kind="deterministic",
                                 prerequisites=("graph_identity", "contract_source_history"),
-                                scope="declared_typed_acceptance_operation_availability"), _typed_capability_flow),
+                                scope="declared_typed_acceptance_and_runtime_consumption"), _typed_capability_flow),
     BuiltinPlugin(PluginManifest(id="semantic_review", version="1", kind="model_opinion",
                                 prerequisites=CURRENT_POLICY.deterministic_required,
                                 scope="source_plan_semantic_opinion")),

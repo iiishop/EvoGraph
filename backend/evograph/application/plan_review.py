@@ -12,13 +12,18 @@ from ..domain.dependencies import ancestor_sets
 from ..domain.models import Project
 from ..domain.plan_contracts import (
     SemanticReview,
+    active_behaviors,
     candidate_hash,
     eligible_execution_evidence,
     planning_fingerprint,
     review_subjects,
     validate_semantic_review,
 )
-from ..domain.typed_capabilities import capability_changes
+from ..domain.typed_capabilities import (
+    capability_changes,
+    capability_providers,
+    declared_consumption_keys,
+)
 from .plan_patch import contract_changes
 
 CHECKER_VERSION = "unified-contract-challenge-v11"
@@ -452,7 +457,8 @@ def _capability_delta_refs(before, candidate, packet):
                 behavior_ref, binding_ref, binding, identity = records(side, provider["behavior_key"])
                 matches = [i for i, provided in enumerate(binding["provides"])
                            if provided["key"] == change["key"]
-                           and {**identity, "kind": provided["kind"], "action": provided["action"]} == provider
+                           and {**identity, "kind": provided["kind"], "action": provided["action"],
+                                "consumes": provided.get("consumes")} == provider
                            and (binding_ref, i) not in used]
                 if not matches:
                     raise ValueError("能力提供者差异与包内完整记录不一致")
@@ -464,14 +470,54 @@ def _capability_delta_refs(before, candidate, packet):
                 behavior_ref, binding_ref, binding, identity = records(side, consumer["behavior_key"])
                 indices = [i for i, step in enumerate(binding["steps"] or [])
                            if step["kind"] != "inspect" and step["capability_key"] == change["key"]]
-                if not indices or {**identity, "step_indices": indices} != consumer:
-                    raise ValueError("能力消费者差异与包内完整步骤不一致")
+                consumption = [[i, j] for i, provided in enumerate(binding["provides"])
+                               for j, key in enumerate(provided.get("consumes") or [])
+                               if key == change["key"]]
+                if (not (indices or consumption)
+                        or {**identity, "step_indices": indices,
+                            "consumption_indices": consumption} != consumer):
+                    raise ValueError("能力消费者差异与包内完整声明不一致")
                 consumers.append({"behavior_ref": behavior_ref,
-                                  "step_refs": [f"{binding_ref}/steps/{i}" for i in indices]})
+                                  "step_refs": [f"{binding_ref}/steps/{i}" for i in indices],
+                                  "consumption_refs": [f"{binding_ref}/provides/{i}/consumes/{j}"
+                                                       for i, j in consumption]})
             row[f"{name}_providers"] = providers
             row[f"{name}_consumers"] = consumers
         result.append(row)
     return result
+
+
+def _capability_coverage(before, candidate, record, packet):
+    """Reference-only declaration coverage, never a completeness certificate."""
+    binding_refs = _record_refs(packet, "/candidate/plan_contract/bindings", "behavior_key")
+    behavior_refs = _record_refs(packet, "/candidate/behaviors", "behavior_key")
+    bindings = {binding.behavior_key: binding for binding in candidate.plan_contract.bindings}
+    unmodeled, consumption, empty = [], [], []
+    for key in active_behaviors(candidate):
+        binding = bindings.get(key)
+        absent = [field for field in ("provides", "steps")
+                  if binding is None or not getattr(binding, field)]
+        if absent:
+            unmodeled.append({"behavior_ref": behavior_refs[key],
+                              "binding_ref": binding_refs.get(key), "unmodeled_fields": absent})
+        if binding is not None:
+            for index, capability in enumerate(binding.provides):
+                ref = f"{binding_refs[key]}/provides/{index}"
+                if capability.consumes is None:
+                    consumption.append(ref)
+                elif not capability.consumes:
+                    empty.append(ref)
+    obligations = (declared_consumption_keys(before)
+                   | {tuple(key) for key in record.get("consumption_obligation_keys", [])})
+    current_keys = capability_providers(candidate)
+    removed = [{"behavior_key": behavior_key, "capability_key": key}
+               for behavior_key, key in sorted(obligations)
+               if behavior_key in active_behaviors(candidate) and key not in current_keys]
+    return {"scope": "Declared shared/public surface only; removed declarations are not fulfilled "
+                     "obligations and require change/source review; omitted declarations are unmodeled, "
+                     "and explicit [] does not prove mechanism completeness or semantic equivalence.",
+            "unmodeled_acceptance": unmodeled, "unmodeled_consumption_refs": consumption,
+            "declared_empty_consumption_refs": empty, "removed_consumption_declarations": removed}
 
 
 def _slice_availability(candidate, packet):
@@ -572,9 +618,10 @@ def batch_review_packet(before, candidate, record):
         "changes": _delta_refs(before, candidate, packet),
     }
     packet["capability_delta"] = {
-        "schema_version": "capability-delta-refs/v1",
+        "schema_version": "capability-delta-refs/v2",
         "changes": _capability_delta_refs(before, candidate, packet),
     }
+    packet["capability_coverage"] = _capability_coverage(before, candidate, record, packet)
     packet["slice_availability"] = _slice_availability(candidate, packet)
     packet["evidence_catalog"] = _evidence_catalog(packet)
     _deduplicate_before_records(packet)
