@@ -709,6 +709,29 @@ def _context_sources(project):
     return sources
 
 
+def _architecture_context(architecture, full=None):
+    """Exact latest saved metadata, independent of the unit's changed records.
+
+    No summarization or size-based omission: normal request-budget admission
+    decides whether the complete context can be sent.
+    """
+    if architecture is None:
+        return {"status": "absent", "note": "No saved architecture exists in this candidate."}
+    result = {"status": "saved", "number": architecture["number"],
+              "created_at": architecture["created_at"],
+              "note": "Read-only current saved planning facts, not proof of semantic compatibility or execution."}
+    if full == architecture:
+        result.update(value_ref="current_unit.objects['architecture:architecture']",
+                      coverage="The referenced complete same-revision object supplies all architecture fields exactly, including diagram metadata and graph. No separate metadata copy is needed.")
+    else:
+        result["metadata"] = deepcopy({key: value for key, value in architecture.items()
+                                       if key not in {"number", "created_at", "diagram"}})
+        result["metadata"]["diagram"] = deepcopy({key: value for key, value in architecture["diagram"].items()
+                                                  if key not in {"nodes", "edges"}})
+        result["coverage"] = "All current saved architecture metadata is included exactly; number and created_at identify its revision. Diagram nodes and edges use the existing components/relations context and its coverage notes; architecture history is omitted."
+    return result
+
+
 def _initial_unit_context(db, project, objects):
     inactive = {}
     active_keys = {key.split(":", 1)[1] for key in objects if key.startswith("contract:")}
@@ -749,6 +772,7 @@ def _initial_unit_context(db, project, objects):
             "target_draft": project.target_draft, "acceptance_directory": directory,
             "inactive_behavior_history": list(inactive.values()),
             "slices": [{"id": m.id, "title": m.title, "dependencies": list(m.dependencies)} for m in project.milestones],
+            "architecture_context": _architecture_context(objects.get("architecture:architecture")),
             "components": components,
             "components_note": ("Read-only current component responsibilities, included exactly."
                                 if responsibilities_included else
@@ -793,6 +817,8 @@ def current_unit_context(db):
                                                   if _key("contract", item["key"]) not in keys]
         architecture = result["current_unit"]["objects"].get("architecture:architecture")
         if architecture is not None:
+            result["architecture_context"] = _architecture_context(
+                objects.get("architecture:architecture"), architecture)
             nodes = {node["id"]: node for node in architecture["diagram"]["nodes"]}
             if all(all(nodes.get(c["id"], {}).get(k) == v for k, v in c.items())
                    for c in result["components"]):

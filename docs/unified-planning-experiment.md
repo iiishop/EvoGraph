@@ -25,6 +25,15 @@ together above that target. Dependency ordering, exact-field hashes and checkpoi
 coverage remain enforced. Saved schedules, including pending and completed units,
 are not repacked by this change, and no provider budget is increased.
 
+Every routing and generation context also includes an exact read-only projection
+of the latest saved architecture metadata, including its technology choices,
+decisions, assumptions and revision identity. This prevents a later contract unit
+from losing a previously chosen stack merely because it is not editing the
+architecture itself. If the same complete architecture is already supplied in
+the unit's objects, an explicit reference replaces the duplicate projection.
+There is no generated summary or silent truncation; normal request admission
+still applies. Providing these facts does not prove the model will honor them.
+
 Before each unit request, the scheduler checks saved identity, partition integrity,
 dependency order, held groups and bootstrap availability. A known unclosable manifest gets
 at most one bounded routing repair in that user-requested turn, before any unit has been
