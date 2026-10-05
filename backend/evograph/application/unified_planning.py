@@ -56,6 +56,7 @@ from .plan_units import (
     manifest_tool_for,
     prepare_unit_request,
     resume_unit_schedule,
+    retained_unit_schedule_history,
     schedule_findings,
 )
 from .plan_validation import build_validation_receipt
@@ -529,6 +530,7 @@ class UnifiedPlanningService:
                 "inherited_findings": previous.get("report", {}).get("findings", []) if resume and not repair_phase else [],
                 "inherited_semantic_findings": carry_review_findings(previous) if resume and not repair_phase else None,
                 "prior_work_units": previous.get("work_units") if resume else None,
+                "work_unit_schedule_history": retained_unit_schedule_history(previous) if resume else [],
                 "reviews": [], "metrics": metrics,
                 "resumes_candidate_id": previous["id"] if resume else None,
                 "allowed_requirement_source_ids": sorted(pending_sources | {turn_id}),

@@ -129,3 +129,37 @@ def test_large_delivery_boundary_is_exact_and_request_budget_still_blocks(app):
     assert invoked == [] and metrics["provider_calls"] == 0
     assert metrics["admission_rejections"][0]["reason"] == "request_input_limit"
     assert metrics["admission_rejections"][0]["request_limit_bytes"] == 163840
+
+
+def test_completed_contract_ids_survive_a_new_held_manifest_but_text_is_current():
+    from evograph.application.plan_units import retained_unit_schedule_history
+
+    fixture = Path(__file__).parent / "fixtures/qa55-closed-repair-candidate.json.gz"
+    complete = json.loads(gzip.decompress(fixture.read_bytes()))
+    project = Project.model_validate(complete["project"])
+    old_schedule = deepcopy(complete["work_units"])
+    held = deepcopy(old_schedule)
+    held.update(completed_ids=[], checkpoints=[], pending_ids=[unit["id"] for unit in held["units"]])
+    for unit in held["units"]:
+        unit.update(state="held", holds=["new requirement needs its first covering/owned contract"])
+    predecessor = {**deepcopy(complete), "prior_work_units": old_schedule, "work_units": held}
+    frozen = deepcopy(predecessor)
+    record = {"id": "new-source", "prior_work_units": deepcopy(held),
+              "work_unit_schedule_history": retained_unit_schedule_history(predecessor)}
+    assert record["prior_work_units"] == held
+    assert record["work_unit_schedule_history"] == [old_schedule]
+    assert retained_unit_schedule_history({**predecessor,
+        "work_unit_schedule_history": record["work_unit_schedule_history"]}) == [old_schedule]
+    current = next(binding for binding in project.plan_contract.bindings
+                   if binding.behavior_key == "contract-staff-console")
+    old_mechanism = current.mechanism
+    current.mechanism = "CURRENT staged mechanism, never text copied from an old checkpoint"
+    db = SimpleNamespace(project=project, record=record, source_id=record["id"],
+                         get=lambda identity: project)
+    context = initial_unit_context(db)
+    staff = next(row for row in context["completed_contract_mechanisms"]
+                 if row["key"] == "contract-staff-console")
+    assert staff["mechanism"] == current.mechanism != old_mechanism
+    assert staff["revision_id"] == current.behavior_revision_id
+    assert context["requirements"] == project.plan_contract.model_dump()["requirements"]
+    assert record["prior_work_units"] == held and predecessor == frozen

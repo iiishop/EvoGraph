@@ -657,6 +657,20 @@ def has_completed_units(schedule):
                 or any(unit.get("state") == "completed" for unit in schedule.get("units", []))))
 
 
+def retained_unit_schedule_history(previous):
+    """Keep completed-ID provenance without replacing the current pending manifest.
+
+    This history selects mechanism context only. Text and revision IDs always
+    come from current staged objects; an old checkpoint is not a new certificate.
+    """
+    history = deepcopy(previous.get("work_unit_schedule_history", []))
+    prior = previous.get("prior_work_units")
+    if (has_completed_units(prior or {})
+            and not any(_hash(item) == _hash(prior) for item in history)):
+        history.append(deepcopy(prior))
+    return history
+
+
 def schedule_plan_changes(ctx, args):
     db = ctx.application.db
     if not getattr(db, "is_candidate", False):
@@ -788,7 +802,8 @@ def _initial_unit_context(db, project, objects):
                       "requires_behavior_keys", "provides", "steps") if field in c}}
                  for key, c in objects.items() if key.startswith("contract:")]
     completed_keys = set()
-    for schedule in (db.record.get("prior_work_units"), db.record.get("work_units")):
+    for schedule in (db.record.get("prior_work_units"), db.record.get("work_units"),
+                     *db.record.get("work_unit_schedule_history", [])):
         if not isinstance(schedule, dict) or schedule.get("project_id") != project.id:
             continue
         completed = {u["id"]: u["hash"] for u in schedule.get("units", [])
