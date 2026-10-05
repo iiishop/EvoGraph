@@ -466,10 +466,13 @@ def _schedule(project, rows):
                 or contract_count > MAX_UNIT_CONTRACTS or _operation_count(entries) > MAX_UNIT_OPERATIONS):
             reasons.append(SIZE_HOLD)
         depends = {group_units[d] for d in dependencies[group] if d in group_units}
-        # Pack independent or already-ordered small groups without merging their semantics.
+        # Pack independent or already-ordered groups without merging their semantics.
+        # Same-record field atoms share the indivisible-singleton exception;
+        # their existing text is counted once, not once per assigned field.
         previous = units[-1] if units else None
         if (not reasons and previous and previous["state"] == "pending"
-                and work_size(previous["changes"] + entries)[1] <= MAX_UNIT_BYTES
+                and (work_size(previous["changes"] + entries)[1] <= MAX_UNIT_BYTES
+                     or _operation_count(previous["changes"] + entries) == 1)
                 and previous["contract_count"] + contract_count <= MAX_UNIT_CONTRACTS
                 and _operation_count(previous["changes"] + entries) <= MAX_UNIT_OPERATIONS):
             unit = previous

@@ -18,6 +18,13 @@ artificial atomic batch. Metadata atoms must be submitted exactly, and complete 
 manifest and checkpoint coverage is checked again before final validation. Ordinary record
 fields retain their existing same-record repair flexibility.
 
+When scheduling a new manifest, adjacent metadata atoms for the same canonical
+architecture can share its existing indivisible-record exception above the 6 KiB
+packing target. Its text is counted once; distinct records still cannot be packed
+together above that target. Dependency ordering, exact-field hashes and checkpoint
+coverage remain enforced. Saved schedules, including pending and completed units,
+are not repacked by this change, and no provider budget is increased.
+
 Before each unit request, the scheduler checks saved identity, partition integrity,
 dependency order, held groups and bootstrap availability. A known unclosable manifest gets
 at most one bounded routing repair in that user-requested turn, before any unit has been
