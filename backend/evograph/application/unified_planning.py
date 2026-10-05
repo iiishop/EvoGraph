@@ -161,17 +161,20 @@ Return exactly one submit_plan_review call with candidate_hash and review_scope_
 required subject exactly once to supported/contradicted/unknown. Cover every contradicted/unknown subject
 exactly once in a matching-verdict issue; issues may group subjects but never include supported ones.
 Classify materiality BEFORE assigning a verdict. Each issue needs materiality: one exact obligation_ref
-to a source/contract string leaf, its literal obligation_excerpt (<=320), affected_owner_ids, gap_kind,
+to a string leaf allowed by its schema pattern, its literal obligation_excerpt (<=320), affected_owner_ids, gap_kind,
 boundary_refs and necessary_plan_change (<=320). Use reason/counterexample to explain why ordinary
 implementation within the owner's unchanged scope cannot fulfill the obligation: an explicit exclusion,
 incompatible interface/mechanism, unavailable prerequisite, or an undecided consequential choice.
 For explicit_conflict use contradicted with a permitted input/state/interleaving and expected versus fixed
 mechanism outcome; for unresolved_semantics use unknown when alternatives change observable behavior,
-safety, scope or acceptance meaning. For unavailable_prerequisite name consumer_owner_id and provider_ref
-in boundary_refs; that existing provider must be outside the consumer's own plus ancestor closure.
+safety, scope or acceptance meaning. For unavailable_prerequisite name consumer_owner_id and a packet
+pointer as provider_ref (not an owner ID), also in boundary_refs; that existing provider must be outside
+the consumer's own plus ancestor closure.
+For other gaps omit consumer_owner_id/provider_ref or set both null.
 If no provider is identified, use unresolved_semantics rather than invent an owner. Empty affected owners
 are allowed for genuinely unowned/global obligations. Record pointers and their resolved fields are valid
-materiality references; issue evidence_refs still name exact evidence_catalog records. Keep references and
+boundary_refs; mechanisms are boundary evidence, never obligation_ref anchors. issue evidence_refs still
+name exact evidence_catalog records. Schema paths are advisory; packet checks remain authoritative. Keep references and
 bounded excerpts, never copy whole candidates. IDs across issues/observations must be unique.
 Use observations (editorial or implementation_latitude, bounded reason, honest basis and exact references)
 for cleanup/glue that changes no outcome, identity, ownership, dependency, safety condition or acceptance

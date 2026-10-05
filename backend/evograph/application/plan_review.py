@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -29,6 +29,24 @@ from .plan_patch import contract_changes
 
 CHECKER_VERSION = "unified-contract-challenge-v12"
 BATCH_VERSION = "semantic-batch/v2"
+# Shared advisory schema/runtime rules. Packet membership, resolved values and
+# gap-dependent materiality checks remain authoritative below. Do not add field
+# bounds here: the existing scalar and list-item bounds intentionally differ.
+PACKET_POINTER_PATTERN = r"^/(?:[^~]|~[01])+$"
+# JSON Schema patterns search; the final assertion preserves fullmatch semantics
+# even with a trailing newline. The path allowlist itself is unchanged.
+# Explicit not-LF classes preserve Python dot semantics in ECMAScript schemas.
+OBLIGATION_REF_PATTERN = (
+    rf"(?={PACKET_POINTER_PATTERN})"
+    r"^(?:/current_input|/candidate/(?:target/statement|target_draft|"
+    r"behaviors/[0-9]+/statement|milestones/[0-9]+/(?:intent|scope/[0-9]+)|"
+    r"source_milestones/[0-9]+/source_behaviors/[0-9]+/statement|"
+    r"plan_contract/(?:sources/[0-9]+/(?:text|reference_context/(?:references|attachments)/"
+    r"[^\n]+/(?:text|excerpt|content)|evidence/[0-9]+/result/(?:text|excerpt|content))|"
+    r"requirements/[0-9]+/quote|process_constraints/[0-9]+/quote))|"
+    r"/reference_context/(?:references|attachments)/[^\n]+/(?:text|excerpt|content))(?![\s\S])"
+)
+PacketPointer = Annotated[str, Field(json_schema_extra={"pattern": PACKET_POINTER_PATTERN})]
 _ALIAS_KEY = "$packet_ref"
 _RECORD_LISTS = (
     ("milestones",), ("behaviors",), ("source_milestones",), ("research",),
@@ -97,16 +115,17 @@ class BatchStatuses(BatchModel):
 
 class MaterialityEvidence(BatchModel):
     """Bounded provenance and a model's causal claim, never an entailment proof."""
-    obligation_ref: str = Field(min_length=1, max_length=240)
+    obligation_ref: str = Field(min_length=1, max_length=240,
+                                json_schema_extra={"pattern": OBLIGATION_REF_PATTERN})
     obligation_excerpt: str = Field(min_length=1, max_length=320)
     affected_owner_ids: list[str] = Field(max_length=64)
     gap_kind: Literal["explicit_conflict", "unresolved_semantics", "unavailable_prerequisite"]
-    boundary_refs: list[str] = Field(min_length=1, max_length=8)
+    boundary_refs: list[PacketPointer] = Field(min_length=1, max_length=8)
     necessary_plan_change: str = Field(min_length=1, max_length=320)
     # reason/counterexample below explain why ordinary owned implementation
     # cannot fulfill the unchanged plan. Do not duplicate that prose here.
     consumer_owner_id: str | None = Field(default=None, max_length=120)
-    provider_ref: str | None = Field(default=None, max_length=240)
+    provider_ref: PacketPointer | None = Field(default=None, max_length=240)
 
 
 class BatchIssue(BatchModel):
@@ -118,7 +137,7 @@ class BatchIssue(BatchModel):
     counterexample: str = Field(min_length=1, max_length=320)
     basis: Literal["model_inference", "source_statement", "existing_execution_record"] = "model_inference"
     execution_evidence_ids: list[str] = Field(default_factory=list, max_length=100)
-    evidence_refs: list[str] = Field(min_length=1, max_length=8)
+    evidence_refs: list[PacketPointer] = Field(min_length=1, max_length=8)
 
 
 class BatchObservation(BatchModel):
@@ -129,7 +148,7 @@ class BatchObservation(BatchModel):
     reason: str = Field(min_length=1, max_length=320)
     basis: Literal["model_inference", "source_statement", "existing_execution_record"] = "model_inference"
     execution_evidence_ids: list[str] = Field(default_factory=list, max_length=100)
-    evidence_refs: list[str] = Field(min_length=1, max_length=8)
+    evidence_refs: list[PacketPointer] = Field(min_length=1, max_length=8)
 
 
 class BatchSemanticReview(BatchModel):
@@ -145,7 +164,7 @@ def _pointer_tokens(pointer):
     if not isinstance(pointer, str) or not pointer.startswith("/") or pointer == "/":
         raise ValueError("评审依据必须是包内具体 JSON pointer")
     tokens = pointer[1:].split("/")
-    if any(re.search(r"~(?![01])", token) for token in tokens):
+    if not re.fullmatch(PACKET_POINTER_PATTERN, pointer):
         raise ValueError("评审依据含非法 JSON pointer 转义")
     return tuple(token.replace("~1", "/").replace("~0", "~") for token in tokens)
 
@@ -708,15 +727,7 @@ def _validate_materiality(candidate, packet, issue, catalog):
     _checked_refs(packet, evidence.boundary_refs, catalog, descendants=True)
     # An obligation must cite literal source/contract text, not an ID, status,
     # whole candidate copy or reviewer-authored summary. Entailment stays human/model work.
-    if not re.fullmatch(
-            r"/current_input|/candidate/(?:target/statement|target_draft|"
-            r"behaviors/[0-9]+/statement|milestones/[0-9]+/(?:intent|scope/[0-9]+)|"
-            r"source_milestones/[0-9]+/source_behaviors/[0-9]+/statement|"
-            r"plan_contract/(?:sources/[0-9]+/(?:text|reference_context/(?:references|attachments)/"
-            r".+/(?:text|excerpt|content)|evidence/[0-9]+/result/(?:text|excerpt|content))|"
-            r"requirements/[0-9]+/quote|process_constraints/[0-9]+/quote))|"
-            r"/reference_context/(?:references|attachments)/.+/(?:text|excerpt|content)",
-            evidence.obligation_ref):
+    if not re.fullmatch(OBLIGATION_REF_PATTERN, evidence.obligation_ref):
         raise ValueError("实质问题必须引用准确的来源或契约义务文本字段")
     obligation = resolve_packet_pointer(packet, evidence.obligation_ref)
     if not isinstance(obligation, str) or evidence.obligation_excerpt not in obligation:
