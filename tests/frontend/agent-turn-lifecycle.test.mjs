@@ -1223,6 +1223,146 @@ function planningJob(overrides = {}) {
   };
 }
 
+test('a planning phase retires its budget error and reports the final phase failure', async () => {
+  const { agent, env, workspace } = await agentHarness('job-phase-error', true);
+  const request = { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: {} };
+  const phaseErrors = [];
+  env.run = async (_, receive) => {
+    receive({ type: 'started', project_id: 'P1', turn_id: 'phase-1' });
+    receive({ type: 'error', turn_id: 'phase-1', message: 'Phase 1 input budget exhausted' });
+    phaseErrors.push(workspace.state.error);
+    receive({ type: 'started', project_id: 'P1', turn_id: 'phase-2' });
+    phaseErrors.push(workspace.state.error);
+    receive({
+      type: 'done', turn_id: 'phase-2',
+      summary: {
+        turn_id: 'phase-2', status: 'failed', changed: false,
+        candidate_outcome: {
+          id: 'candidate-2', status: 'failed', canonical_unchanged: true,
+          note: 'Dependency validation failed: missing prerequisite',
+        },
+      },
+    });
+  };
+  assert.equal(await agent.send('P1', 'Plan safely', undefined, [], undefined, undefined, undefined, false, undefined, request), false);
+  assert.deepEqual(phaseErrors, ['Phase 1 input budget exhausted', '']);
+  assert.match(workspace.state.error, /Dependency validation failed: missing prerequisite/);
+  assert.doesNotMatch(workspace.state.error, /budget/);
+  assert.equal(agent.state.label, 'failed');
+});
+
+test('current phase errors survive duplicate starts, retired frames and repeated terminals', async () => {
+  const { agent, env, workspace } = await agentHarness('job-phase-ordering', true);
+  const observed = [];
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'phase-1' });
+    receive({ type: 'error', message: 'Old budget error' });
+    receive({ type: 'started', turn_id: 'phase-2' });
+    receive({ type: 'error', turn_id: 'phase-2', message: 'Current dependency validation error' });
+    for (const event of [
+      { type: 'started', turn_id: 'phase-2' },
+      { type: 'started', turn_id: 'phase-1' },
+      { type: 'error', turn_id: 'phase-1', message: 'Delayed budget error' },
+      { type: 'done', summary: { turn_id: 'phase-1', status: 'completed' } },
+      { type: 'error', project_id: 'P2', message: 'Wrong project error' },
+      { type: 'done', project_id: 'P2', summary: { turn_id: 'phase-2', status: 'completed' } },
+    ]) {
+      receive(event);
+      observed.push([agent.state.turnId, workspace.state.error]);
+    }
+    receive({ type: 'done', summary: { turn_id: 'phase-2', status: 'failed' } });
+    receive({ type: 'done', summary: { turn_id: 'phase-2', status: 'completed' } });
+    receive({ type: 'error', turn_id: 'phase-2', message: 'Late error after terminal' });
+  };
+  assert.equal(await agent.send('P1', 'Plan', undefined, [], undefined, undefined, undefined, false, undefined,
+    { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: {} }), false);
+  assert.deepEqual(observed, Array(6).fill(['phase-2', 'Current dependency validation error']));
+  assert.equal(workspace.state.error, 'Current dependency validation error');
+  assert.equal(agent.state.label, 'failed');
+});
+
+test('phase starts and final receipts preserve newer unrelated workspace errors', async () => {
+  for (const status of ['failed', 'completed']) {
+    const { agent, env, workspace } = await agentHarness(`job-unrelated-error-${status}`, true);
+    const observed = [];
+    env.run = async (_, receive) => {
+      receive({ type: 'started', turn_id: 'phase-1' });
+      receive({ type: 'error', message: 'Old budget error' });
+      workspace.setError('Newer workspace operation failed');
+      receive({ type: 'started', turn_id: 'phase-2' });
+      observed.push(workspace.state.error);
+      receive({ type: 'error', turn_id: 'phase-2', message: 'Current phase error' });
+      observed.push(workspace.state.error);
+      receive({ type: 'done', summary: { turn_id: 'phase-2', status } });
+    };
+    assert.equal(await agent.send('P1', 'Plan', undefined, [], undefined, undefined, undefined, false, undefined,
+      { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: {} }), status !== 'failed');
+    assert.deepEqual(observed, Array(2).fill('Newer workspace operation failed'));
+    assert.equal(workspace.state.error, 'Newer workspace operation failed');
+  }
+});
+
+test('an offscreen planning phase cannot set or clear the selected project error', async () => {
+  const { agent, env, workspace } = await agentHarness('job-offscreen-error', true);
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'phase-1' });
+    receive({ type: 'error', message: 'Old budget error' });
+    await workspace.selectProject('P2');
+    workspace.setError('P2 save failed');
+    receive({ type: 'started', turn_id: 'phase-2', project_id: 'P1' });
+    receive({ type: 'error', turn_id: 'phase-2', message: 'P1 dependency validation failed' });
+    receive({ type: 'done', summary: { turn_id: 'phase-2', status: 'failed' } });
+  };
+  assert.equal(await agent.send('P1', 'Plan', undefined, [], undefined, undefined, undefined, false, undefined,
+    { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: {} }), false);
+  assert.equal(workspace.state.project.id, 'P2');
+  assert.equal(workspace.state.error, 'P2 save failed');
+});
+
+test('late old-run callbacks cannot replace a newer ordinary turn error or outcome', async () => {
+  const { agent, env, workspace } = await agentHarness('old-callback-new-run');
+  let oldReceive, releaseRefresh;
+  env.refreshBody = () => new Promise(resolve => { releaseRefresh = resolve; });
+  env.run = async (_, receive) => {
+    oldReceive = receive;
+    receive({ type: 'started', turn_id: 'old-turn' });
+    receive({ type: 'done', summary: { turn_id: 'old-turn', status: 'completed' } });
+  };
+  const oldSend = agent.send('P1', 'First request');
+  await tick();
+  env.refreshBody = async () => {};
+  let observed;
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'new-turn' });
+    receive({ type: 'error', message: 'Current ordinary turn error' });
+    oldReceive({ type: 'error', message: 'Delayed old run error' });
+    oldReceive({ type: 'started', turn_id: 'old-turn' });
+    oldReceive({ type: 'done', summary: { turn_id: 'old-turn', status: 'completed' } });
+    observed = [agent.state.turnId, workspace.state.error];
+    receive({ type: 'done', summary: { turn_id: 'new-turn', status: 'failed' } });
+  };
+  assert.equal(await agent.send('P1', 'Second request'), false);
+  releaseRefresh();
+  assert.equal(await oldSend, true);
+  assert.deepEqual(observed, ['new-turn', 'Current ordinary turn error']);
+  assert.equal(workspace.state.error, 'Current ordinary turn error');
+  assert.equal(agent.state.label, 'failed');
+});
+
+test('a later phase legacy terminal does not inherit the earlier phase failed flag', async () => {
+  const { agent, env, workspace } = await agentHarness('job-phase-legacy-terminal');
+  env.run = async (_, receive) => {
+    receive({ type: 'started', turn_id: 'phase-1' });
+    receive({ type: 'error', message: 'Old budget error' });
+    receive({ type: 'started', turn_id: 'phase-2' });
+    receive({ type: 'done', changed: false });
+  };
+  assert.equal(await agent.send('P1', 'Plan', undefined, [], undefined, undefined, undefined, false, undefined,
+    { action: 'start', job_id: 'job-1', limits: planningJob().limits, pins: {} }), true);
+  assert.equal(workspace.state.error, '');
+  assert.equal(agent.state.label, '本轮结束');
+});
+
 test('planning job starts opt-in only and isolated lifecycle events never replace canonical data', async () => {
   const h = await agentHarness('job-opt-in', true);
   const original = structuredClone(h.records.get('P1'));

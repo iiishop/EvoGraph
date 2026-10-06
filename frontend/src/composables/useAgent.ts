@@ -12,6 +12,7 @@ import type {
   PlanningJobRequest,
   PlanningJobPins,
   PlanningJobView,
+  TurnSummary,
 } from '../types';
 import { agentDrafts, type DraftAttempt } from './useAgentDrafts';
 import { useNotifications } from './useNotifications';
@@ -54,6 +55,19 @@ type PendingReceipt = {
 };
 const pendingReceipts = new Set<PendingReceipt>();
 
+function summaryError(summary: TurnSummary, phaseError = '') {
+  const failure =
+    summary.status === 'failed'
+      ? phaseError ||
+        (summary.candidate_outcome
+          ? `本轮方案未应用。${summary.candidate_outcome.note}`
+          : summary.history_warning
+            ? ''
+            : '本轮未完成，已提交的修改保留')
+      : '';
+  return [...new Set([failure, summary.history_warning].filter(Boolean))].join('\n');
+}
+
 function reconcileReceipts(project: Project | null) {
   const workspace = useWorkspace();
   for (const receipt of pendingReceipts) {
@@ -80,18 +94,11 @@ function reconcileReceipts(project: Project | null) {
     if (latestRun !== receipt.owner) continue;
     state.label = turnSummaryStatus(summary);
     if (!workspace.state.error || workspace.state.error === receipt.error)
-      workspace.setError(
-        summary.history_warning ||
-          (summary.status === 'failed'
-            ? summary.candidate_outcome
-              ? `本轮方案未应用。${summary.candidate_outcome.note}`
-              : '本轮未完成，已提交的修改保留'
-            : ''),
-      );
+      workspace.setError(summaryError(summary));
   }
 }
 
-function receive(event: AgentEvent) {
+function receive(event: AgentEvent, setError: (message: string) => void, phaseError: string) {
   const workspace = useWorkspace();
   if (event.type === 'started') state.turnId = event.turn_id ?? '';
   if (event.type === 'planning_job_changed') {
@@ -167,7 +174,7 @@ function receive(event: AgentEvent) {
   }
   if (event.type === 'error') {
     runFailed = true;
-    workspace.setError(event.message ?? 'Agent 操作未完成');
+    setError(event.message ?? 'Agent 操作未完成');
     state.label = '本轮已停止';
   }
   if (event.type === 'tool_failed') state.label = `${event.label}受阻，正在修正`;
@@ -176,12 +183,12 @@ function receive(event: AgentEvent) {
     if (event.summary) {
       receivedSummary = true;
       runFailed = event.summary.status === 'failed';
-      if (!runFailed) workspace.setError(event.summary.history_warning || '');
+      setError(summaryError(event.summary, phaseError));
       state.label = turnSummaryStatus(event.summary);
     } else if (event.cancelled) {
       runFailed = true;
       state.label = '已停止，保存结果待确认';
-      workspace.setError('停止后的保存结果尚未确认，请重新打开项目检查已保存的更改');
+      setError('停止后的保存结果尚未确认，请重新打开项目检查已保存的更改');
     } else {
       state.label = event.project?.question
         ? '等待你的回答'
@@ -249,21 +256,59 @@ async function send(
   workspace.setError('');
   workspace.setBusy(true);
   controller = new AbortController();
+  let acceptingEvents = true;
+  let ownedError = '';
+  let phaseError = '';
+  const admittedTurns = new Set<string>();
+  const setRunError = (message: string) => {
+    const project = workspace.state.project;
+    if (
+      latestRun !== receipt.owner ||
+      !receipt.isCurrent() ||
+      (project &&
+        (project.id !== projectId ||
+          (receipt.createdAt && project.created_at !== receipt.createdAt))) ||
+      (workspace.state.error && workspace.state.error !== ownedError)
+    )
+      return;
+    workspace.setError(message);
+    ownedError = message;
+  };
   const receiveForRun = (event: AgentEvent) => {
     if (
-      (event.type === 'candidate_changed' ||
-        event.type === 'planning_job_changed' ||
-        event.project) &&
-      (latestRun !== receipt.owner || !receipt.isCurrent())
+      !acceptingEvents ||
+      receivedDone ||
+      latestRun !== receipt.owner ||
+      !receipt.isCurrent() ||
+      (event.project_id && event.project_id !== projectId) ||
+      (event.project && event.project.id !== projectId)
     )
       return;
     if (event.type === 'started') {
+      // A bounded job admits several turns on one stream. Duplicate or retired
+      // starts must not clear the current phase's failure or restore an old turn.
+      if (
+        (event.turn_id && admittedTurns.has(event.turn_id)) ||
+        (receipt.turnId && (!planningJob || !event.turn_id))
+      )
+        return;
+      if (event.turn_id) admittedTurns.add(event.turn_id);
+      if (receipt.turnId) setRunError('');
+      phaseError = '';
+      runFailed = false;
       receipt.turnId = event.turn_id ?? '';
       if (receipt.submission) {
         receipt.submission.turnId = receipt.turnId;
         if (event.source_analysis === true) receipt.submission.sourceAnalysis = true;
       }
+    } else if (
+      receipt.turnId &&
+      ((event.turn_id && event.turn_id !== receipt.turnId) ||
+        (event.summary && event.summary.turn_id !== receipt.turnId))
+    ) {
+      return;
     }
+    if (event.type === 'error') phaseError = event.message ?? 'Agent 操作未完成';
     // A factual terminal may lack a project snapshot after a stream loss or
     // failed snapshot lookup. Invalidate only this exact admitted incarnation.
     if (
@@ -276,7 +321,7 @@ async function send(
       receipt.isCurrent()
     )
       workspace.invalidateProjectRead(projectId);
-    receive(event);
+    receive(event, setRunError, phaseError);
   };
   try {
     await agentStream(
@@ -298,13 +343,13 @@ async function send(
   } catch (error) {
     if (!(error instanceof DOMException && error.name === 'AbortError')) {
       runFailed = true;
-      workspace.setError(String(error));
+      setRunError(String(error));
     }
   } finally {
     if (!state.turnId && !receivedDone) {
       runFailed = true;
       state.label = '本轮结果待确认，请重新打开项目查看';
-      workspace.setError('尚未收到可确认的轮次结果，请重新打开项目检查已保存的更改');
+      setRunError('尚未收到可确认的轮次结果，请重新打开项目检查已保存的更改');
     }
     if (state.turnId && !receivedDone) {
       state.label = '正在确认本轮已保存的结果…';
@@ -314,19 +359,20 @@ async function send(
         else {
           runFailed = true;
           state.label = '本轮结果待确认，请重新打开项目查看';
-          workspace.setError('本轮保存结果尚未确认，请重新打开项目检查已保存的更改');
+          setRunError('本轮保存结果尚未确认，请重新打开项目检查已保存的更改');
         }
       } catch {
         runFailed = true;
         state.label = '本轮结果待确认，请重新打开项目查看';
-        workspace.setError('本轮保存结果尚未确认，请稍后重新打开项目检查已保存的更改');
+        setRunError('本轮保存结果尚未确认，请稍后重新打开项目检查已保存的更改');
       }
     }
     // Keep each submission's outcome separate before releasing the workspace.
     // Only its own exact canonical receipt may subsequently settle uncertainty.
     receipt.outcome = !runFailed;
     receipt.turnId = state.turnId;
-    receipt.error = workspace.state.error;
+    receipt.error = ownedError;
+    acceptingEvents = false;
     if (receipt.turnId && !receivedSummary && runFailed) pendingReceipts.add(receipt);
     reconcileReceipts(workspace.state.project);
     state.running = false;
