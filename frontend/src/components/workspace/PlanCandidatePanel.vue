@@ -7,6 +7,7 @@ import {
   candidateNotice,
   candidateStatusLabel,
   contractRows,
+  currentReviewIssues,
   requirementSource,
 } from '../../lib/planPreview';
 import { useWorkspace } from '../../composables/useWorkspace';
@@ -29,6 +30,7 @@ const checks = computed(() => {
     ? review.checks
     : [];
 });
+const issues = computed(() => currentReviewIssues(props.candidate));
 const findings = computed(() =>
   (props.candidate.report?.findings ?? []).filter((finding) => finding.severity !== 'review'),
 );
@@ -174,24 +176,17 @@ async function discard() {
         放弃候选
       </button>
     </header>
-    <div
-      v-if="findings.length || checks.some((check) => check.verdict !== 'supported')"
-      class="candidate-findings"
-      role="status"
-    >
+    <div v-if="findings.length || issues.length" class="candidate-findings" role="status">
       <strong><AlertCircle :size="14" aria-hidden="true" />待解决项</strong>
       <ul>
         <li v-for="(finding, index) in findings" :key="`${finding.code}:${index}`">
           <span>{{ finding.subject }} · {{ finding.code }}</span
           >{{ finding.message }}
         </li>
-        <li
-          v-for="(check, index) in checks.filter((item) => item.verdict !== 'supported')"
-          :key="`semantic:${index}`"
-        >
-          <span>{{ check.subject }} · {{ verdict[check.verdict] }}</span
-          >{{ check.reason }}
-          <p v-if="check.counterexample">反例：{{ check.counterexample }}</p>
+        <li v-for="issue in issues" :key="issue.key" :data-review-issue="issue.key">
+          <span>{{ issue.subjects.join(' · ') }} · {{ verdict[issue.verdict] }}</span
+          >{{ issue.reason }}
+          <p v-if="issue.counterexample">反例：{{ issue.counterexample }}</p>
         </li>
       </ul>
     </div>

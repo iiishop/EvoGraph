@@ -1,0 +1,73 @@
+{
+  "provenance": "Minimal projection of a frozen historical planning-review case. Two stable issues expand to six subject records; text and associations are retained. This fixture does not assess model correctness.",
+  "candidate_hash": "frozen-review-case",
+  "semantic_batch": {
+    "candidate_hash": "frozen-review-case",
+    "issues": [
+      {
+        "id": "issue-tech-assignment",
+        "subjects": [
+          "requirement:req-customer-mobile-booking",
+          "cross_contract_consistency",
+          "slice_activation:slice-2-customer-booking"
+        ],
+        "verdict": "unknown",
+        "reason": "顾客请求仅含服务、时间、姓名、电话，而契约机制宣称“校验所请求技师时段可用”并按(技师,时段)落占位；预约如何映射到某位技师未定义，属影响可用时段计算与占位归属、也影响防双排含义的未决语义。",
+        "counterexample": "同一时段技师A、B均空闲，顾客提交某服务却不带技师：实现可能固定分给A；若A该时段已被占而B空闲，系统会误报冲突（或把单写到另一技师名下），可用时段与冲突结果随未定规则而变。"
+      },
+      {
+        "id": "issue-window-semantics",
+        "subjects": [
+          "requirement:req-no-double-booking",
+          "failure_boundaries",
+          "slice_activation:slice-4-conflict-guarantee"
+        ],
+        "verdict": "unknown",
+        "reason": "契约把防双排落在库层(技师,时间窗口)排他约束，但“时间窗口”的原子粒度、服务时长是否跨多时段均未定义；唯一/排他约束只拒绝相同键，无法拒绝部分重叠区间，保证边界未闭合。",
+        "counterexample": "技师A已有09:00–10:00预约，顾客新单为09:30–10:30；两窗口键不同，库层排他约束不会拒绝，落库后A的时段被重叠占用，未做到“最多一个成功”。"
+      }
+    ]
+  },
+  "semantic": {
+    "candidate_hash": "frozen-review-case",
+    "summary": "Frozen historical review: two issues across six subjects.",
+    "checks": [
+      {
+        "subject": "requirement:req-customer-mobile-booking",
+        "verdict": "unknown",
+        "reason": "[issue-tech-assignment] 顾客请求仅含服务、时间、姓名、电话，而契约机制宣称“校验所请求技师时段可用”并按(技师,时段)落占位；预约如何映射到某位技师未定义，属影响可用时段计算与占位归属、也影响防双排含义的未决语义。",
+        "counterexample": "同一时段技师A、B均空闲，顾客提交某服务却不带技师：实现可能固定分给A；若A该时段已被占而B空闲，系统会误报冲突（或把单写到另一技师名下），可用时段与冲突结果随未定规则而变。"
+      },
+      {
+        "subject": "requirement:req-no-double-booking",
+        "verdict": "unknown",
+        "reason": "[issue-window-semantics] 契约把防双排落在库层(技师,时间窗口)排他约束，但“时间窗口”的原子粒度、服务时长是否跨多时段均未定义；唯一/排他约束只拒绝相同键，无法拒绝部分重叠区间，保证边界未闭合。",
+        "counterexample": "技师A已有09:00–10:00预约，顾客新单为09:30–10:30；两窗口键不同，库层排他约束不会拒绝，落库后A的时段被重叠占用，未做到“最多一个成功”。"
+      },
+      {
+        "subject": "cross_contract_consistency",
+        "verdict": "unknown",
+        "reason": "[issue-tech-assignment] 顾客请求仅含服务、时间、姓名、电话，而契约机制宣称“校验所请求技师时段可用”并按(技师,时段)落占位；预约如何映射到某位技师未定义，属影响可用时段计算与占位归属、也影响防双排含义的未决语义。",
+        "counterexample": "同一时段技师A、B均空闲，顾客提交某服务却不带技师：实现可能固定分给A；若A该时段已被占而B空闲，系统会误报冲突（或把单写到另一技师名下），可用时段与冲突结果随未定规则而变。"
+      },
+      {
+        "subject": "failure_boundaries",
+        "verdict": "unknown",
+        "reason": "[issue-window-semantics] 契约把防双排落在库层(技师,时间窗口)排他约束，但“时间窗口”的原子粒度、服务时长是否跨多时段均未定义；唯一/排他约束只拒绝相同键，无法拒绝部分重叠区间，保证边界未闭合。",
+        "counterexample": "技师A已有09:00–10:00预约，顾客新单为09:30–10:30；两窗口键不同，库层排他约束不会拒绝，落库后A的时段被重叠占用，未做到“最多一个成功”。"
+      },
+      {
+        "subject": "slice_activation:slice-2-customer-booking",
+        "verdict": "unknown",
+        "reason": "[issue-tech-assignment] 顾客请求仅含服务、时间、姓名、电话，而契约机制宣称“校验所请求技师时段可用”并按(技师,时段)落占位；预约如何映射到某位技师未定义，属影响可用时段计算与占位归属、也影响防双排含义的未决语义。",
+        "counterexample": "同一时段技师A、B均空闲，顾客提交某服务却不带技师：实现可能固定分给A；若A该时段已被占而B空闲，系统会误报冲突（或把单写到另一技师名下），可用时段与冲突结果随未定规则而变。"
+      },
+      {
+        "subject": "slice_activation:slice-4-conflict-guarantee",
+        "verdict": "unknown",
+        "reason": "[issue-window-semantics] 契约把防双排落在库层(技师,时间窗口)排他约束，但“时间窗口”的原子粒度、服务时长是否跨多时段均未定义；唯一/排他约束只拒绝相同键，无法拒绝部分重叠区间，保证边界未闭合。",
+        "counterexample": "技师A已有09:00–10:00预约，顾客新单为09:30–10:30；两窗口键不同，库层排他约束不会拒绝，落库后A的时段被重叠占用，未做到“最多一个成功”。"
+      }
+    ]
+  }
+}

@@ -135,6 +135,34 @@ function harnessCheckDisclosure(
   };
 }
 
+export function currentReviewIssues(candidate: PlanCandidate) {
+  const review = candidate.report?.semantic;
+  if (
+    candidateApplication(candidate) === 'noop' ||
+    !review?.candidate_hash ||
+    review.candidate_hash !== candidate.candidate_hash
+  )
+    return [];
+  const batch = candidate.report?.semantic_batch;
+  if (
+    batch?.candidate_hash === review.candidate_hash &&
+    batch.issues.length &&
+    batch.issues.every((issue) => issue.id) &&
+    new Set(batch.issues.map((issue) => issue.id)).size === batch.issues.length
+  )
+    return batch.issues.map((issue) => ({ ...issue, key: `issue:${issue.id}` }));
+  // Legacy or unmatched batches cannot identify unique issues. Retain every
+  // non-supported subject row without inferring identity from its prose.
+  return review.checks
+    .filter((check) => check.verdict !== 'supported')
+    .map((check, index) => ({
+      ...check,
+      id: '',
+      key: `check:${index}`,
+      subjects: [check.subject],
+    }));
+}
+
 function historicalModelOpinion(candidate: PlanCandidate) {
   const review = candidate.report?.semantic;
   const inherited = candidate.inherited_semantic_findings;
