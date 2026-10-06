@@ -667,3 +667,129 @@ test('real Vue composer restores exact typed draft through send-clear, read-only
     root.remove();
   }
 });
+
+test('real saved-request editor keeps new-request intent through delete undo/redo and releases it only with an undo-safe reset', async () => {
+  const { parse, compileScript } = await import('@vue/compiler-sfc');
+  const { createApp, h, reactive, nextTick } = await import('vue');
+  const vueUrl = import.meta.resolve('vue');
+  const storeUrl = url(`${draftCode}\n// real saved-request undo lifecycle`);
+  const { agentDrafts: store } = await import(storeUrl);
+  const controllersUrl = url(`import { createComposerEditor as create, matchingReferences } from ${JSON.stringify(url(editorCode))};
+    export const controllers = []; export { matchingReferences };
+    export function createComposerEditor(options) { const controller = create(options); controllers.push(controller); return controller; }`);
+  const { controllers } = await import(controllersUrl);
+  const agentUrl = url(`import { reactive } from ${JSON.stringify(vueUrl)};
+    export const calls = [];
+    export const agent = { state: reactive({ running: false, projectId: '', follow: {} }),
+      send: async (...args) => { calls.push(args); return true; }, stop() {} };
+    export const useAgent = () => agent;`);
+  const { calls } = await import(agentUrl);
+  const workspaceUrl = url(`import { reactive } from ${JSON.stringify(vueUrl)};
+    export const state = reactive({ busy: false, settings: { provider: {} } });
+    export const useWorkspace = () => ({ state, setPage() {}, setError() {}, selectProject() {}, applyProject() {} });`);
+  const empty = url('export default { render() { return null; } };');
+  const imports = {
+    vue: vueUrl,
+    'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
+    '../../composables/useAgentDrafts': storeUrl,
+    '../../composables/useAgent': agentUrl,
+    '../../composables/useWorkspace': workspaceUrl,
+    '../../lib/composerDocument': composerDocumentUrl,
+    '../../lib/composerEditor': controllersUrl,
+    '../../lib/turnSummary': url(compile(source('lib/turnSummary.ts'))),
+    '../../lib/agentRetry': url(compile(source('lib/agentRetry.ts')).replace("'./composerDocument'", JSON.stringify(composerDocumentUrl))),
+    '../../api/client': url(`export const command = async () => ({ items: ${JSON.stringify([row(reference())])} });`),
+    './AgentReviewTray.vue': url(`import { h } from ${JSON.stringify(vueUrl)};
+      export default { props: ['project', 'owner'], emits: ['reuse'], setup(props, { emit, expose }) {
+        expose({ closeForDraft() {} }); return () => h('button', { 'data-reuse': '',
+          onClick: () => emit('reuse', { projectId: props.project.id, projectCreatedAt: props.project.created_at, owner: props.owner, messageId: 'saved' }) }, '用作新草稿');
+      } };`),
+  };
+  for (const name of ['./PlanningJobPanel.vue', '../graph/FollowAgentButton.vue', '../attachments/AttachmentPicker.vue', '../attachments/AttachmentReceipt.vue']) imports[name] = empty;
+  async function component(name) {
+    const { descriptor } = parse(source(`components/agent/${name}.vue`));
+    return url(compile(compileScript(descriptor, { id: `saved-undo-${name}`, inlineTemplate: true }).content)
+      .replace(/from (['"])([^'"]+)\1/g, (_, quote, dependency) => {
+        assert.ok(imports[dependency], `Unexpected dependency ${dependency}`);
+        return `from ${JSON.stringify(imports[dependency])}`;
+      }));
+  }
+  imports['./ComposerEditor.vue'] = await component('ComposerEditor');
+  imports['./AgentQuestion.vue'] = await component('AgentQuestion');
+  const Dock = (await import(await component('AgentDock'))).default;
+  const original = { version: 1, parts: [{ type: 'text', text: 'Revise ' }, reference(), { type: 'text', text: ' next' }] };
+  const project = reactive({
+    id: 'P1', created_at: 'incarnation', revision: 1, name: 'Project', question: null,
+    messages: [{ id: 'saved', project_id: 'P1', role: 'user', content: renderComposerDocument(original), composer_document: original }],
+    milestones: [], source_milestones: [], attachments: [], events: [],
+  });
+  const historyBefore = JSON.stringify(project.messages);
+  const root = document.createElement('div');
+  document.body.append(root);
+  const app = createApp({ setup: () => () => h(Dock, { project, reviewOwner: 9 }) });
+  const settle = async () => { await nextTick(); await tick(); await nextTick(); };
+  const editor = () => controllers.at(-1).editor;
+  const enter = async () => {
+    editor().view.dom.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await settle();
+  };
+  const button = (text) => [...root.querySelectorAll('button')].find((item) => item.textContent.trim() === text);
+  app.mount(root);
+  try {
+    await settle();
+    root.querySelector('[data-reuse]').click();
+    await settle();
+    const binding = store.bind(() => 'P1');
+    assert.equal(binding.savedRequest.value, true);
+    assert.deepEqual(binding.composerDocument.value, original);
+    editor().commands.selectAll();
+    editor().commands.deleteSelection();
+    await settle();
+    assert.equal(binding.content.value, '');
+    assert.equal(binding.savedRequest.value, true, 'undoable deletion retains intent');
+    editor().commands.undo();
+    await settle();
+    assert.deepEqual(binding.composerDocument.value, original);
+    project.question = { id: 'Q-later', prompt: 'Choose?', options: ['Explicit answer'] };
+    await settle();
+    await enter();
+    assert.equal(calls.length, 0, 'restored saved request cannot become an implicit answer');
+    editor().commands.redo();
+    await settle();
+    assert.equal(binding.content.value, '');
+    assert.equal(binding.savedRequest.value, true);
+    editor().commands.undo();
+    await settle();
+    await enter();
+    assert.equal(calls.length, 0);
+    button('Explicit answer').click();
+    await settle();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2], 'Q-later');
+    assert.deepEqual(binding.composerDocument.value, original, 'explicit question choices preserve the held request');
+    assert.equal(binding.savedRequest.value, true);
+    // Reset while already visually empty must still replace the editor and its
+    // undo history, rather than depending on a changed document value.
+    editor().commands.selectAll();
+    editor().commands.deleteSelection();
+    await settle();
+    const oldEditor = editor();
+    button('清空新草稿').click();
+    await settle();
+    assert.notEqual(editor(), oldEditor);
+    assert.equal(binding.savedRequest.value, false);
+    assert.equal(editor().commands.undo(), false);
+    await settle();
+    assert.equal(binding.content.value, '');
+    editor().commands.insertContent('My deliberate new answer');
+    await settle();
+    await enter();
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1][1], 'My deliberate new answer');
+    assert.equal(calls[1][2], 'Q-later', 'explicit reset leaves the ordinary answer flow usable');
+    assert.equal(JSON.stringify(project.messages), historyBefore);
+  } finally {
+    app.unmount();
+    root.remove();
+  }
+});

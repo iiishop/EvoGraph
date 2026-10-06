@@ -1,11 +1,18 @@
 import { computed, reactive } from 'vue';
-import type { Attachment, ComposerDocument, PendingQuestion, PlanningJobRequest } from '../types';
+import type {
+  Attachment,
+  ComposerDocument,
+  PendingQuestion,
+  PlanningJobRequest,
+  Project,
+} from '../types';
 import {
   cloneComposerDocument,
   normalizeComposerDocument,
   renderComposerDocument,
   documentAttachmentIds,
   composerFreeText,
+  parseComposerDocument,
 } from '../lib/composerDocument';
 import type { AttachmentUploadResult } from '../lib/attachmentUpload';
 
@@ -18,6 +25,7 @@ type DraftContent = {
   question?: Pick<PendingQuestion, 'id' | 'prompt' | 'context' | 'verification_milestone'>;
   verificationMilestone?: string;
   sourceAnalysis?: boolean;
+  savedRequest?: true;
 };
 export type DraftRequest = {
   text: string;
@@ -37,6 +45,8 @@ type DraftEntry = {
   recoveryError: string;
   composerOrigin: FailedDraft | null;
   composerAnchor: FailedDraft | null;
+  savedRequest: boolean;
+  editorSession: number;
   confirmedAttachments: Attachment[];
   attachmentTransfer: {
     id: number;
@@ -62,6 +72,12 @@ export type RetryPreparation = {
   restoreRevision?: number;
 };
 export type AttachmentTransfer = { id: number; projectId: string; entry: DraftEntry };
+export type SavedRequestSelection = {
+  messageId: string;
+  projectId: string;
+  projectCreatedAt: string;
+  owner?: number;
+};
 
 // Deliberately session-only: unsent prompts and attachment references should not
 // acquire a new plaintext browser-persistence lifetime just to survive a view.
@@ -83,6 +99,8 @@ export function createAgentDraftStore() {
         recoveryError: '',
         composerOrigin: null,
         composerAnchor: null,
+        savedRequest: false,
+        editorSession: 0,
         confirmedAttachments: [],
         attachmentTransfer: null,
       });
@@ -108,6 +126,7 @@ export function createAgentDraftStore() {
       draft.ids = [];
       draft.composerOrigin = null;
       draft.composerAnchor = null;
+      draft.savedRequest = false;
       draft.revision++;
     }
     draft.pending.add(id);
@@ -160,6 +179,7 @@ export function createAgentDraftStore() {
       verificationMilestone: attempt.verificationMilestone,
       ...(attempt.sourceAnalysis ? { sourceAnalysis: true } : {}),
       ...(attempt.planningJob ? { planningJob: attempt.planningJob } : {}),
+      ...(attempt.savedRequest ? { savedRequest: true } : {}),
     };
     const restored = attempt.restoreRevision === draft.revision;
     if (restored) {
@@ -169,6 +189,7 @@ export function createAgentDraftStore() {
       failure.restoredRevision = ++draft.revision;
       draft.composerOrigin = failure;
       draft.composerAnchor = failure;
+      draft.savedRequest = Boolean(attempt.savedRequest);
     }
     draft.failures.push(failure);
     return restored;
@@ -266,6 +287,73 @@ export function createAgentDraftStore() {
     );
   }
 
+  function savedRequestBlocker(draft: DraftEntry | undefined) {
+    if (!draft) return '项目已关闭或被移除，请重新打开后再选择请求。';
+    if (
+      draft.pending.size ||
+      (draft.attachmentTransfer && draft.attachmentTransfer.phase !== 'done')
+    )
+      return '正在确认请求或保存资料，请完成后再使用历史请求。';
+    if (
+      draft.text !== '' ||
+      draft.ids.length ||
+      draft.composerDocument?.parts.some((part) => part.type === 'reference' || part.text !== '')
+    )
+      return '输入框已有草稿或资料，请先处理当前草稿；不会覆盖现有内容。';
+    if (draft.failures.length || draft.composerOrigin || draft.recoveryError)
+      return '请先处理未完成请求，再使用历史请求创建草稿。';
+    return '';
+  }
+
+  function reuseSavedRequest(
+    project: Project,
+    selection: SavedRequestSelection,
+    owner: number | undefined,
+    isOwner: () => boolean,
+  ): { error: string; isCurrent?: () => boolean } {
+    const draft = entries.get(project.id);
+    if (
+      !isOwner() ||
+      selection.projectId !== project.id ||
+      selection.projectCreatedAt !== project.created_at ||
+      selection.owner !== owner
+    )
+      return { error: '项目或阅读面板已切换，请重新选择当前项目的请求。' };
+    if (project.question) return { error: '请先回答当前待确认问题，再将历史请求用作新草稿。' };
+    const blocked = savedRequestBlocker(draft);
+    if (blocked) return { error: blocked };
+    const matches = project.messages.filter((message) => message.id === selection.messageId);
+    const saved = matches.length === 1 ? matches[0] : undefined;
+    if (
+      !saved ||
+      saved.role !== 'user' ||
+      (saved.project_id != null && saved.project_id !== project.id)
+    )
+      return { error: '这条请求已不可用，请重新打开当前项目的对话记录。' };
+    // A supplied but malformed document is not permission to flatten typed IDs
+    // into labels. Null/absent documents are the legacy plain-text format.
+    const document =
+      saved.composer_document == null ? undefined : parseComposerDocument(saved.composer_document);
+    if (document === null)
+      return { error: '这条请求的引用结构不完整，无法安全用作草稿；原记录仍保留。' };
+    if (document?.parts.some((part) => part.type === 'reference' && part.project_id !== project.id))
+      return { error: '这条请求包含其他项目的引用，无法用作当前项目的草稿。' };
+    const text = document ? renderComposerDocument(document) : saved.content;
+    if (typeof text !== 'string' || !text.trim()) return { error: '这条请求没有可编辑的内容。' };
+    draft!.text = text;
+    draft!.composerDocument = cloneComposerDocument(document);
+    // The saved Message has no standalone attachment IDs or answer/job
+    // provenance. Reuse recovers only the document and explicitly starts anew.
+    draft!.composerAnchor = null;
+    draft!.savedRequest = true;
+    const revision = ++draft!.revision;
+    return {
+      error: '',
+      isCurrent: () =>
+        isOwner() && entries.get(project.id) === draft && draft!.revision === revision,
+    };
+  }
+
   return {
     start,
     retry,
@@ -274,6 +362,27 @@ export function createAgentDraftStore() {
     cancelRetry,
     detachRestored,
     recoverComposer,
+    reuseSavedRequest,
+    clearSavedRequest: (projectId: string) => {
+      const draft = entries.get(projectId);
+      if (
+        !draft?.savedRequest ||
+        draft.pending.size ||
+        (draft.attachmentTransfer && draft.attachmentTransfer.phase !== 'done')
+      )
+        return;
+      draft.text = '';
+      draft.composerDocument = undefined;
+      draft.ids = [];
+      draft.composerOrigin = null;
+      draft.composerAnchor = null;
+      draft.savedRequest = false;
+      // Only this explicit reset releases intent. A new editor instance also
+      // discards undo history, so cleared content cannot return as an answer.
+      draft.editorSession++;
+      const revision = ++draft.revision;
+      return () => entries.get(projectId) === draft && draft.revision === revision;
+    },
     beginAttachmentTransfer: (
       projectId: string,
       total: number,
@@ -433,6 +542,9 @@ export function createAgentDraftStore() {
       }),
       failures: computed(() => entry(projectId())?.failures ?? []),
       pending: computed(() => Boolean(entry(projectId())?.pending.size)),
+      savedRequest: computed(() => entry(projectId())?.savedRequest ?? false),
+      editorSession: computed(() => entry(projectId())?.editorSession ?? 0),
+      savedRequestBlocker: computed(() => savedRequestBlocker(entry(projectId()))),
       recoveryError: computed(() => entry(projectId())?.recoveryError ?? ''),
       confirmedAttachments: computed(() => entry(projectId())?.confirmedAttachments ?? []),
       attachmentTransfer: computed(() => entry(projectId())?.attachmentTransfer ?? null),

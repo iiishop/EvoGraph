@@ -283,7 +283,11 @@ async function harness() {
     '../graph/GraphToolbar.vue': moduleUrl(`import { h } from ${JSON.stringify(vueUrl)};
       export default { props: ['tab'], emits: ['tab'], setup(props, { emit }) { return () => h('toolbar', { tab: props.tab, change: tab => emit('tab', tab) }); } };`),
     './AgentReviewTray.vue': moduleUrl(`import { h } from ${JSON.stringify(vueUrl)};
-      export default { props: ['project', 'summary', 'running', 'disabled', 'owner'], emits: ['locate'], setup(props) { return () => h('review-tray', { ...props }); } };`),
+      export default { props: ['project', 'summary', 'running', 'disabled', 'owner', 'reuseBlocker', 'reuseError'], emits: ['locate', 'reuse'], setup(props, { emit, expose }) {
+        expose({ closeForDraft() {} });
+        return () => { const context = { projectId: props.project.id, projectCreatedAt: props.project.created_at, owner: props.owner };
+          return h('review-tray', { ...props, reuse: messageId => emit('reuse', { ...context, messageId }) }); };
+      } };`),
     './AgentQuestion.vue': moduleUrl(
       `import { h } from ${JSON.stringify(vueUrl)}; export default { emits: ['choose'], setup(_, { emit }) { return () => h('question', { choose: text => emit('choose', text) }); } };`,
     ),
@@ -1950,4 +1954,295 @@ test('planning job composer rejects aggregate allowances exceeding the authorize
     assert.equal(h.env.calls.length, 1);
     assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 2, max_calls: 10, max_input_bytes: 786432 });
   } finally { h.dispose(); }
+});
+
+const savedDocument = () => ({
+  version: 1,
+  parts: [
+    { type: 'text', text: ' \n Revise ' },
+    ...['milestone', 'source_milestone', 'architecture_component', 'source_component', 'attachment', 'repository']
+      .flatMap((kind) => [
+        { type: 'reference', kind, project_id: 'A', id: `${kind}-id`, label: 'same label' },
+        { type: 'text', text: ` ${kind}\n` },
+      ]),
+    { type: 'text', text: 'exact trailing space ' },
+  ],
+});
+const savedProject = (document = savedDocument()) => ({
+  id: 'A', name: 'A', created_at: 'incarnation-1', revision: 1,
+  milestones: [], source_milestones: [], attachments: [{ id: 'unrelated-asset' }], question: null,
+  messages: [{
+    id: 'saved-user', project_id: 'A', role: 'user', content: 'legacy @same label #same label',
+    created_at: '2026-10-01', ...(document === undefined ? {} : { composer_document: document }),
+    // None of these fields belong to Message. Never infer or copy their provenance.
+    attachment_ids: ['unpersisted-asset'], question_id: 'old-question', turn_id: 'old-turn',
+    verification_milestone: 'old-verification', planningJob: { action: 'start' },
+  }],
+});
+const savedSelection = (project, owner = 9) => ({
+  projectId: project.id, projectCreatedAt: project.created_at,
+  messageId: 'saved-user', owner,
+});
+
+test('fresh session reuses exact saved references independently of old draft and attachment provenance', () => {
+  const oldSession = createAgentDraftStore();
+  oldSession.bind(() => 'A').content.value = 'unsaved text before restart';
+  const project = JSON.parse(JSON.stringify(savedProject()));
+  const before = JSON.stringify(project);
+  const store = createAgentDraftStore();
+  const draft = store.bind(() => 'A');
+  const result = store.reuseSavedRequest(project, savedSelection(project), 9, store.captureOwner('A'));
+  assert.equal(result.error, '');
+  assert.equal(result.isCurrent(), true);
+  assert.deepEqual(draft.composerDocument.value, project.messages[0].composer_document);
+  assert.deepEqual(draft.attachmentIds.value, []);
+  assert.deepEqual(draft.failures.value, []);
+  assert.equal(draft.savedRequest.value, true);
+  const edited = draft.composerDocument.value;
+  edited.parts[0].text = 'Changed requirement ';
+  assert.equal(JSON.stringify(project), before, 'draft snapshots never mutate history');
+  assert.notEqual(store.bind(() => 'A').composerDocument.value.parts[0].text, edited.parts[0].text);
+  draft.composerDocument.value = edited;
+  assert.equal(result.isCurrent(), false, 'newer edits cancel delayed focus');
+  assert.equal(draft.savedRequest.value, true);
+  assert.equal(oldSession.bind(() => 'A').content.value, 'unsaved text before restart');
+});
+
+test('saved request reuse preserves nonempty and recovery states without mutation', () => {
+  for (const state of ['text', 'whitespace', 'reference', 'attachment', 'pending', 'transfer', 'recovery', 'recovery-error']) {
+    const store = createAgentDraftStore();
+    const draft = store.bind(() => 'A');
+    const project = savedProject();
+    const owner = store.captureOwner('A');
+    if (state === 'text') draft.content.value = 'newer text';
+    if (state === 'whitespace') draft.content.value = ' \n ';
+    if (state === 'reference') draft.composerDocument.value = {
+      version: 1, parts: [{ type: 'reference', kind: 'milestone', id: 'new', project_id: 'A', label: 'newer' }],
+    };
+    if (state === 'attachment') draft.attachmentIds.value = ['newer-attachment'];
+    if (state === 'pending') store.start('A', { text: 'pending', ids: [] });
+    if (state === 'transfer') store.beginAttachmentTransfer('A', 1);
+    if (state === 'recovery') {
+      const attempt = store.start('A', { text: 'failed', ids: [] }, false);
+      store.settle(attempt, false);
+    }
+    if (state === 'recovery-error') store.setRecoveryError('A', 'retained recovery error');
+    const snapshot = () => JSON.stringify({
+      text: draft.content.value, document: draft.composerDocument.value, ids: draft.attachmentIds.value,
+      failures: draft.failures.value, pending: draft.pending.value, transfer: draft.attachmentTransfer.value,
+      error: draft.recoveryError.value,
+    });
+    const before = snapshot();
+    assert.ok(store.reuseSavedRequest(project, savedSelection(project), 9, owner).error, state);
+    assert.equal(snapshot(), before, state);
+    assert.equal(draft.savedRequest.value, false);
+  }
+});
+
+test('saved request reuse rejects stale identity, absent/foreign/assistant sources and malformed documents', () => {
+  for (const problem of ['project', 'incarnation', 'owner', 'deleted-owner', 'missing', 'assistant', 'foreign-message', 'foreign-reference', 'malformed', 'question']) {
+    const store = createAgentDraftStore();
+    const project = savedProject();
+    const selected = savedSelection(project);
+    const owner = store.captureOwner('A');
+    const draft = store.bind(() => 'A');
+    if (problem === 'project') selected.projectId = 'B';
+    if (problem === 'incarnation') selected.projectCreatedAt = 'stale';
+    if (problem === 'owner') selected.owner = 4;
+    if (problem === 'deleted-owner') { store.discard('A'); store.activate('A'); }
+    if (problem === 'missing') selected.messageId = 'missing';
+    if (problem === 'assistant') project.messages[0].role = 'assistant';
+    if (problem === 'foreign-message') project.messages[0].project_id = 'B';
+    if (problem === 'foreign-reference') project.messages[0].composer_document.parts[1].project_id = 'B';
+    if (problem === 'malformed') project.messages[0].composer_document = { version: 2, parts: [] };
+    if (problem === 'question') project.question = { id: 'new-question' };
+    assert.ok(store.reuseSavedRequest(project, selected, 9, owner).error, problem);
+    assert.equal(draft.content.value, '', problem);
+    assert.equal(draft.composerDocument.value, undefined, problem);
+    assert.equal(draft.savedRequest.value, false, problem);
+  }
+  for (const legacy of [null, undefined]) {
+    const store = createAgentDraftStore();
+    const project = savedProject();
+    project.messages[0].composer_document = legacy;
+    const result = store.reuseSavedRequest(project, savedSelection(project), 9, store.captureOwner('A'));
+    assert.equal(result.error, '');
+    assert.equal(store.bind(() => 'A').content.value, project.messages[0].content);
+    assert.equal(store.bind(() => 'A').composerDocument.value, undefined, 'labels remain ordinary text');
+  }
+});
+
+test('restart journey: saved request becomes an editable new draft and sends once with exact references', async () => {
+  const h = await harness();
+  try {
+    const persisted = JSON.parse(JSON.stringify(savedProject()));
+    const before = JSON.stringify(persisted);
+    h.workspace.state.project = persisted;
+    h.api.catalog = persisted.messages[0].composer_document.parts.filter((part) => part.type === 'reference');
+    await tick();
+    h.find('review-tray').reuse('saved-user');
+    await tick();
+    const draft = h.agentDrafts.bind(() => 'A');
+    assert.equal(h.find('textarea').focused, true);
+    assert.equal(h.env.calls.length, 0);
+    assert.deepEqual(h.api.calls, [['references.catalog', { project_id: 'A' }]], 'existing local reference validation remains enabled');
+    assert.match(textOf(h.root), /单独附加的资料需重新选择/);
+    assert.deepEqual(draft.attachmentIds.value, []);
+    const edited = draft.composerDocument.value;
+    edited.parts[0].text = 'Updated requirement ';
+    edited.parts.at(-1).text = 'new conclusion';
+    draft.composerDocument.value = edited;
+    await tick();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.deepEqual(h.env.calls[0][5].parts.filter((part) => part.type === 'reference'),
+      persisted.messages[0].composer_document.parts.filter((part) => part.type === 'reference'));
+    assert.match(h.env.calls[0][1], /^Updated requirement /);
+    assert.deepEqual(h.env.calls[0].slice(2, 5), [undefined, [], undefined]);
+    assert.equal(h.env.submissions[0].turnId, undefined);
+    assert.equal(h.env.submissions[0].sourceAnalysis, undefined);
+    assert.equal(h.env.planningRequests[0], undefined);
+    assert.equal(draft.savedRequest.value, false);
+    assert.equal(h.find('textarea').value, '');
+    assert.equal(JSON.stringify(h.workspace.state.project), before);
+  } finally { h.dispose(); }
+});
+
+test('reused draft survives later questions and explicit options, including equal answer text', async () => {
+  for (const delivered of [true, false]) {
+    const h = await harness();
+    try {
+      h.workspace.state.project = savedProject(null);
+      await tick();
+      h.find('review-tray').reuse('saved-user');
+      await tick();
+      const text = h.find('textarea').value;
+      await h.attach(['newly-selected']);
+      h.workspace.state.project.question = { id: 'new-question', prompt: 'Confirm?', options: [text] };
+      await tick();
+      await h.submit();
+      assert.equal(h.env.calls.length, 0);
+      assert.match(textOf(h.root), /不能作为当前问题的回答/);
+      assert.equal(h.find('textarea')['aria-label'], '发给 Agent 的修改建议');
+      h.env.send = async () => delivered;
+      h.find('question').choose(text);
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.env.calls[0][2], 'new-question');
+      assert.deepEqual(h.env.calls[0][3], [], 'question answer does not inherit the held draft attachments');
+      assert.equal(h.find('textarea').value, text);
+      assert.deepEqual(h.find('attachments').selected, ['newly-selected']);
+      assert.equal(h.agentDrafts.bind(() => 'A').savedRequest.value, true);
+      h.workspace.setPage('settings'); await tick();
+      h.workspace.setPage('projects'); await tick();
+      await h.submit();
+      assert.equal(h.env.calls.length, 1, 'question protection survives remount');
+      h.workspace.state.project.question = null;
+      h.env.send = async () => true;
+      await tick();
+      await h.submit();
+      assert.equal(h.env.calls.length, 2);
+      assert.equal(h.env.calls[1][2], undefined);
+      assert.deepEqual(h.env.calls[1][3], ['newly-selected']);
+    } finally { h.dispose(); }
+  }
+});
+
+test('stale history callbacks, newer drafts and delayed focus cannot take over the active composer', async () => {
+  for (const interruption of ['newer', 'project', 'incarnation', 'owner', 'question', 'running', 'busy', 'deleted-owner', 'malformed']) {
+    const h = await harness();
+    try {
+      h.workspace.state.project = savedProject(null);
+      await tick();
+      const reuse = h.find('review-tray').reuse;
+      if (interruption === 'newer') await h.input(' \n ');
+      if (interruption === 'project') await h.workspace.selectProject('B');
+      if (interruption === 'incarnation') h.workspace.state.project.created_at = 'new-incarnation';
+      if (interruption === 'owner') {
+        h.workspace.setPage('settings'); await tick();
+        h.workspace.setPage('projects');
+      }
+      if (interruption === 'question') h.workspace.state.project.question = { id: 'Q', prompt: 'Q?', options: [] };
+      if (interruption === 'running') Object.assign(h.agent.state, { running: true, projectId: 'B' });
+      if (interruption === 'busy') h.workspace.state.busy = true;
+      if (interruption === 'deleted-owner') { h.agentDrafts.discard('A'); h.agentDrafts.activate('A'); }
+      if (interruption === 'malformed') h.workspace.state.project.messages[0].composer_document = { version: 3 };
+      await tick();
+      reuse('saved-user');
+      await tick();
+      assert.equal(h.find('textarea').value, interruption === 'newer' ? ' \n ' : '', interruption);
+      assert.equal(h.find('textarea').focused, undefined, interruption);
+      assert.equal(h.env.calls.length, 0, interruption);
+      if (interruption === 'malformed') assert.match(h.find('review-tray').reuseError, /引用结构不完整/);
+    } finally { h.dispose(); }
+  }
+  const h = await harness();
+  try {
+    h.workspace.state.project = savedProject(null);
+    await tick();
+    h.find('review-tray').reuse('saved-user');
+    h.workspace.state.project.question = { id: 'arriving-question', prompt: 'Q?', options: [] };
+    await tick();
+    assert.equal(h.find('textarea').focused, undefined, 'a newly arriving question cancels queued focus');
+    assert.equal(h.find('textarea').value, 'legacy @same label #same label');
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+  } finally { h.dispose(); }
+});
+
+test('saved request reuse keeps current reference admission and resets any earlier job opt-in', async () => {
+  const h = await harness();
+  try {
+    h.workspace.state.project = savedProject();
+    const ui = await boundedComposer(h);
+    await h.input('');
+    await ui.confirm();
+    h.find('review-tray').reuse('saved-user');
+    await tick();
+    assert.equal(ui.inputs().find((node) => node.type === 'checkbox').checked, false);
+    assert.equal(ui.limits().length, 0);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    assert.match(textOf(h.root), /引用.*已失效/);
+    assert.equal(h.agentDrafts.bind(() => 'A').savedRequest.value, true);
+    const document = h.agentDrafts.bind(() => 'A').composerDocument.value;
+    assert.deepEqual(document.parts.filter((part) => part.type === 'reference'),
+      savedDocument().parts.filter((part) => part.type === 'reference'));
+  } finally { h.dispose(); }
+});
+
+test('failed reused requests stay new requests when a later question and explicit answer arrive', async () => {
+  for (const document of [null, savedDocument()]) {
+    const h = await harness();
+    try {
+      h.workspace.state.project = savedProject(document);
+      h.api.catalog = document?.parts.filter((part) => part.type === 'reference') ?? [];
+      await tick();
+      h.find('review-tray').reuse('saved-user');
+      await tick();
+      const original = h.find('textarea').value;
+      h.env.send = async () => false;
+      await h.submit(); await tick();
+      const draft = h.agentDrafts.bind(() => 'A');
+      assert.equal(draft.savedRequest.value, true);
+      assert.equal(draft.failures.value[0].savedRequest, true);
+      h.workspace.state.project.question = { id: 'Q-later', prompt: 'Q?', options: ['answer'] };
+      h.api.load = async () => JSON.parse(JSON.stringify(h.workspace.state.project));
+      await tick();
+      await h.button('重试这条请求').onClick();
+      await tick();
+      assert.equal(h.env.calls.length, 1);
+      assert.equal(h.find('textarea').value, original, 'retry admission does not detach the held new request');
+      h.env.send = async () => true;
+      h.find('question').choose('answer');
+      await tick();
+      assert.equal(h.env.calls.length, 2);
+      assert.equal(h.env.calls[1][2], 'Q-later');
+      assert.equal(h.find('textarea').value, original);
+      assert.equal(draft.savedRequest.value, true);
+      await h.input('edited new request while question remains');
+      await h.submit();
+      assert.equal(h.env.calls.length, 2, 'edits do not release the new-request restriction');
+    } finally { h.dispose(); }
+  }
 });

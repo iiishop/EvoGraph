@@ -303,6 +303,7 @@ const summary = () => ({
 });
 const project = () => ({
   id: 'P1',
+  created_at: '2026-10-01T08:00:00Z',
   name: 'Project A',
   milestones: [
     { id: 'A', title: 'A' },
@@ -340,6 +341,7 @@ async function mount(overrides = {}, activity = false) {
     ...overrides,
   });
   const locates = [];
+  const reuses = [];
   let tray;
   const root = document.createElement('div');
   document.body.append(root);
@@ -361,6 +363,7 @@ async function mount(overrides = {}, activity = false) {
               tray = value;
             },
             onLocate: (id) => locates.push(id),
+            onReuse: (selection) => reuses.push(selection),
           }),
           h('input', { class: 'composer' }),
           h('button', { class: 'stop' }, 'Stop'),
@@ -374,7 +377,9 @@ async function mount(overrides = {}, activity = false) {
     root,
     props,
     locates,
+    reuses,
     openReceipt: (id, origin) => tray.openReceipt(id, origin),
+    closeForDraft: () => tray.closeForDraft(),
     tiles: () => [...root.querySelectorAll('.review-tile')],
     surface: () => document.querySelector('.agent-review-surface'),
     layer: () => document.querySelector('.agent-review-layer'),
@@ -1846,11 +1851,249 @@ test('candidate receipt tile and reader report retained preview rather than a hi
   try {
     const tile = view.tiles().find((node) => node.textContent.includes('最近变更'));
     assert.match(tile.textContent, /候选未完成/);
-    assert.match(tile.textContent, /候选已保留，正式方案未应用/);
+    assert.match(tile.textContent, /该轮候选已保留，未应用到正式方案/);
     assert.doesNotMatch(tile.textContent, /对话未完整保存/);
     await click(tile);
     assert.match(view.surface().textContent, /候选保留供继续修改/);
     assert.doesNotMatch(view.surface().textContent, /已保存的部分变更保留/);
+  } finally {
+    view.dispose();
+  }
+});
+
+const reuseActions = (view) => [...view.surface().querySelectorAll('.review-reuse')];
+// Save the rendered callback itself, rather than Vue's mutable DOM event invoker.
+const reuseHandler = (button) => button.__vnode.props.onClick;
+
+test('saved user requests expose a new-draft action with the exact rendered project scope', async () => {
+  const p = project();
+  p.messages.push(
+    { id: 'own', project_id: p.id, role: 'user', content: 'Another request', created_at: '' },
+    { id: 'foreign', project_id: 'P2', role: 'user', content: 'Foreign request', created_at: '' },
+    { id: '', role: 'user', content: 'No saved identity', created_at: '' },
+  );
+  const original = JSON.stringify(p);
+  const view = await mount({ project: p, owner: 7 });
+  try {
+    await click(view.tiles()[0]);
+    const buttons = reuseActions(view);
+    assert.equal(buttons.length, 2);
+    assert.ok(buttons.every((button) => button.textContent.trim() === '用作新草稿'));
+    assert.deepEqual(
+      buttons.map((button) => button.closest('article').dataset.messageId),
+      ['1', 'own'],
+    );
+    await click(buttons[0]);
+    await click(buttons[1]);
+    assert.deepEqual(view.reuses, [
+      { messageId: '1', projectId: p.id, projectCreatedAt: p.created_at, owner: 7 },
+      { messageId: 'own', projectId: p.id, projectCreatedAt: p.created_at, owner: 7 },
+    ]);
+    assert.equal(visible(view), true, 'the parent closes only after a successful restore');
+    assert.equal(JSON.stringify(p), original);
+    view.props.owner = undefined;
+    await flush();
+    await click(view.tiles()[0]);
+    await click(reuseActions(view)[0]);
+    assert.deepEqual(view.reuses.at(-1), {
+      messageId: '1',
+      projectId: p.id,
+      projectCreatedAt: p.created_at,
+    });
+  } finally {
+    view.dispose();
+  }
+});
+
+test('question and operation blockers explain disabled reuse and reject synthetic activation', async () => {
+  const view = await mount({ reuseBlocker: '请等待当前操作完成。' });
+  try {
+    await click(view.tiles()[0]);
+    let action = reuseActions(view)[0];
+    assert.equal(action.disabled, true);
+    const explanation = document.getElementById(action.getAttribute('aria-describedby'));
+    assert.equal(explanation.textContent.trim(), '请等待当前操作完成。');
+    await click(action);
+    reuseHandler(action)({ currentTarget: action });
+    assert.equal(view.reuses.length, 0);
+
+    view.props.reuseBlocker = '';
+    view.props.project.question = { id: 'pending-question', prompt: 'Current question' };
+    await flush();
+    await click(view.tiles()[0]);
+    action = reuseActions(view)[0];
+    assert.equal(action.disabled, true);
+    assert.match(
+      view.surface().querySelector('.review-history [role="status"]').textContent,
+      /请先完成当前问题/,
+    );
+    await click(action);
+    reuseHandler(action)({ currentTarget: action });
+    assert.equal(view.reuses.length, 0);
+
+    view.props.project.question = null;
+    view.props.reuseError = '原请求引用的资料已移除，请先处理引用。';
+    await flush();
+    await click(view.tiles()[0]);
+    action = reuseActions(view)[0];
+    assert.equal(action.disabled, false);
+    assert.equal(action.hasAttribute('aria-describedby'), false);
+    assert.match(
+      view.surface().querySelector('.review-history [role="alert"]').textContent,
+      /原请求引用的资料已移除/,
+    );
+    await click(action);
+    assert.equal(view.reuses.length, 1);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('only the active history session can emit, including retained hidden rows and stale callbacks', async () => {
+  const view = await mount();
+  try {
+    const hidden = reuseActions(view)[0];
+    await click(hidden);
+    assert.equal(view.reuses.length, 0);
+    await click(view.tiles()[0]);
+    const action = reuseActions(view)[0];
+    const stale = reuseHandler(action);
+    await click(close(view));
+    stale({ currentTarget: action });
+    await click(view.tiles()[1]);
+    await click(action);
+    assert.equal(view.reuses.length, 0, 'retained history stays inert in the receipt reader');
+    await click(close(view));
+    await click(view.tiles()[0]);
+    const current = reuseActions(view)[0];
+    stale({ currentTarget: current });
+    assert.equal(view.reuses.length, 0, 'an old callback cannot adopt a new open session');
+    await click(current);
+    assert.equal(view.reuses.length, 1);
+    const unmounted = reuseHandler(current);
+    view.dispose();
+    unmounted({ currentTarget: current });
+    assert.equal(view.reuses.length, 1);
+  } finally {
+    if (view.root.isConnected) view.dispose();
+  }
+});
+
+test('rendered callbacks cannot acquire another project, incarnation, owner or replacement row', async () => {
+  const view = await mount({ owner: 1 });
+  try {
+    for (const mutate of [
+      () => {
+        view.props.project.id = 'P2';
+      },
+      () => {
+        view.props.project.created_at = '2026-10-02T08:00:00Z';
+      },
+      () => {
+        view.props.owner++;
+      },
+      () => {
+        view.props.project.messages = view.props.project.messages.map((message) => ({
+          ...message,
+        }));
+      },
+    ]) {
+      if (!visible(view)) await click(view.tiles()[0]);
+      const oldAction = reuseActions(view)[0];
+      const stale = reuseHandler(oldAction);
+      mutate();
+      await flush();
+      if (!visible(view)) await click(view.tiles()[0]);
+      const current = reuseActions(view)[0];
+      const before = view.reuses.length;
+      stale({ currentTarget: oldAction });
+      stale({ currentTarget: current });
+      assert.equal(view.reuses.length, before);
+      await click(current);
+      assert.deepEqual(view.reuses.at(-1), {
+        messageId: '1',
+        projectId: view.props.project.id,
+        projectCreatedAt: view.props.project.created_at,
+        owner: view.props.owner,
+      });
+    }
+  } finally {
+    view.dispose();
+  }
+});
+
+test('removed, assistant, foreign and detached row actions cannot emit a saved selection', async () => {
+  for (const mutate of [
+    (p) => {
+      p.messages.shift();
+    },
+    (p) => {
+      p.messages[0].role = 'assistant';
+    },
+    (p) => {
+      p.messages[0].project_id = 'foreign-project';
+    },
+    (p) => {
+      p.messages[0].id = '';
+    },
+    (p) => {
+      p.messages.push({ ...p.messages[0] });
+    },
+  ]) {
+    const view = await mount();
+    try {
+      await click(view.tiles()[0]);
+      const action = reuseActions(view)[0];
+      const stale = reuseHandler(action);
+      mutate(view.props.project);
+      await flush();
+      stale({ currentTarget: action });
+      for (const current of reuseActions(view)) await click(current);
+      assert.equal(view.reuses.length, 0);
+    } finally {
+      view.dispose();
+    }
+  }
+  const view = await mount();
+  try {
+    await click(view.tiles()[0]);
+    const action = reuseActions(view)[0];
+    const handler = reuseHandler(action);
+    const impostor = action.cloneNode(true);
+    document.body.append(impostor);
+    handler({ currentTarget: impostor });
+    impostor.remove();
+    action.remove();
+    handler({ currentTarget: action });
+    assert.equal(view.reuses.length, 0);
+  } finally {
+    view.dispose();
+  }
+});
+
+test('successful draft close cancels reader motion without stealing composer focus', async () => {
+  const view = await mount();
+  try {
+    await click(view.tiles()[0], true);
+    const pending = tileMotion();
+    const staleCompletion = pending.onfinish;
+    const action = reuseActions(view)[0];
+    const staleAction = reuseHandler(action);
+    const composer = view.root.querySelector('.composer');
+    composer.focus();
+    view.closeForDraft();
+    await flush();
+    assert.equal(visible(view), false);
+    assert.equal(pending.cancelled, true);
+    assert.equal(document.activeElement, composer);
+    staleCompletion();
+    staleAction({ currentTarget: action });
+    await flush();
+    assert.equal(visible(view), false);
+    assert.equal(document.activeElement, composer);
+    assert.equal(view.reuses.length, 0);
+    assert.equal(view.surface().hasAttribute('inert'), true);
+    assert.ok(view.tiles().every((button) => !button.hasAttribute('inert')));
   } finally {
     view.dispose();
   }

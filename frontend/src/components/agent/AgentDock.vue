@@ -25,6 +25,7 @@ import {
   useAgentDraft,
   type DraftAttempt,
   type FailedDraft,
+  type SavedRequestSelection,
 } from '../../composables/useAgentDrafts';
 import { useWorkspace } from '../../composables/useWorkspace';
 import type { Project, ReferenceItem, PlanningJobLimits, PlanningJobRequest } from '../../types';
@@ -95,6 +96,9 @@ const {
   restoredFailure,
   recoveryError,
   attachmentTransfer,
+  savedRequest,
+  editorSession,
+  savedRequestBlocker,
 } = useAgentDraft(() => props.project.id);
 // New submissions append their recovery snapshot. Keep the visible retry and
 // its receipt on the newest request; older snapshots remain recoverable.
@@ -130,6 +134,73 @@ onUnmounted(() => {
 });
 const message = ref<InstanceType<typeof ComposerEditor>>();
 const reviewTray = ref<InstanceType<typeof AgentReviewTray>>();
+const reuseError = ref('');
+let savedRequestOwner = () => false;
+watch(
+  () => [props.project.id, props.project.created_at, props.reviewOwner],
+  () => {
+    savedRequestOwner = agentDrafts.captureOwner(props.project.id);
+    reuseError.value = '';
+  },
+  { immediate: true, flush: 'sync' },
+);
+const reuseBlocker = computed(() => {
+  if (props.project.question) return '请先回答当前待确认问题，再将历史请求用作新草稿。';
+  if (agent.state.running || state.busy) return '正在处理上一步操作，请完成后再使用历史请求。';
+  return savedRequestBlocker.value;
+});
+async function reuseSavedRequest(selection: SavedRequestSelection) {
+  if (!mounted) return;
+  if (reuseBlocker.value) {
+    reuseError.value = reuseBlocker.value;
+    return;
+  }
+  const owner = props.reviewOwner;
+  const result = agentDrafts.reuseSavedRequest(props.project, selection, owner, savedRequestOwner);
+  reuseError.value = result.error;
+  if (result.error) return;
+  // Reusing content never carries a previous job's authorization into Send.
+  boundedJob.value = false;
+  jobConfirmed.value = false;
+  jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
+  dockCollapsed.value = false;
+  reviewTray.value?.closeForDraft();
+  await nextTick();
+  if (
+    mounted &&
+    result.isCurrent?.() &&
+    props.project.id === selection.projectId &&
+    props.project.created_at === selection.projectCreatedAt &&
+    props.reviewOwner === owner &&
+    !dockCollapsed.value &&
+    !pending.value &&
+    !props.project.question &&
+    !agent.state.running &&
+    !state.busy
+  )
+    message.value?.focus();
+}
+async function clearSavedRequest() {
+  if (!mounted || agent.state.running || state.busy) return;
+  const projectId = props.project.id;
+  const incarnation = props.project.created_at;
+  const owner = props.reviewOwner;
+  const isCurrent = agentDrafts.clearSavedRequest(projectId);
+  if (!isCurrent) return;
+  await nextTick();
+  if (
+    mounted &&
+    isCurrent() &&
+    props.project.id === projectId &&
+    props.project.created_at === incarnation &&
+    props.reviewOwner === owner &&
+    !dockCollapsed.value &&
+    !agent.state.running &&
+    !state.busy &&
+    !pending.value
+  )
+    message.value?.focus();
+}
 // Entry hints focus the existing editor; they never populate or send a draft.
 defineExpose({
   openReceipt: async (eventId: string, trigger: HTMLElement) => {
@@ -288,6 +359,12 @@ const operationBlocker = computed(() => {
 const blocker = computed(
   () =>
     operationBlocker.value ||
+    (savedRequest.value && answering.value
+      ? {
+          text: '新草稿已保留，不能作为当前问题的回答发送。请先回答问题，再发送这条新请求。',
+          action: '',
+        }
+      : null) ||
     (documentIssue.value
       ? {
           text: referenceError.value || documentIssue.value,
@@ -331,7 +408,7 @@ async function openJobAuthorization() {
 }
 
 const placeholder = computed(() =>
-  answering.value
+  answering.value && !savedRequest.value
     ? '也可以在这里自己写回答，或直接点上方选项…'
     : '描述想法、补充约束，或说明希望调整的地方…',
 );
@@ -398,7 +475,7 @@ async function submit(
     await retry(restored, true);
     return;
   }
-  if (chosenOption && restored && restored.questionId !== questionId) {
+  if (chosenOption && restored && !savedRequest.value && restored.questionId !== questionId) {
     agentDrafts.recoverComposer(props.project.id);
     agentDrafts.detachRestored(props.project.id, restored.id);
   }
@@ -408,10 +485,11 @@ async function submit(
     {
       text,
       ...(planningJob ? { planningJob } : {}),
+      ...(!chosenOption && savedRequest.value ? { savedRequest: true as const } : {}),
       composerDocument: chosenOption
         ? textDocument(text)
         : cloneComposerDocument(composerDocument.value),
-      ids: attachmentIds.value,
+      ids: chosenOption && savedRequest.value ? [] : attachmentIds.value,
       questionId,
       question:
         question && question.id === questionId
@@ -423,7 +501,7 @@ async function submit(
             }
           : undefined,
     },
-    text === content.value || content.value === '',
+    !(chosenOption && savedRequest.value) && (text === content.value || content.value === ''),
   );
   if (attempt) {
     boundedJob.value = false;
@@ -461,7 +539,11 @@ async function retry(failure: FailedDraft | undefined = failedAttempt.value, fro
     applyProject(current);
     const plan = planAgentRetry(preparation.failure, current);
     if (plan.kind === 'blocked') {
-      if (plan.differentQuestion && !preparation.failure.composerDocument)
+      if (
+        plan.differentQuestion &&
+        !preparation.failure.composerDocument &&
+        !preparation.failure.savedRequest
+      )
         agentDrafts.detachRestored(projectId, failure.id);
       report(plan.message);
       return;
@@ -596,7 +678,7 @@ function choose(option: string) {
     <AgentQuestion
       v-if="project.question"
       :question="project.question"
-      :answer="content"
+      :answer="savedRequest ? '' : content"
       :disabled="Boolean(operationBlocker)"
       @choose="choose"
     />
@@ -607,7 +689,10 @@ function choose(option: string) {
       :owner="reviewOwner"
       :running="runningHere"
       :disabled="dockCollapsed"
+      :reuse-blocker="reuseBlocker"
+      :reuse-error="reuseError"
       @locate="$emit('locate', $event)"
+      @reuse="reuseSavedRequest"
     />
     <div
       v-if="attachmentTransfer || failedAttempt"
@@ -712,7 +797,7 @@ function choose(option: string) {
     </div>
     <form style="position: relative" class="agent-input" @submit.prevent="submit()">
       <ComposerEditor
-        :key="project.id"
+        :key="`${project.id}:${editorSession}`"
         ref="message"
         v-model="editorDocument"
         :project-id="project.id"
@@ -720,7 +805,7 @@ function choose(option: string) {
         :catalog-error="referenceError"
         :catalog-warnings="referenceWarnings"
         :explicit-attachment-ids="attachmentIds"
-        :input-label="answering ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
+        :input-label="answering && !savedRequest ? '你对这个问题的回答' : '发给 Agent 的修改建议'"
         :disabled="runningHere"
         :placeholder="placeholder"
         @submit="submit()"
@@ -751,13 +836,31 @@ function choose(option: string) {
           v-else
           type="submit"
           class="send-button"
-          :aria-label="boundedJob ? '确认额度并启动作业' : answering ? '发送回答' : '发送修改建议'"
+          :aria-label="
+            boundedJob
+              ? '确认额度并启动作业'
+              : answering && !savedRequest
+                ? '发送回答'
+                : '发送修改建议'
+          "
           :disabled="!canSend"
         >
           <ArrowUp :size="20" aria-hidden="true" />
         </button>
       </div>
     </form>
+    <p v-if="savedRequest" class="agent-blocker" role="status">
+      已用历史请求创建新草稿，可编辑后发送。行内引用已保留；之前单独附加的资料需重新选择。
+      <button
+        type="button"
+        class="text-button"
+        :disabled="agent.state.running || state.busy || pending"
+        title="清空这条新草稿及所选资料，同时清除其撤销记录"
+        @click="clearSavedRequest"
+      >
+        清空新草稿
+      </button>
+    </p>
     <p v-if="editorError" class="agent-blocker" role="status">{{ editorError }}</p>
     <div
       v-if="blocker && (content.trim() || runningHere || runningElsewhere || attachmentTransfer)"

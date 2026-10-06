@@ -12,7 +12,8 @@ import {
   turnSummaryStatus,
   type TurnReceiptSelection,
 } from '../../lib/turnSummary';
-import type { Project, TurnSummary } from '../../types';
+import type { SavedRequestSelection } from '../../composables/useAgentDrafts';
+import type { Message, Project, TurnSummary } from '../../types';
 
 const props = defineProps<{
   project: Project;
@@ -20,9 +21,16 @@ const props = defineProps<{
   running: boolean;
   disabled?: boolean;
   owner?: number;
+  reuseBlocker?: string;
+  reuseError?: string;
 }>();
-const emit = defineEmits<{ locate: [id: string] }>();
+const emit = defineEmits<{ locate: [id: string]; reuse: [selection: SavedRequestSelection] }>();
 type Review = 'reply' | 'receipt';
+type HistoryRow = {
+  message: Message;
+  selection: SavedRequestSelection | null;
+  reuse: (event: MouseEvent) => void;
+};
 type Box = { left: number; top: number; width: number; height: number };
 type Placement = { frame: Box; tile: Box; row: Box; ceiling: number; floor: number };
 const uid = `agent-review-${useId()}`;
@@ -38,6 +46,7 @@ const surfaceContent = ref<HTMLElement>();
 const surfaceHeading = ref<HTMLElement>();
 const closeButton = ref<HTMLButtonElement>();
 const active = ref<Review | null>(null);
+const historySession = ref(0);
 // The original controls/readers stay mounted. Closing keeps presentation until motion ends.
 const shown = ref<Review | null>(null);
 const tileShown = ref<Review | null>(null);
@@ -81,6 +90,65 @@ const replyPreview = computed(() => {
     return `${props.summary ? turnSummaryStatus(props.summary) : '尚无新回复'} · 查看已保存的对话`;
   return text ? `最近保存的回复 · ${text.slice(0, 160)}` : '查看已发送的请求';
 });
+const reuseBlocked = computed(() =>
+  props.project.question
+    ? '请先完成当前问题，再将历史请求用作新草稿。'
+    : (props.reuseBlocker ?? ''),
+);
+const savedUserMessage = (message: Message, projectId: string) =>
+  message.role === 'user' &&
+  Boolean(message.id) &&
+  (message.project_id == null || message.project_id === projectId);
+const historyRows = computed<HistoryRow[]>(() => {
+  const projectId = props.project.id;
+  const projectCreatedAt = props.project.created_at;
+  const owner = props.owner;
+  const session = historySession.value;
+  return props.project.messages.map((message) => {
+    // Capture scope with the rendered row. Old callbacks must never borrow the
+    // project, incarnation or owner of a newer render.
+    const selection: SavedRequestSelection | null = savedUserMessage(message, projectId)
+      ? {
+          messageId: message.id,
+          projectId,
+          projectCreatedAt,
+          ...(owner === undefined ? {} : { owner }),
+        }
+      : null;
+    const row: HistoryRow = {
+      message,
+      selection,
+      reuse(event) {
+        const origin = event.currentTarget;
+        const matches = props.project.messages.filter((saved) => saved.id === selection?.messageId);
+        if (
+          !mounted ||
+          !selection ||
+          active.value !== 'reply' ||
+          shown.value !== 'reply' ||
+          props.disabled ||
+          reuseBlocked.value ||
+          session !== historySession.value ||
+          !historyRows.value.includes(row) ||
+          props.project.id !== selection.projectId ||
+          props.project.created_at !== selection.projectCreatedAt ||
+          props.owner !== selection.owner ||
+          matches.length !== 1 ||
+          !savedUserMessage(matches[0], selection.projectId) ||
+          !(origin instanceof HTMLElement) ||
+          !origin.isConnected ||
+          !history.value?.contains(origin) ||
+          !origin.matches('button.review-reuse') ||
+          origin.matches(':disabled') ||
+          origin.closest('article')?.dataset.messageId !== selection.messageId
+        )
+          return;
+        emit('reuse', { ...selection });
+      },
+    };
+    return row;
+  });
+});
 const trigger = (kind: Review) => (kind === 'reply' ? replyTrigger.value : receiptTrigger.value);
 function composerControl() {
   return strip.value
@@ -122,7 +190,7 @@ async function openReceipt(eventId: string, origin: HTMLElement) {
   // History rows share this single reader, without morphing the unrelated latest tile.
   await change('receipt', false, false);
 }
-defineExpose({ openReceipt });
+defineExpose({ openReceipt, closeForDraft: reset });
 const available = (kind: Review) =>
   !props.disabled && (kind === 'reply' ? hasReply.value : hasReceipt.value);
 const layerStyle = computed(() => ({
@@ -412,6 +480,7 @@ function reset() {
 function reduceMotion(event: MediaQueryListEvent) {
   if (event.matches) settleNow();
 }
+watch(active, () => historySession.value++, { flush: 'sync' });
 watch([() => props.project.id, () => props.project.created_at, () => props.owner], async () => {
   const focus = document.activeElement;
   const ownedFocus = selectedReceipt.value && surface.value?.contains(focus);
@@ -605,13 +674,33 @@ onUnmounted(() => {
             tabindex="0"
             :aria-label="`${project.name}的对话记录`"
           >
-            <article
-              v-for="message in project.messages"
-              :key="`${project.id}:${message.id}`"
-              :class="message.role"
+            <p
+              v-if="reuseBlocked"
+              :id="`${uid}-reuse-blocker`"
+              class="review-reuse-note"
+              role="status"
             >
-              <strong>{{ message.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
-              <MessageContent :message="message" />
+              {{ reuseBlocked }}
+            </p>
+            <p v-if="reuseError" class="review-reuse-note" role="alert">{{ reuseError }}</p>
+            <article
+              v-for="row in historyRows"
+              :key="`${project.id}:${row.message.id}`"
+              :class="row.message.role"
+              :data-message-id="row.message.id"
+            >
+              <strong>{{ row.message.role === 'assistant' ? 'EvoGraph' : '你' }}</strong>
+              <MessageContent :message="row.message" />
+              <button
+                v-if="row.selection"
+                type="button"
+                class="review-reuse"
+                :disabled="disabled || Boolean(reuseBlocked)"
+                :aria-describedby="reuseBlocked ? `${uid}-reuse-blocker` : undefined"
+                @click="row.reuse"
+              >
+                用作新草稿
+              </button>
             </article>
           </div>
           <div
@@ -849,6 +938,30 @@ onUnmounted(() => {
   border-radius: 8px;
   background: #f4f7f9;
 }
+.review-reuse {
+  margin-top: 7px;
+  padding: 3px 8px;
+  border: 1px solid var(--line, #d8e1e7);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--accent, #376d83);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.review-reuse:disabled {
+  color: var(--text-secondary, #617383);
+  opacity: 0.65;
+  cursor: default;
+}
+.review-reuse-note {
+  margin: 10px 0 0;
+  color: var(--text-secondary, #617383);
+  font-size: 11px;
+}
+.review-reuse-note[role='alert'] {
+  color: var(--warning, #946627);
+}
 .review-receipt-context {
   margin: 10px 0 0;
   color: var(--text-secondary, #617383);
@@ -871,6 +984,7 @@ onUnmounted(() => {
 }
 .review-tile:focus-visible,
 .review-close:focus-visible,
+.review-reuse:focus-visible,
 .review-reader:focus-visible {
   outline: 2px solid var(--accent, #376d83);
   outline-offset: -3px;
