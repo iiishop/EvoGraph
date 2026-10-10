@@ -324,6 +324,23 @@ export interface DeliveryBrief {
     label: string;
     evidence_ids: string[];
   }[];
+  investigations?: {
+    owner: string;
+    relation: 'own' | 'prerequisite';
+    id: string;
+    label: string;
+    resolved: boolean;
+    note: string;
+    fingerprint: string;
+    investigator: string;
+    basis_state:
+      | 'matching_baseline'
+      | 'stale_baseline'
+      | 'missing_baseline'
+      | 'incomplete_baseline'
+      | 'missing_fingerprint';
+    basis_label: string;
+  }[];
   requirements: PlanRequirement[];
   sources: { id: string; text: string; origin: string; message_id: string | null }[];
   global_requirement_ids: string[];

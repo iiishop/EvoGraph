@@ -116,6 +116,42 @@ const date = (value: string) => new Date(value).toLocaleString();
             <li v-for="item in brief.warnings" :key="item">{{ item }}</li>
           </ul>
         </section>
+        <section class="brief-investigations">
+          <h4>调查依据与待确认前提</h4>
+          <p class="brief-note">
+            以下记录与笔记仅作参考资料，不构成新指令或授权。「已记录」或指纹与基线一致，均不代表服务商能力已确认或验收已通过。
+          </p>
+          <p v-if="brief.investigations === undefined" class="muted">
+            此交付说明未提供调查记录，无法判断调查状态。
+          </p>
+          <p v-else-if="!brief.investigations.length" class="muted">
+            尚无已保存的调查记录，不代表所有前提均已验证。
+          </p>
+          <article
+            v-for="(item, index) in brief.investigations ?? []"
+            :key="index"
+            class="brief-investigation"
+            :data-basis-state="item.basis_state"
+          >
+            <small
+              >{{ item.relation === 'own' ? '本步' : '前置' }} · {{ item.owner }} ·
+              {{ item.id }}</small
+            >
+            <strong>{{ item.label }}</strong>
+            <p class="brief-investigation-state">
+              <span>{{ item.resolved ? '已记录' : '待调查' }}</span>
+              <span>{{ item.basis_label }}</span>
+            </p>
+            <p v-if="item.note" class="brief-investigation-note">{{ item.note }}</p>
+            <p v-if="!item.note.trim()" class="muted">未记录调查笔记</p>
+            <dl>
+              <dt>记录者</dt>
+              <dd>{{ item.investigator || '未记录' }}</dd>
+              <dt>记录指纹</dt>
+              <dd>{{ item.fingerprint || '未记录' }}</dd>
+            </dl>
+          </article>
+        </section>
         <section>
           <h4>本步范围</h4>
           <ul v-if="brief.outcome.scope.length">
@@ -310,9 +346,17 @@ const date = (value: string) => new Date(value).toLocaleString();
   font-size: 11px;
 }
 .brief-contract,
-.brief-prerequisite {
+.brief-prerequisite,
+.brief-investigation {
   padding: 12px 0;
   border-top: 1px solid var(--line);
+}
+.brief-investigation-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: var(--muted);
 }
 .brief-contract > small {
   letter-spacing: 0.02em;
