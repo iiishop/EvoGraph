@@ -97,7 +97,7 @@ class PlanningJobService:
         budget_left = (len(job["phases"]) < job["limits"]["max_phases"]
                        and spend["calls"] < job["limits"]["max_calls"]
                        and spend["input_bytes"] < job["limits"]["max_input_bytes"])
-        return {**{k: deepcopy(job[k]) for k in ("id", "created_at", "write_version", "status", "source_id", "stop_reason", "limits")},
+        return {"mode": job.get("mode"), **{k: deepcopy(job[k]) for k in ("id", "created_at", "write_version", "status", "source_id", "stop_reason", "limits")},
                 "phase_id": phase["id"] if phase else None, "phase_number": len(job["phases"]),
                 "can_continue": can_continue and budget_left,
                 "authorization_needed": bool(job["stop_reason"] and job["stop_reason"].startswith("aggregate_")) or can_continue and not budget_left,
@@ -150,7 +150,8 @@ class PlanningJobService:
                 if not phase:
                     break
                 context = {"job_id": job["id"], "source_id": job["source_id"],
-                           "phase_id": phase["id"], "phase_number": phase["number"]}
+                           "phase_id": phase["id"], "phase_number": phase["number"],
+                           "mode": job.get("mode")}
                 if phase["kind"] == "review":
                     before = self.app.db.get(project_id)
                     record = self.app.unified.store.get(phase["candidate_id"])

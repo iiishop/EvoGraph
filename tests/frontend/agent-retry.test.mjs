@@ -155,3 +155,17 @@ test('document retries preserve atomic references and build recovery context fro
   assert.equal(pending.request.text, '采用 #路线 A');
   assert.equal(pending.request.questionId, 'Q1');
 });
+
+
+test('complete-change failed input is terminal and cannot fall through to ordinary retry', () => {
+  const saved = failure({ planningJob: {
+    action: 'start', job_id: 'complete-change-1', mode: 'bounded-complete-change/v1',
+    limits: { max_phases: 1, max_calls: 2, max_input_bytes: 393216 }, pins: {},
+  } });
+  const result = planAgentRetry(saved, current());
+  assert.equal(result.kind, 'blocked');
+  assert.equal(result.request, undefined);
+  assert.match(result.message, /不会重试或重发原输入/);
+  assert.match(result.message, /重新确认完整变更额度/);
+  assert.doesNotMatch(result.message, /面板继续/);
+});

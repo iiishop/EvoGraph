@@ -22,6 +22,7 @@ def build_validation_receipt(project, *, structural_findings=None, semantic_revi
     This pure helper neither persists a receipt nor retrofits historical records.
     """
     harness = None
+    required_subjects = None
     if harness_run is not None:
         from ..domain.plan_harness import DETERMINISTIC_REQUIRED, HarnessRun, execution_satisfied
         raw_run = harness_run.model_dump(mode="json") if isinstance(harness_run, HarnessRun) else harness_run
@@ -34,6 +35,7 @@ def build_validation_receipt(project, *, structural_findings=None, semantic_revi
         structural_findings = program_findings if program_findings else (
             [] if {row.plugin_id for row in programs} == set(DETERMINISTIC_REQUIRED) and all(execution_satisfied(row) for row in programs) else None)
         model = next((row for row in run.executions if row.kind == "model_opinion"), None)
+        required_subjects = model.result.covered_subjects if model and model.result else None
         semantic_review = json.loads(run.semantic_review_json) if run.semantic_review_json else None
         semantic_unavailable = bool(model and model.status not in {
             "completed", "prerequisite_skipped", "disabled_by_policy"})
@@ -56,7 +58,7 @@ def build_validation_receipt(project, *, structural_findings=None, semantic_revi
             # can be edited after initial parsing without assignment validation.
             raw = semantic_review.model_dump() if isinstance(semantic_review, SemanticReview) else semantic_review
             review = SemanticReview.model_validate(raw)
-            supported = validate_semantic_review(project, review)
+            supported = validate_semantic_review(project, review, required_subjects=required_subjects)
         except (ValueError, TypeError):
             model_status = "unavailable"
         else:

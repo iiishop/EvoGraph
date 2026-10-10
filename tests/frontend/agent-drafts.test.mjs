@@ -1951,3 +1951,120 @@ test('planning job composer rejects aggregate allowances exceeding the authorize
     assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 2, max_calls: 10, max_input_bytes: 786432 });
   } finally { h.dispose(); }
 });
+
+
+async function setCompleteChange(ui, enabled = true) {
+  ui.inputs().filter(node => node.type === 'checkbox')[1]['onUpdate:modelValue'](enabled);
+  await tick();
+}
+
+test('complete change is an explicit native composer choice with fixed byte and call limits', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    assert.deepEqual(ui.limits().map(node => node.value), [1, 5, 393216]);
+    // A legacy authorization and edited budget never authorize the new mode.
+    ui.limits()[0]['onUpdate:modelValue'](3);
+    ui.limits()[1]['onUpdate:modelValue'](12);
+    ui.limits()[2]['onUpdate:modelValue'](1179648);
+    await ui.confirm();
+    await setCompleteChange(ui);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    assert.equal(ui.limits().length, 0, 'fixed complete-change budget has no mutable fields');
+    assert.match(textOf(h.root), /最多一次生成 \+ 一次完整评审/);
+    assert.match(textOf(h.root), /393,216 B 累计输入/);
+    assert.match(textOf(h.root), /163,840 B 输入、98,304 B/);
+    assert.match(textOf(h.root), /180 秒超时/);
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.env.calls[0][5], undefined);
+    assert.equal(h.env.planningRequests[0].mode, 'bounded-complete-change/v1');
+    assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 1, max_calls: 2, max_input_bytes: 393216 });
+    assert.deepEqual(h.env.planningRequests[0].pins, { version: 'job-start/v1', base_hash: 'base-1' });
+    await h.input('ordinary follow-up');
+    await h.submit();
+    assert.equal(h.env.planningRequests[1], undefined);
+  } finally { h.dispose(); }
+});
+
+test('complete-change consent is invalidated by input, pin and mode changes', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    await setCompleteChange(ui);
+    await ui.confirm();
+    await h.input('Updated complete request');
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    h.workspace.state.project.planning_job_start_pins = { base_hash: 'current-R12', candidate_hash: 'R12-pins' };
+    await tick();
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    await setCompleteChange(ui, false);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await setCompleteChange(ui);
+    await ui.confirm();
+    await h.submit();
+    assert.deepEqual(h.env.planningRequests[0].pins, { base_hash: 'current-R12', candidate_hash: 'R12-pins' });
+  } finally { h.dispose(); }
+});
+
+test('closing authorization clears complete-change selection and consent', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    await setCompleteChange(ui);
+    await ui.confirm();
+    ui.inputs()[0]['onUpdate:modelValue'](false);
+    await tick();
+    ui.inputs()[0]['onUpdate:modelValue'](true);
+    await tick();
+    assert.deepEqual(ui.limits().map(node => node.value), [1, 5, 393216]);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
+    await ui.confirm();
+    await h.submit();
+    assert.equal(h.env.planningRequests[0].mode, undefined);
+  } finally { h.dispose(); }
+});
+
+test('complete-change failure has no retry button or ordinary resubmit fallback', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    await setCompleteChange(ui);
+    h.env.send = async () => false;
+    await ui.confirm();
+    await h.submit();
+    await tick();
+    assert.equal(h.button('重试这条请求'), undefined);
+    assert.match(textOf(h.root), /完整变更请求未完成，不会重试或重发/);
+    assert.equal(h.agentDrafts.bind(() => 'A').failures.value[0].planningJob.mode, 'bounded-complete-change/v1');
+    await h.submit();
+    await tick();
+    assert.equal(h.env.calls.length, 1, 'untouched recovered input must not become an ordinary request');
+    assert.match(textOf(h.root), /重新确认完整变更额度/);
+  } finally { h.dispose(); }
+});
+
+test('complete change rejects repeated submission while the exact request is pending', async () => {
+  const h = await harness();
+  let finish;
+  try {
+    const ui = await boundedComposer(h);
+    await setCompleteChange(ui);
+    h.env.send = () => new Promise(resolve => { finish = resolve; });
+    await ui.confirm();
+    const first = h.submit();
+    await tick();
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    finish(true);
+    await first;
+  } finally { finish?.(true); h.dispose(); }
+});

@@ -99,7 +99,16 @@ class PlanningJobStore:
                   (job["id"], job["project_id"], json.dumps(job, ensure_ascii=False)))
 
     def create(self, project_id, content, request):
+        from ..application.plan_complete_change import (
+            COMPLETE_CHANGE_LIMITS,
+            COMPLETE_CHANGE_VERSION,
+        )
+        mode = request.get("mode")
         limits = request.get("limits")
+        if mode not in {None, COMPLETE_CHANGE_VERSION}:
+            raise ValueError("unsupported planning job mode")
+        if mode == COMPLETE_CHANGE_VERSION and limits != COMPLETE_CHANGE_LIMITS:
+            raise ValueError("complete-change requires one phase, at most two calls and 393216 input bytes")
         if (not isinstance(limits, dict) or set(limits) != {"max_phases", "max_calls", "max_input_bytes"}
                 or any(type(v) is not int or v <= 0 for v in limits.values())
                 or limits["max_phases"] > 3 or limits["max_calls"] > 12
@@ -133,6 +142,8 @@ class PlanningJobStore:
                    "status": "authorized", "stop_reason": None, "cancelled": False,
                    "retained_checkpoints": ((previous or {}).get("generation_progress", {}).get("checkpoint_count", 0)
                        if previous and previous["status"] not in {"applied", "discarded"} else 0)}
+            if mode is not None:
+                job["mode"] = mode
             self.put(c, job)
             return job, True
 
@@ -223,6 +234,8 @@ class PlanningJobStore:
             closed = phase_receipt(c, job["project_id"], phase_id)
             next_kind = (boundary_kind(record, phase)
                          if record and closed_unchanged_receipt(closed, phase) else None)
+            if job.get("mode") is not None:
+                next_kind = None
             phase.update(closed_at=now(), record_hash=digest(record), receipt_hash=digest(closed),
                          safe_boundary=bool(next_kind), next_kind=next_kind)
             if record and record.get("source_message_id"):
@@ -257,6 +270,16 @@ def guard_candidate_write(db, c, data, previous, *, commit=False, dispatch=False
                      or (previous or {}).get("planning_job_question")):
         raise ConflictError("任务已取消或问题已保存，不能新增问题状态")
     metrics = data.get("metrics", {})
+    from ..application.plan_complete_change import (
+        COMPLETE_CHANGE_VERSION,
+        guard_write,
+        is_complete_change,
+    )
+    if (job.get("mode") == COMPLETE_CHANGE_VERSION) != is_complete_change(data):
+        raise ConflictError("任务完整变更模式不能修改或移除")
+    if is_complete_change(data):
+        guard_write(data, previous, job, canonical=db.read_project(c, job["project_id"]),
+                    dispatch=dispatch, commit=commit)
     if (phase["id"] != metrics.get("job_phase_id") or phase["candidate_id"] != data["id"]
             or context != {"job_id": job["id"], "source_id": job["source_id"]}
             or data["project_id"] != job["project_id"] or data["input"] != job["input"]
@@ -290,6 +313,20 @@ def guard_candidate_write(db, c, data, previous, *, commit=False, dispatch=False
         prior = latest_record(c, job["project_id"])
         if digest(prior) != phase["previous_record_hash"]:
             raise ConflictError("阶段来源候选已变化")
+        if is_complete_change(data):
+            from ..domain.models import Project
+            from ..domain.plan_contracts import IntentSource, bootstrap_contract
+            resume = bool(prior and prior["status"] not in {"applied", "discarded"})
+            if data.get("resumes_candidate_id") != (prior["id"] if resume else None):
+                raise ConflictError("完整变更入口候选身份已变化")
+            expected = Project.model_validate(prior["project"]) if resume else before.model_copy(deep=True)
+            expected.question = before.question
+            bootstrap_contract(expected)
+            expected.plan_contract.sources.append(IntentSource(id=job["source_id"], text=job["input"],
+                reference_context=data.get("reference_context", {})))
+            candidate = Project.model_validate(data["project"])
+            if candidate.revision != expected.revision or candidate_hash(candidate) != candidate_hash(expected):
+                raise ConflictError("完整变更入口不是当前固定候选，禁止覆盖原始记录")
     else:
         latest = latest_record(c, job["project_id"])
         if latest["id"] != data["id"]:
@@ -330,6 +367,18 @@ def guard_candidate_write(db, c, data, previous, *, commit=False, dispatch=False
         raise ConflictError("调用已发送或归属不确定，不能重复发送")
     if question_stop and new_dispatch:
         raise ConflictError("任务已等待回答，不能追加或发送请求")
+    if is_complete_change(data):
+        from ..application.plan_batch_policy import experiment_policy
+        expected = {"project_id": data["project_id"], **experiment_policy(COMPLETE_CHANGE_VERSION)}
+        if data.get("planning_experiment") != expected or metrics.get("planning_experiment") != expected:
+            raise ConflictError("完整变更策略不能修改")
+        if len(calls) > 2 or any(call.get("purpose") != ["generation", "semantic_review"][index]
+                                for index, call in enumerate(calls)):
+            raise ConflictError("完整变更仅允许一次生成和一次评审")
+        if new_dispatch and len(calls) == 2:
+            from ..application.plan_complete_change import complete
+            if not complete(data) or any(a.get("status") != "succeeded" for a in data.get("tool_attempts", [])):
+                raise ConflictError("完整变更尚未闭合，不能调用评审")
     if new_dispatch or commit:
         if job["cancelled"] or job["status"] != "running":
             raise ConflictError("任务已取消或停止，未发送请求")

@@ -6,10 +6,10 @@ import pytest
 from evograph.application.plan_harness import _semantic_result, seal_snapshot
 from evograph.application.plan_repair_context import auto_repair_context, build_repair_agenda
 from evograph.application.plan_review import (
-    BatchSemanticReview,
     batch_review_certificate,
     batch_review_packet,
     normalize_batch_review,
+    parse_batch_review,
 )
 from evograph.domain.models import Project
 from evograph.domain.plan_harness import (
@@ -34,7 +34,7 @@ def reviewed_run(snapshot):
     packet = batch_review_packet(snapshot.before_project(), snapshot.candidate_project(),
                                  snapshot.record_data())
     subjects = packet["required_subjects"][:2]
-    batch = BatchSemanticReview.model_validate({
+    value = {
         "candidate_hash": snapshot.candidate_hash, "review_scope_hash": packet["review_scope_hash"],
         "summary": "Offline grouped-issue fixture", "statuses": {
             "supported": packet["required_subjects"][2:], "unknown": subjects, "contradicted": []},
@@ -45,7 +45,11 @@ def reviewed_run(snapshot):
                         "affected_owner_ids": [], "gap_kind": "unresolved_semantics",
                         "boundary_refs": ["/current_input"],
                         "necessary_plan_change": "Decide the observable retry result"},
-                    "evidence_refs": ["/current_input"]}], "observations": []})
+                    "evidence_refs": ["/current_input"]}], "observations": []}
+    if packet["review_protocol"] == "semantic-batch/v3":
+        value["coverage"] = {s: verdict for verdict, subjects in value.pop("statuses").items()
+                             for s in subjects}
+    batch = parse_batch_review(json.dumps(value), packet)
     normalized = normalize_batch_review(snapshot.candidate_project(), packet, batch)
     certificate = batch_review_certificate(batch.model_dump_json(), batch)
     result, review_json, certificate_json = _semantic_result(snapshot, normalized, certificate)

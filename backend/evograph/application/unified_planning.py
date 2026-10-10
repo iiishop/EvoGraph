@@ -41,10 +41,13 @@ from .plan_repair_context import (
 from .plan_review import (
     CHECKER_VERSION,
     REVIEW_PACKET_INSTRUCTIONS,
-    BatchSemanticReview,
+    SCOPED_BATCH_VERSION,
     batch_review_certificate,
     batch_review_packet,
     normalize_batch_review,
+    parse_batch_review,
+    review_output_schema,
+    review_protocol,
 )
 from .plan_stage import StagedDatabase, staged_application
 from .plan_unit_schema import unit_delta_tool_for
@@ -306,6 +309,19 @@ def capability_move_context(before, candidate, record):
 validate_attachment_excerpts = validate_review_sources
 
 
+def retained_disposition_changed(before, candidate, record, prior_packet):
+    """Only a validated retained disposition change permits same-plan re-review."""
+    if not record.get("retained_acceptance") or not prior_packet.get("retained_acceptance"):
+        return False
+    from .plan_review import resolve_packet_pointer
+    from .retained_acceptance import projection
+    old = resolve_packet_pointer(prior_packet, "/retained_acceptance")
+    new = projection(before, candidate, record)
+    return (old["entry_hash"] == new["entry_hash"]
+            and {r["id"]: r["resolution"] for r in old["claims"]}
+            != {r["id"]: r["resolution"] for r in new["claims"]})
+
+
 def review_packet(before, candidate, record):
     validate_review_sources(candidate)
     packet = batch_review_packet(before, candidate, record)
@@ -325,17 +341,28 @@ def _review_request_controls(project_id):
     return {"reasoning_effort": "low"}
 
 
+def reviewer_prompt(packet):
+    if review_protocol(packet) != SCOPED_BATCH_VERSION:
+        return REVIEWER
+    return REVIEWER.replace(
+        "required subject exactly once to supported/contradicted/unknown.",
+        "required subject explicitly in coverage, using the exact required property names and a "
+        "supported/contradicted/unknown value. Do not omit any subject, infer supported from silence, "
+        "or return the legacy statuses arrays.")
+
+
 async def challenge(settings: BudgetedSettings, before, candidate, record):
     packet = review_packet(before, candidate, record)
+    decoded = json.loads(packet)
     schema = {"type": "function", "function": {
         "name": "submit_plan_review", "description": "Submit exact revision-bound semantic findings.",
-        "parameters": BatchSemanticReview.model_json_schema(),
+        "parameters": review_output_schema(decoded),
     }}
     calls = {}
     # BudgetedSettings owns the unchanged per-request deadline and records its
     # TimeoutError. A second equal deadline would instead record cancellation.
     async with aclosing(settings.stream([
-        {"role": "system", "content": REVIEWER}, {"role": "user", "content": packet},
+        {"role": "system", "content": reviewer_prompt(decoded)}, {"role": "user", "content": packet},
     ], [schema])) as stream:
         async for event in stream:
             if event["type"] == "tool_delta":
@@ -347,8 +374,8 @@ async def challenge(settings: BudgetedSettings, before, candidate, record):
     if len(calls) != 1 or next(iter(calls.values()))["name"] != "submit_plan_review":
         raise ValueError("语义评审未返回可验证的结构化结果，候选保留待解决")
     raw = next(iter(calls.values()))["arguments"]
-    batch = BatchSemanticReview.model_validate_json(raw)
-    review = normalize_batch_review(candidate, json.loads(packet), batch)
+    batch = parse_batch_review(raw, decoded)
+    review = normalize_batch_review(candidate, decoded, batch)
     return review, batch_review_certificate(raw, batch)
 
 
@@ -484,6 +511,14 @@ class UnifiedPlanningService:
                 repair_phase = self.store.repair_phase_admission(before, previous)
                 if repair_from != repair_phase["pins"]:
                     raise ConflictError("修复来源已改变，请刷新后重新提交反馈")
+            from .plan_complete_change import COMPLETE_CHANGE_VERSION
+            complete_change_stage = bool(_job_phase and _job_phase.get("mode") == COMPLETE_CHANGE_VERSION)
+            if complete_change_stage:
+                if experiment is not None or repair_phase or job_continuation:
+                    raise ConflictError("complete-change needs a fresh explicitly authorized job")
+                experiment = {"project_id": project_id, "version": COMPLETE_CHANGE_VERSION}
+            elif isinstance(experiment, dict) and experiment.get("version") == COMPLETE_CHANGE_VERSION:
+                raise ConflictError("complete-change requires its explicit bounded job authorization")
             selected_experiment = select_experiment(
                 experiment, before, previous, resume, repair_phase=repair_phase)
             if previous:
@@ -538,7 +573,7 @@ class UnifiedPlanningService:
                 "reviews": [], "metrics": metrics,
                 "resumes_candidate_id": previous["id"] if resume else None,
                 "allowed_requirement_source_ids": sorted(pending_sources | {source_id}),
-                "checker_version": CHECKER_VERSION,
+                "checker_version": CHECKER_VERSION, "review_protocol": SCOPED_BATCH_VERSION,
                 "reference_context": reference_context,
                 "capability_move_audits": capability_move_context(before, candidate, previous) if resume else [],
                 "typed_obligation_keys": sorted(declared_typed_keys(before) | declared_typed_keys(candidate)
@@ -589,6 +624,9 @@ class UnifiedPlanningService:
                         raise ValueError("pending continuation preflight failed before candidate save")
                 if resumed_units is not None:
                     record["work_units"] = resumed_units
+            if complete_change_stage:
+                from .plan_complete_change import admission
+                record["complete_change_admission"] = admission(candidate, record)
             record = self.store.save(record)
             if before.question:
                 record = self.store.pause_question(record, None, status="generating")
@@ -599,7 +637,7 @@ class UnifiedPlanningService:
             facade.agent.system_prompt = ROUTER
             facade.agent.pre_resolved = resolved
             facade.agent.finish_review = False
-            facade.agent.defer_single_tool_response = saved_units_stage or pending_architecture_stage
+            facade.agent.defer_single_tool_response = saved_units_stage or pending_architecture_stage or complete_change_stage
             facade.agent.finalize_after_turn = False
             facade.agent.max_rounds, facade.agent.max_calls = 4, 16
             facade.agent.initial_context = lambda p: {
@@ -683,6 +721,14 @@ class UnifiedPlanningService:
                 facade.agent.extra_context = REPAIR_PHASE_INSTRUCTIONS if repair_phase else REPAIR_INSTRUCTIONS
 
             def next_segment_context(project, completed_round, tool_results):
+                if complete_change_stage:
+                    if any(item["status"] == "failed" for item in tool_results):
+                        stage.record["generation_pause_reason"] = "complete_change_first_failure"
+                        metrics["experiment_stopped"] = "complete_change_first_failure"
+                    elif all_units_complete(stage.record):
+                        from ..agent_tools.base import ToolContext
+                        validate_candidate(ToolContext(project_id, facade), ValidateCandidate())
+                    return None
                 if _job_phase and any(item["status"] == "failed" for item in tool_results):
                     stage.record["generation_pause_reason"] = "invalid_tool_output"
                     return None
@@ -743,6 +789,17 @@ class UnifiedPlanningService:
                 "schedule_plan_changes": manifest_tool, "ask_user": tools()["ask_user"],
             }
             facade.agent.synthesis_registry = facade.agent.tool_registry
+            if complete_change_stage:
+                from .plan_complete_change import (
+                    COMPLETE_CHANGE_PROMPT,
+                    complete_change_context,
+                    delta_tool,
+                )
+                facade.agent.system_prompt = COMPLETE_CHANGE_PROMPT
+                facade.agent.initial_context = lambda project: complete_change_context(stage)
+                facade.agent.max_rounds, facade.agent.max_calls = 1, 1
+                facade.agent.tool_registry = {"submit_plan_delta": delta_tool(), "ask_user": tools()["ask_user"]}
+                facade.agent.synthesis_registry = facade.agent.tool_registry
             yield {"type": "started", "turn_id": turn_id, "project_id": project_id,
                    "snapshot_mode": snapshot_mode, "project": self.app.projects.get(project_id)}
             yield self.candidate_event(stage, turn_id, "正在构建候选规划")
@@ -765,7 +822,7 @@ class UnifiedPlanningService:
                 source_preflight_blocked = True
                 yield self.candidate_event(stage, turn_id, "程序检查无法确认完整依据，未调用模型")
             async def generation_events(attempt):
-                if attempt == 0 and resume and stage.record.get("work_units"):
+                if attempt == 0 and resume and stage.record.get("work_units") and not complete_change_stage:
                     if not job_continuation:
                         stage.message(project_id, "user", content, composer_document)
                     facade.agent.record_user = False
@@ -900,7 +957,9 @@ class UnifiedPlanningService:
                     terminal = "failed"
                     break
                 # Complete segments are already normalized; validate the exact ready snapshot.
-                if attempt and stage.record.get("review_inputs") and stage.record["review_inputs"][-1].get("planning_fingerprint") == planning_fingerprint(candidate):
+                if (attempt and stage.record.get("review_inputs")
+                        and stage.record["review_inputs"][-1].get("planning_fingerprint") == planning_fingerprint(candidate)
+                        and not retained_disposition_changed(before, candidate, stage.record, stage.record["review_inputs"][-1])):
                     stage.record["status"] = "needs_resolution"
                     terminal = "failed"
                     break

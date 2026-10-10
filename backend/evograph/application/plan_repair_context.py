@@ -17,10 +17,9 @@ from ..domain.plan_harness import (
 )
 from .plan_harness import replay_harness, seal_snapshot
 from .plan_review import (
-    BATCH_VERSION,
-    BatchSemanticReview,
     batch_review_packet,
     normalize_batch_review,
+    parse_batch_certificate,
     validate_batch_certificate,
 )
 
@@ -181,13 +180,9 @@ def build_repair_agenda(run, snapshot, *, policy=CURRENT_POLICY):
                   "evidence_refs": list(result.evidence_refs)}
         if row.plugin_id == "semantic_review":
             certificate = json.loads(run.model_certificate_json)
-            if certificate.get("schema_version") != BATCH_VERSION:
-                raise ValueError("Repair feedback requires the current semantic certificate")
-            batch = BatchSemanticReview.model_validate_json(certificate["raw_arguments"])
-            if batch.model_dump() != certificate["batch"]:
-                raise ValueError("Repair feedback batch differs from its raw certificate")
             packet = batch_review_packet(snapshot.before_project(), snapshot.candidate_project(),
                                          snapshot.record_data())
+            batch = parse_batch_certificate(packet, certificate)
             normalized = normalize_batch_review(snapshot.candidate_project(), packet, batch)
             if normalized != SemanticReview.model_validate_json(run.semantic_review_json):
                 raise ValueError("Repair feedback batch differs from its normalized review")

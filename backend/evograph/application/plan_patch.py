@@ -28,6 +28,7 @@ from ..domain.plan_contracts import (
     ProvidedCapability,
     active_behaviors,
     candidate_hash,
+    history_findings,
     planning_payload,
 )
 from ..domain.target_contract import target_finalization
@@ -208,7 +209,7 @@ def contract_changes(before, after):
 def _check_compiler_base(audit, before, args):
     if audit is None or audit.get("protocol_version") == "plan-delta/v1":
         return
-    if (audit.get("protocol_version") not in {"plan-delta/v2", "plan-delta/v3"}
+    if (audit.get("protocol_version") not in {"plan-delta/v2", "plan-delta/v3", "plan-delta/v4"}
             or audit.get("project_id") != before.id
             or audit.get("base_revision") != before.revision
             or audit.get("base_candidate_hash") != candidate_hash(before)
@@ -362,12 +363,14 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     if decision is not None and not decision.creates_version:
         project.target_draft = None
     if planning_payload(project) == planning_payload(before):
+        acceptance_only = False
         if compiler_audit is not None:
-            db.record_compilation_noop(_completed_compiler_audit(
+            acceptance_only = db.record_compilation_noop(_completed_compiler_audit(
                 compiler_audit, before, project, changed=False,
             ))
         ctx.candidate_ready = True
-        return {"node_ids": [], "effect": "updated", "status": "NO_PROGRESS", "findings": []}
+        return {"node_ids": [], "effect": "updated",
+                "status": "ACCEPTANCE_UPDATED" if acceptance_only else "NO_PROGRESS", "findings": []}
     # One planning revision and finalization, entirely private; the outer save is
     # the only candidate checkpoint and retains optimistic concurrency protection.
     final_graph = GraphEditor(memory)
@@ -382,10 +385,17 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
     # The finalized compiler output uses the same read-only program plugins as
     # the main run and commit. Unsupported evidence can remain a visible candidate;
     # central publication policy will hold it rather than manufacture clearance.
-    checked = run_deterministic(seal_snapshot(before, project, {
-        "id": "compiler:" + project.id, "project_id": project.id,
-        "base_revision": before.revision, "input": "", "reference_context": {},
-    }))
+    checkpoint_history = history_findings(before, project)
+    if checkpoint_history:
+        raise ValueError("规划补丁修改了既有检查点历史：" + "; ".join(f["message"] for f in checkpoint_history))
+    completed_audit = _completed_compiler_audit(compiler_audit, before, project, changed=True)
+    check_record = {**getattr(db, "record", {}), "id": "compiler:" + project.id,
+                    "project_id": project.id, "base_revision": before.revision}
+    if completed_audit is not None:
+        check_record["compilations"] = [*check_record.get("compilations", []), completed_audit]
+    # Retained entry pins refer to canonical before, not the latest checkpoint.
+    check_before = db.canonical.get(project.id) if "retained_acceptance" in check_record else before
+    checked = run_deterministic(seal_snapshot(check_before, project, check_record))
     findings = [finding for row in checked.executions
                 if row.status == "completed" and row.result.verdict == "block"
                 for finding in row.result.findings if finding.severity == "error"]
@@ -407,6 +417,69 @@ def propose_plan_patch(ctx, args, *, compiler_audit=None):
         "effect": "updated", "findings": [], "restored_inactive_behaviors": restored,
         "removed_dependencies": removed_edges,
     }
+
+
+def verify_compiled_result(canonical, before, after, record, compiled):
+    """Replay the existing patch services without writes, then compare all fields.
+
+    The compiler audit describes the supplied result; it is not proof that the
+    patch produced that result. Replay is needed at the durable write boundary.
+    Only server-generated IDs/timestamps in newly appended revisions differ
+    between executions. Align those exact typed locations, never arbitrary text
+    or old history, and compare the complete Project except its outer CAS stamp.
+    """
+    from .plan_phase import intent_source_id
+
+    class ReplayDatabase(_MemoryDatabase):
+        def save(self, project, kind, detail="", *, compiler_audit=None):
+            return super().save(project, kind, detail)
+
+        def record_compilation_noop(self, audit):
+            raise ValueError("complete-change compiler replay produced no substantive change")
+
+    def canonical_project(project_id):
+        if project_id != canonical.id:
+            raise ValueError("compiler replay cannot access another project")
+        return canonical.model_copy(deep=True)
+
+    staged = SimpleNamespace(canonical=SimpleNamespace(get=canonical_project),
+        source_id=intent_source_id(record),
+        requirement_source_ids=set(record.get("allowed_requirement_source_ids", [])))
+    replay = ReplayDatabase(staged, before)
+    replay.record = deepcopy(record)
+    context = ToolContext(before.id, SimpleNamespace(db=replay))
+    propose_plan_patch(context, compiled.patch, compiler_audit=compiled.audit)
+    expected = replay.get(before.id)
+
+    if len(expected.behaviors) != len(after.behaviors):
+        raise ValueError("complete-change result differs from compiler replay: behavior history length")
+    offset = len(before.behaviors)
+    fresh_expected, fresh_actual = expected.behaviors[offset:], after.behaviors[offset:]
+    old_ids = {behavior.id for behavior in before.behaviors}
+    new_ids = [behavior.id for behavior in fresh_actual]
+    if (len(set(new_ids)) != len(new_ids) or old_ids.intersection(new_ids)
+            or any(not identity.strip() for identity in new_ids)):
+        raise ValueError("complete-change result has invalid generated behavior identities")
+    identities = {wanted.id: supplied.id for wanted, supplied in zip(fresh_expected, fresh_actual)}
+    for behavior in expected.behaviors:
+        behavior.id = identities.get(behavior.id, behavior.id)
+        behavior.supersedes = identities.get(behavior.supersedes, behavior.supersedes)
+    for milestone in expected.milestones:
+        milestone.behavior_revision_ids = [identities.get(identity, identity)
+                                          for identity in milestone.behavior_revision_ids]
+    for binding in expected.plan_contract.bindings:
+        binding.behavior_revision_id = identities.get(binding.behavior_revision_id, binding.behavior_revision_id)
+    for target in expected.targets:
+        target.required_behavior_ids = [identities.get(identity, identity)
+                                        for identity in target.required_behavior_ids]
+    for field in ("targets", "plans", "architectures"):
+        wanted, supplied = getattr(expected, field), getattr(after, field)
+        if len(wanted) != len(supplied):
+            raise ValueError("complete-change result differs from compiler replay: " + field + " history length")
+        for left, right in zip(wanted[len(getattr(before, field)):], supplied[len(getattr(before, field)):]):
+            left.created_at = right.created_at
+    if expected.model_dump(exclude={"revision", "updated_at"}) != after.model_dump(exclude={"revision", "updated_at"}):
+        raise ValueError("complete-change result differs from exact whole compiler replay")
 
 
 PATCH_TOOL = ToolSpec(

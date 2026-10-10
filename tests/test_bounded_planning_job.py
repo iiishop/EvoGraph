@@ -97,6 +97,9 @@ def test_nine_calls_two_phases_stable_source_atomic_apply(app, seven):
     assert all(r["project"]["plan_contract"]["sources"][-1]["id"] == job["source_id"] for r in records)
     assert len([m for m in app.db.messages(seven.id) if m["role"] == "user"]) == 1
     assert records[0]["source_message_id"] == records[1]["source_message_id"] == job["source_message_id"]
+    assert records[1]["retained_acceptance"] == records[0]["retained_acceptance"]
+    assert len(records[1]["retained_acceptance"]["claims"]) == 7
+    assert all(row["origin"] == "canonical_accepted" for row in records[1]["retained_acceptance"]["claims"])
     assert records[1]["work_units"]["checkpoints"][:3] == records[0]["work_units"]["checkpoints"]
     assert len(records[1]["work_units"]["checkpoints"]) == 7
     assert records[-1]["harness_commit_replay"]["run"]["decision"] == "apply"
@@ -210,7 +213,7 @@ def test_crash_with_reserved_or_uncertain_phase_never_restarts(app, seven):
 
 
 def test_ready_candidate_phase_byte_boundary_uses_genuine_recheck(app, seven):
-    seven.plan_contract.sources[0].text += " Read-only retained context." * 1150
+    seven.plan_contract.sources[0].text += " Read-only retained context." * 1050
     seven = app.db.save(seven, "offline_size_fixture")
     calls = provider(app, seven)
     events = collect(app, seven, request(app, seven))

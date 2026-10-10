@@ -334,6 +334,9 @@ def test_mock_protocol_three_calls_then_held_and_no_same_stage_repair(app):
                             "evidence_refs": ["/candidate/behaviors/0",
                                               "/candidate/plan_contract/bindings/0"]}],
                 "observations": []}
+            if packet["review_protocol"] == "semantic-batch/v3":
+                args["coverage"] = {s: verdict for verdict, subjects in args.pop("statuses").items()
+                                    for s in subjects}
         async for event in tool_chunks(name, args):
             yield event
     app.settings.stream = stream

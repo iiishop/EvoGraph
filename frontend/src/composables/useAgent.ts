@@ -347,6 +347,7 @@ async function continuePlanningJob(projectId: string, jobId: string, pins: Plann
   if (
     project?.id !== projectId ||
     job?.id !== jobId ||
+    job.mode === 'bounded-complete-change/v1' ||
     !job.can_continue ||
     job.authorization_needed ||
     job.status !== 'paused' ||

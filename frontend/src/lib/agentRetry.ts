@@ -37,7 +37,10 @@ export function planAgentRetry(
     return {
       kind: 'blocked',
       message:
-        '有界作业不会重发原输入。请刷新后使用作业面板继续；若需新作业，请在输入框重新确认额度。',
+        failure.planningJob.action === 'start' &&
+        failure.planningJob.mode === 'bounded-complete-change/v1'
+          ? '完整变更不会重试或重发原输入。请刷新作业状态；如需再次处理，请在输入框重新确认完整变更额度。'
+          : '有界作业不会重发原输入。请刷新后使用作业面板继续；若需新作业，请在输入框重新确认额度。',
     };
   const question = current.question;
   if (question && question.id !== failure.questionId) {

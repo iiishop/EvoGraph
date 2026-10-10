@@ -14,7 +14,9 @@ from evograph.application.plan_repair_context import build_repair_agenda
 from evograph.application.plan_review import (
     BATCH_VERSION,
     CHECKER_VERSION,
+    SCOPED_BATCH_VERSION,
     BatchSemanticReview,
+    ScopedBatchSemanticReview,
     batch_review_certificate,
     batch_review_packet,
     normalize_batch_review,
@@ -86,13 +88,18 @@ def observation(kind="editorial"):
 
 def batch_for(packet, *, issues=(), observations=()):
     unsupported = {s: issue["verdict"] for issue in issues for s in issue["subjects"]}
-    return BatchSemanticReview.model_validate({
+    value = {
         "candidate_hash": packet["candidate_hash"], "review_scope_hash": packet["review_scope_hash"],
         "summary": "Offline materiality fixture; no implementation executed",
         "statuses": {status: [s for s in packet["required_subjects"]
                               if unsupported.get(s, "supported") == status]
                      for status in ("supported", "contradicted", "unknown")},
-        "issues": list(issues), "observations": list(observations)})
+        "issues": list(issues), "observations": list(observations)}
+    if packet.get("review_protocol") == SCOPED_BATCH_VERSION:
+        value["coverage"] = {s: verdict for verdict, subjects in value.pop("statuses").items()
+                             for s in subjects}
+        return ScopedBatchSemanticReview.model_validate(value)
+    return BatchSemanticReview.model_validate(value)
 
 
 def review_and_certificate(context, batch):
@@ -212,12 +219,12 @@ def test_versions_hashes_and_raw_replay_are_current_and_exact(context):
               "report": {"semantic_batch": batch.model_dump(), "semantic": review.model_dump()},
               "reviews": [review.model_dump()]}
     assert BATCH_VERSION == "semantic-batch/v2"
-    assert packet["checker_version"] == CHECKER_VERSION and CHECKER_VERSION.endswith("v12")
+    assert packet["checker_version"] == CHECKER_VERSION and CHECKER_VERSION.endswith("v13")
     assert validate_batch_certificate(project, project, stored) == review
     run = harness(context, batch)
     replayed = replay_harness(snapshot, run, lambda *_: validate_batch_certificate(project, project, stored))
     assert replayed.decision == "apply"
-    assert replayed.executions[-1].plugin_version == "2"
+    assert replayed.executions[-1].plugin_version == "3"
     for change in ({"checker_version": "unified-contract-challenge-v11"},
                    {"batch_reviews": [{**certificate, "schema_version": "semantic-batch/v1"}]},
                    {"input": "Changed scope"}):
@@ -311,7 +318,8 @@ def test_no_saved_unknown_rewrite_or_keyword_downgrade(context):
     issue["reason"] = "TrueTrue is part of the reported issue; semantic impact is still the reviewer's judgment"
     run = harness(context, batch_for(context[3], issues=[issue]))
     assert run.decision == "hold" and run.executions[-1].result.verdict == "unknown"
-    assert "TrueTrue" in json.loads(run.semantic_review_json)["checks"][-2]["reason"]
+    assert "TrueTrue" in next(c for c in json.loads(run.semantic_review_json)["checks"]
+                              if c["subject"] == "slice_activation:M1")["reason"]
 
 
 def test_v1_shapes_and_normalized_tamper_cannot_authorize(context):

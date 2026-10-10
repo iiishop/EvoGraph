@@ -39,8 +39,12 @@ defineEmits<{ resume: []; locate: [id: string] }>();
 const dockCollapsed = ref(false);
 // Expanded planning is never selected implicitly or carried to another project.
 const boundedJob = ref(false);
+const completeChange = ref(false);
 const jobConfirmed = ref(false);
 const jobLimits = ref<PlanningJobLimits>({ max_phases: 1, max_calls: 5, max_input_bytes: 393216 });
+const effectiveJobLimits = computed<PlanningJobLimits>(() =>
+  completeChange.value ? { max_phases: 1, max_calls: 2, max_input_bytes: 393216 } : jobLimits.value,
+);
 const jobSupported = computed(
   () =>
     Boolean(props.project.unified_planning && props.project.planning_job_start_pins) &&
@@ -48,17 +52,19 @@ const jobSupported = computed(
 );
 const jobLimitsValid = computed(
   () =>
-    Object.values(jobLimits.value).every((value) => Number.isSafeInteger(value) && value > 0) &&
-    jobLimits.value.max_phases <= 3 &&
-    jobLimits.value.max_calls <= 12 &&
-    jobLimits.value.max_calls <= 5 * jobLimits.value.max_phases &&
-    jobLimits.value.max_input_bytes <= 1179648 &&
-    jobLimits.value.max_input_bytes <= 393216 * jobLimits.value.max_phases,
+    completeChange.value ||
+    (Object.values(jobLimits.value).every((value) => Number.isSafeInteger(value) && value > 0) &&
+      jobLimits.value.max_phases <= 3 &&
+      jobLimits.value.max_calls <= 12 &&
+      jobLimits.value.max_calls <= 5 * jobLimits.value.max_phases &&
+      jobLimits.value.max_input_bytes <= 1179648 &&
+      jobLimits.value.max_input_bytes <= 393216 * jobLimits.value.max_phases),
 );
 watch(
   () => [props.project.id, props.project.created_at],
   () => {
     boundedJob.value = false;
+    completeChange.value = false;
     jobConfirmed.value = false;
     jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
   },
@@ -67,11 +73,19 @@ watch(
 watch(
   () => [
     boundedJob.value,
+    completeChange.value,
     JSON.stringify(jobLimits.value),
     JSON.stringify(props.project.planning_job_start_pins),
   ],
   () => {
     jobConfirmed.value = false;
+  },
+  { flush: 'sync' },
+);
+watch(
+  boundedJob,
+  (enabled) => {
+    if (!enabled) completeChange.value = false;
   },
   { flush: 'sync' },
 );
@@ -99,6 +113,11 @@ const {
 // New submissions append their recovery snapshot. Keep the visible retry and
 // its receipt on the newest request; older snapshots remain recoverable.
 const failedAttempt = computed(() => failures.value.at(-1));
+const failedCompleteChange = computed(
+  () =>
+    failedAttempt.value?.planningJob?.action === 'start' &&
+    failedAttempt.value.planningJob.mode === 'bounded-complete-change/v1',
+);
 const failedRequestSnippet = computed(() => {
   const text = failedAttempt.value?.text.replace(/\s+/g, ' ').trim() ?? '';
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
@@ -324,6 +343,7 @@ watch(
 async function openJobAuthorization() {
   dockCollapsed.value = false;
   boundedJob.value = true;
+  completeChange.value = props.project.planning_job?.mode === 'bounded-complete-change/v1';
   jobConfirmed.value = false;
   jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
   await nextTick();
@@ -386,7 +406,8 @@ async function submit(
       ? {
           action: 'start',
           job_id: crypto.randomUUID(),
-          limits: { ...jobLimits.value },
+          ...(completeChange.value ? { mode: 'bounded-complete-change/v1' as const } : {}),
+          limits: { ...effectiveJobLimits.value },
           pins: JSON.parse(JSON.stringify(props.project.planning_job_start_pins)),
         }
       : undefined;
@@ -427,6 +448,7 @@ async function submit(
   );
   if (attempt) {
     boundedJob.value = false;
+    completeChange.value = false;
     jobConfirmed.value = false;
     jobLimits.value = { max_phases: 1, max_calls: 5, max_input_bytes: 393216 };
     await deliver(attempt);
@@ -636,7 +658,11 @@ function choose(option: string) {
           <small v-if="failedAttempt.ids.length">附带 {{ failedAttempt.ids.length }} 份资料</small>
         </details>
         <div class="agent-recovery-actions" role="group" aria-label="未完成请求操作">
+          <p v-if="failedCompleteChange">
+            完整变更请求未完成，不会重试或重发。请刷新作业状态；如需再次处理，请重新确认完整变更额度。
+          </p>
           <button
+            v-else
             type="button"
             class="text-button"
             :disabled="Boolean(operationBlocker)"
@@ -664,7 +690,15 @@ function choose(option: string) {
       >
       <fieldset v-if="boundedJob" :disabled="Boolean(operationBlocker)">
         <legend>本次作业总额度</legend>
-        <div class="planning-job-limits">
+        <label class="planning-job-opt-in"
+          ><input v-model="completeChange" type="checkbox" />
+          <span>完整变更（最多一次生成 + 一次完整评审）</span></label
+        >
+        <p v-if="completeChange">
+          固定最多 2 次模型调用、393,216 B 累计输入；单次请求最多 163,840 B 输入、98,304 B 输出，180
+          秒超时。直接生成完整变更并评审；无自动重试或续跑，失败或评审暂缓即停止。
+        </p>
+        <div v-else class="planning-job-limits">
           <label
             >最多阶段<input
               v-model.number="jobLimits.max_phases"
@@ -690,7 +724,7 @@ function choose(option: string) {
               step="1"
           /></label>
         </div>
-        <p>
+        <p v-if="!completeChange">
           每阶段仍最多 5 次调用、393,216 B 输入；本原型总授权最多 3 阶段、12 次调用、1,179,648
           B。不会自动扩额；token 用量可能不完整。
         </p>
@@ -700,7 +734,10 @@ function choose(option: string) {
             type="checkbox"
             :disabled="!jobLimitsValid || !jobSupported"
           />
-          <span
+          <span v-if="completeChange"
+            >确认本次完整变更：最多一次生成、一次完整评审，共 2 次调用和 393,216 B 累计输入</span
+          >
+          <span v-else
             >确认按以上总额度自动推进这次输入，允许最多 {{ jobLimits.max_phases }} 阶段、{{
               jobLimits.max_calls
             }}
@@ -751,7 +788,15 @@ function choose(option: string) {
           v-else
           type="submit"
           class="send-button"
-          :aria-label="boundedJob ? '确认额度并启动作业' : answering ? '发送回答' : '发送修改建议'"
+          :aria-label="
+            boundedJob
+              ? completeChange
+                ? '确认额度并启动完整变更'
+                : '确认额度并启动作业'
+              : answering
+                ? '发送回答'
+                : '发送修改建议'
+          "
           :disabled="!canSend"
         >
           <ArrowUp :size="20" aria-hidden="true" />

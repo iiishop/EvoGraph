@@ -1282,6 +1282,7 @@ test('planning job stale continue and exhausted authorization never start a stre
   const h = await agentHarness('job-stale-continue', true);
   h.env.run = async () => { throw new Error('Must not call a provider stream'); };
   for (const change of [
+    { mode: 'bounded-complete-change/v1' },
     { can_continue: false }, { authorization_needed: true }, { continue_pins: null },
     { status: 'cancelled' }, { status: 'running' }, { id: 'replacement' },
     { continue_pins: { record_hash: 'newer' } },
@@ -1384,4 +1385,27 @@ test('planning job exact request is preserved by native and browser transports w
     await agentStream(request,()=>{},new AbortController().signal);
     assert.equal(browserCalls,1);
   } finally { globalThis.fetch=originalFetch; }
+});
+
+
+test('native transport preserves complete-change mode and exact limits in one admission', async () => {
+  const request = {
+    project_id: 'P1', content: 'Apply one complete change',
+    planning_job: {
+      action: 'start', job_id: 'complete-change-1', mode: 'bounded-complete-change/v1',
+      limits: { max_phases: 1, max_calls: 2, max_input_bytes: 393216 },
+      pins: { candidate_hash: 'current-R12' },
+    },
+  };
+  let calls = 0;
+  const target = browser({
+    start_agent: async (id, body) => {
+      calls++;
+      assert.deepEqual(body, { ...request, snapshot_mode: 'compact-v1' });
+      queueMicrotask(() => terminal(target, id, { type: 'done' }));
+      return { started: true };
+    },
+  });
+  await agentStream(request, () => {}, new AbortController().signal);
+  assert.equal(calls, 1);
 });

@@ -307,25 +307,33 @@ def test_recheck_preserves_project_scoped_review_controls(app, complete, monkeyp
     collect(app, before, original)
     assert calls[0][1] == {"request_controls": {"reasoning_effort": "low"}}
     saved = app.unified.store.latest(before.id)
-    assert "harness_snapshots" not in saved["review_attempts"][-1]["audit"]
-    assert saved["review_attempts"][-1]["audit"]["harness_snapshot_refs"] == [original["harness_run"]["snapshot_id"]]
+    audit = saved["review_attempts"][-1]["audit"]
+    assert audit["review_protocol"] == "semantic-batch/v3"
+    assert len(audit["harness_snapshots"]) == 1 and audit["harness_snapshot_refs"] == []
+    fresh = audit["harness_snapshots"][0]
+    assert fresh["snapshot_id"] != original["harness_run"]["snapshot_id"]
+    assert json.loads(fresh["record_json"])["review_protocol"] == "semantic-batch/v3"
+    assert fresh["candidate_json"] == original["harness_snapshots"][0]["candidate_json"]
 
 
-def test_native_stream_closed_before_review_can_reopen_without_spending_a_call(app, complete):
+@pytest.mark.parametrize("closed_attempts", [1, 3])
+def test_native_stream_closed_before_review_can_reopen_without_spending_a_call(app, complete, closed_attempts):
     before, original = complete
     calls = fake_provider(app)
-    async def stop_before_review():
-        stream = app.agent.stream(before.id, "重新评审", review_recheck=recheck_pins(before, original))
+    async def stop_before_review(record):
+        stream = app.agent.stream(before.id, "重新评审", review_recheck=recheck_pins(before, record))
         first = await anext(stream)
         assert first["type"] == "started"
         await stream.aclose()
-    asyncio.run(stop_before_review())
-    stopped = app.unified.store.latest(before.id)
+    stopped = original
+    for _ in range(closed_attempts):
+        asyncio.run(stop_before_review(stopped))
+        stopped = app.unified.store.latest(before.id)
     assert calls == [] and stopped["review_attempts"][-1]["closed_at"]
     assert review_projection(stopped)["metrics"]["provider_calls"] == 0
     assert app.projects.get(before.id)["plan_candidate"]["review_recheck"] is not None
     collect(app, before, stopped)
-    assert len(calls) == 1 and len(app.unified.store.latest(before.id)["review_attempts"]) == 2
+    assert len(calls) == 1 and len(app.unified.store.latest(before.id)["review_attempts"]) == closed_attempts + 1
     assert app.db.get(before.id) == before
 
 
@@ -345,3 +353,17 @@ def test_unique_snapshot_in_current_attempt_is_not_replaced_by_dangling_referenc
     assert second["review_attempts"][0] == saved["review_attempts"][0]
     assert "harness_snapshots" not in second["review_attempts"][-1]["audit"]
     assert len(review_projection(second)["harness_snapshots"]) == 1
+
+
+@pytest.mark.parametrize("replacement", [None, "semantic-batch/v2", "semantic-batch/v999"])
+def test_admitted_review_protocol_cannot_be_dropped_or_changed(app, complete, replacement):
+    before, original = complete
+    _, active = app.unified.store.begin_review_attempt(before.id, recheck_pins(before, original), uid())
+    durable = app.unified.store.get(original["id"])
+    if replacement is None:
+        active.pop("review_protocol")
+    else:
+        active["review_protocol"] = replacement
+    with pytest.raises(ValueError):
+        app.unified.store.save_review_attempt(active)
+    assert app.unified.store.get(original["id"]) == durable

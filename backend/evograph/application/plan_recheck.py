@@ -9,14 +9,14 @@ from ..domain.models import Project, now
 from ..domain.plan_contracts import candidate_hash, planning_fingerprint
 from ..domain.plan_harness import CURRENT_POLICY
 from .plan_harness import seal_snapshot
-from .plan_review import CHECKER_VERSION
+from .plan_review import CHECKER_VERSION, SCOPED_BATCH_VERSION
 from .plan_units import _hash, all_units_complete, schedule_findings
 
 RECHECK_VERSION = "candidate-review-only/v1"
 REVIEW_FIELDS = frozenset({
     "metrics", "model_inputs", "reviews", "batch_reviews", "review_inputs", "report",
     "harness_run", "harness_runs", "harness_snapshots", "validation_receipt", "harness_commit_replay",
-    "turn_summary", "harness_snapshot_refs",
+    "turn_summary", "harness_snapshot_refs", "review_protocol",
 })
 REVIEW_BUDGET = {"max_calls": 1, "max_request_bytes": 163840,
                 "max_review_request_bytes": 163840, "max_total_input_bytes": 393216,
@@ -51,6 +51,10 @@ def review_audit(record, durable, *, replacing_latest=True):
     # The latest audit is being replaced. A snapshot stored only there must
     # stay inline; it cannot become a reference to its own removed copy.
     prior = durable.get("review_attempts", [])
+    if (replacing_latest and prior
+            and ("review_protocol" in record, record.get("review_protocol")) != (
+                "review_protocol" in prior[-1]["audit"], prior[-1]["audit"].get("review_protocol"))):
+        raise ValueError("评审协议不能在已开始的轮次中改变")
     known = snapshot_catalog({**durable, "review_attempts": prior[:-1] if replacing_latest else prior})
     snapshots = audit.pop("harness_snapshots", [])
     audit["harness_snapshot_refs"] = list(dict.fromkeys(
@@ -77,13 +81,19 @@ def validate_recheck(before, record, pins):
     current = review_projection(record)
     progress = record.get("generation_progress", {})
     run = current.get("harness_run", {})
+    snapshot_record = current
     # Closing the native stream before the first plugin checkpoint spends no
     # call and creates no new review evidence. The unchanged prior sealed run
     # remains a completeness/admission basis, never a new semantic certificate.
     if (not run and record.get("review_attempts") and record["review_attempts"][-1]["closed_at"]
             and current.get("metrics", {}).get("provider_calls") == 0):
         audits = [record, *[a["audit"] for a in record["review_attempts"][:-1]]]
-        run = next((a["harness_run"] for a in reversed(audits) if a.get("harness_run")), {})
+        basis = next((a for a in reversed(audits) if a.get("harness_run")), {})
+        run = basis.get("harness_run", {})
+        # An unstarted v3 attempt cannot relabel the earlier run's v2 scope.
+        snapshot_record = {k: v for k, v in current.items() if k != "review_protocol"}
+        if "review_protocol" in basis:
+            snapshot_record["review_protocol"] = basis["review_protocol"]
     if (before.archived or not before.unified_planning or before.question or candidate.question
             or record["project_id"] != before.id or candidate.id != before.id
             or record["base_revision"] != before.revision
@@ -97,7 +107,7 @@ def validate_recheck(before, record, pins):
             or schedule_findings(record, candidate)
             or run.get("status") not in {"completed", "cancelled"}
             or run.get("decision") == "apply"
-            or run.get("snapshot_id") != seal_snapshot(before, candidate, current).snapshot_id
+            or run.get("snapshot_id") != seal_snapshot(before, candidate, snapshot_record).snapshot_id
             or any(c.get("status") in {"admitted", "streaming"}
                    for c in current.get("metrics", {}).get("calls", []))
             or (record.get("review_attempts") and not record["review_attempts"][-1]["closed_at"])):
@@ -119,7 +129,8 @@ def new_review_attempt(record, turn_id, pins):
             "status": "reviewing", "write_version": 0, "pins": deepcopy(pins),
             "previous_attempt_id": (record["review_attempts"][-1]["id"]
                                     if record.get("review_attempts") else record["turn_id"]),
-            "audit": {"report": {"findings": []}, "reviews": [],
+            "audit": {"review_protocol": SCOPED_BATCH_VERSION,
+                      "report": {"findings": []}, "reviews": [],
                       "metrics": {"provider_calls": 0, "tokens": 0, "elapsed_seconds": 0,
                                   "usage_reported": False, "budget": deepcopy(REVIEW_BUDGET),
                                   "review_attempt_id": turn_id, "request_sequence": ["semantic_review"]}}}

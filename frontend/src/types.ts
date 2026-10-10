@@ -508,10 +508,17 @@ export interface PlanningJobLimits {
 }
 export type PlanningJobPins = Record<string, unknown>;
 export type PlanningJobRequest =
-  | { action: 'start'; job_id: string; limits: PlanningJobLimits; pins: PlanningJobPins }
+  | {
+      action: 'start';
+      job_id: string;
+      mode?: 'bounded-complete-change/v1';
+      limits: PlanningJobLimits;
+      pins: PlanningJobPins;
+    }
   | { action: 'continue'; job_id: string; pins: PlanningJobPins };
 export interface PlanningJobView {
   id: string;
+  mode?: 'bounded-complete-change/v1' | null;
   write_version: number;
   created_at?: string;
   status: 'authorized' | 'running' | 'paused' | 'stopped' | 'applied' | 'cancelled';

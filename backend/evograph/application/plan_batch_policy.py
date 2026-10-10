@@ -5,6 +5,7 @@ from copy import deepcopy
 from ..domain.models import Project
 from ..domain.plan_contracts import planning_payload
 from .plan_budget import encoded_size
+from .plan_complete_change import COMPLETE_CHANGE_VERSION
 
 COLD_START_EXPERIMENT = "bounded-empty-plan/v1"
 REPAIR_EXPERIMENT = "bounded-single-unit-repair/v1"
@@ -27,10 +28,13 @@ EXPERIMENT_LIMITS = {"max_calls": 3, "max_request_bytes": 163840,
 
 
 def experiment_policy(name):
-    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT, *PINNED_CONTINUATIONS}:
+    if name not in {COLD_START_EXPERIMENT, REPAIR_EXPERIMENT, COMPLETE_CHANGE_VERSION, *PINNED_CONTINUATIONS}:
         raise ValueError("unsupported bounded planning experiment")
     limits = deepcopy(EXPERIMENT_LIMITS)
     sequence = ["router", "generation", "semantic_review"]
+    if name == COMPLETE_CHANGE_VERSION:
+        limits["max_calls"] = 2
+        sequence = ["generation", "semantic_review"]
     if name in PINNED_CONTINUATIONS:
         generations = 4 if name == PENDING_ARCHITECTURE_EXPERIMENT else 3
         limits["max_calls"] = generations + 1
@@ -176,6 +180,10 @@ def validate_batch_delta(schedule, pin, raw, actual):
 def select_experiment(argument, project, previous, resume, *, repair_phase=None):
     """Application-only opt-in; not read from project settings or model arguments."""
     if argument is None:
+        if (resume and previous.get("planning_experiment", {}).get("version") == COMPLETE_CHANGE_VERSION
+                and previous.get("planning_job_question") and project.question
+                and previous["planning_job_question"]["question_id"] == project.question.id):
+            return None  # A fresh ordinary answer turn; the stopped attempt cannot resume.
         if resume and previous.get("planning_experiment"):
             from .plan_repair_phase import repair_phase_pins
             if not repair_phase or repair_phase.get("pins") != repair_phase_pins(project, previous):
@@ -194,6 +202,11 @@ def select_experiment(argument, project, previous, resume, *, repair_phase=None)
     if selected["version"] == COLD_START_EXPERIMENT:
         if resume or not empty_planning_base(project):
             raise ValueError("cold-start experiment requires a new strictly empty planning base")
+    elif selected["version"] == COMPLETE_CHANGE_VERSION:
+        from ..domain.plan_contracts import active_behaviors
+        base = Project.model_validate(previous["project"]) if resume else project
+        if not active_behaviors(base):
+            raise ValueError("complete-change requires a nonempty active planning base")
     elif selected["version"] == PENDING_ARCHITECTURE_EXPERIMENT:
         if not resume:
             raise ValueError("pending continuation requires a saved predecessor")
@@ -234,7 +247,7 @@ def request_stage_rejection(metrics, tools, purpose):
         expected = {"project_id": selected["project_id"], **experiment_policy(selected["version"])}
         if selected != expected:
             return "experiment_policy_changed"
-        if selected["version"] in PINNED_CONTINUATIONS and (
+        if selected["version"] in {*PINNED_CONTINUATIONS, COMPLETE_CHANGE_VERSION} and (
                 metrics.get("experiment_stopped") or any(
                     call.get("error_type") or call.get("termination_reason") != "stream_end"
                     for call in metrics.get("calls", []))):

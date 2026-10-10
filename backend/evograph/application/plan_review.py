@@ -27,8 +27,10 @@ from ..domain.typed_capabilities import (
 )
 from .plan_patch import contract_changes
 
-CHECKER_VERSION = "unified-contract-challenge-v12"
+CHECKER_VERSION = "unified-contract-challenge-v13"
+# Absence is exactly the legacy format. Only new attempts explicitly opt in.
 BATCH_VERSION = "semantic-batch/v2"
+SCOPED_BATCH_VERSION = "semantic-batch/v3"
 # Shared advisory schema/runtime rules. Packet membership, resolved values and
 # gap-dependent materiality checks remain authoritative below. Do not add field
 # bounds here: the existing scalar and list-item bounds intentionally differ.
@@ -38,7 +40,7 @@ PACKET_POINTER_PATTERN = r"^/(?:[^~]|~[01])+$"
 # Explicit not-LF classes preserve Python dot semantics in ECMAScript schemas.
 OBLIGATION_REF_PATTERN = (
     rf"(?={PACKET_POINTER_PATTERN})"
-    r"^(?:/current_input|/candidate/(?:target/statement|target_draft|"
+    r"^(?:/retained_acceptance/claims/[0-9]+/(?:baseline_behavior/statement|baseline_binding/mechanism)|/current_input|/candidate/(?:target/statement|target_draft|"
     r"behaviors/[0-9]+/statement|milestones/[0-9]+/(?:intent|scope/[0-9]+)|"
     r"source_milestones/[0-9]+/source_behaviors/[0-9]+/statement|"
     r"plan_contract/(?:sources/[0-9]+/(?:text|reference_context/(?:references|attachments)/"
@@ -85,7 +87,18 @@ _CATALOGUE_ENCODING = {
 REVIEW_PACKET_INSTRUCTIONS = """Transport: {$t:i} at a declared snapshot/current_input string leaf
 means the complete literal text_table[i], never another reference. Decode text before the one-way
 before-to-candidate record aliases. In evidence_catalog, [prefix,n] means prefix/0 through prefix/(n-1).
-Cite those expanded exact pointers, retaining before/candidate identity. Sharing is not semantic proof.
+Cite those expanded exact pointers, retaining before/candidate/retained identity. Sharing is not semantic proof.
+Retained claims are fixed request-entry evidence: canonical_accepted differs from staged_draft.
+For every retained_acceptance subject, assess preservation, proposed replacement/correction/retirement,
+and the promised acceptance stage against original statement AND mechanism, current witnesses and full user sources.
+A quoted source exists is provenance, NOT authorization; a generator reason is not user permission.
+Staged inventions may be corrected; do not freeze draft helper choices as approved requirements. Changed prose,
+helpers or decomposition alone is not material weakening. Ordinary defaults remain implementer latitude.
+Retirement or delivery deferral must follow actual user intent; retain unrelated acceptance promises.
+Only consequential unresolved acceptance/source/availability boundaries warrant unknown. Cite retained
+mechanisms as obligations only with that claim's baseline statement or user source in boundary_refs;
+distinguish promised observable acceptance from incidental implementation. Optional typing stays unmodeled.
+Retained record aliases include sha256 and point directly to complete same-kind before/candidate records.
 """
 _PROJECT_SCHEMA = Project.model_json_schema()
 _SNAPSHOT_FIELDS = {
@@ -160,6 +173,92 @@ class BatchSemanticReview(BatchModel):
     observations: list[BatchObservation] = Field(max_length=100)
 
 
+class ScopedBatchSemanticReview(BatchModel):
+    """V3 wire form: every required subject has its own explicit typed verdict."""
+    candidate_hash: str
+    review_scope_hash: str
+    summary: str = Field(min_length=1, max_length=500)
+    coverage: dict[str, Literal["supported", "contradicted", "unknown"]]
+    issues: list[BatchIssue] = Field(max_length=300)
+    observations: list[BatchObservation] = Field(max_length=100)
+
+
+def review_protocol(record):
+    version = record.get("review_protocol", BATCH_VERSION)
+    if version not in (BATCH_VERSION, SCOPED_BATCH_VERSION):
+        raise ValueError("未知的批量评审协议，未回退到旧格式")
+    return version
+
+
+def _review_model(packet):
+    return (ScopedBatchSemanticReview if review_protocol(packet) == SCOPED_BATCH_VERSION
+            else BatchSemanticReview)
+
+
+def review_output_schema(packet):
+    """Advisory packet-scoped standard JSON Schema; runtime remains authoritative.
+
+    No decoder/strict capability is assumed. Never fall back from an explicitly
+    admitted v3 attempt to the legacy schema, or infer missing verdicts.
+    """
+    schema = _review_model(packet).model_json_schema()
+    if review_protocol(packet) == BATCH_VERSION:
+        return schema
+    subjects = packet["required_subjects"]
+    if (not isinstance(subjects, list) or any(not isinstance(s, str) or not s for s in subjects)
+            or len(subjects) != len(set(subjects))):
+        raise ValueError("评审包要求的检查身份非法")
+    refs = _expanded_evidence_catalog(packet)
+    defs, props = schema["$defs"], schema["properties"]
+    defs["ReviewVerdict"] = {"type": "string", "enum": ["supported", "contradicted", "unknown"]}
+    defs["ReviewSubject"] = {"type": "string", "enum": list(subjects)}
+    props["coverage"] = {"type": "object", "additionalProperties": False,
+                         "properties": {s: {"$ref": "#/$defs/ReviewVerdict"} for s in subjects},
+                         "required": list(subjects)}
+    for field in ("candidate_hash", "review_scope_hash"):
+        props[field]["enum"] = [packet[field]]
+    for model in ("BatchIssue", "BatchObservation"):
+        defs[model]["properties"]["subjects"]["items"] = {"$ref": "#/$defs/ReviewSubject"}
+    # Only issue evidence is an exact catalog record. Observation/boundary refs
+    # keep their descendant rules; obligation anchors retain their own allowlist.
+    defs["BatchIssue"]["properties"]["evidence_refs"]["items"]["enum"] = refs
+    return schema
+
+
+def parse_batch_review(raw, packet):
+    """Dispatch explicitly; only v3 changes parsing to reject duplicate keys.
+
+    Legacy replay keeps its exact Pydantic JSON semantics. Historical bytes are
+    never upgraded, rewritten or completed from their issue lists.
+    """
+    model = _review_model(packet)
+    if model is BatchSemanticReview:
+        return BatchSemanticReview.model_validate_json(raw)
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("批量评审 JSON 字段重复")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("批量评审 JSON 非有限数值非法: " + value)
+
+    value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant)
+    return model.model_validate(value)
+
+
+def parse_batch_certificate(packet, certificate):
+    if certificate.get("schema_version") != review_protocol(packet):
+        raise ValueError("候选缺少对应协议的批量评审证书")
+    batch = parse_batch_review(certificate["raw_arguments"], packet)
+    if batch.model_dump() != certificate.get("batch"):
+        raise ValueError("批量评审原始结果与保存结果不一致")
+    return batch
+
+
 def _pointer_tokens(pointer):
     if not isinstance(pointer, str) or not pointer.startswith("/") or pointer == "/":
         raise ValueError("评审依据必须是包内具体 JSON pointer")
@@ -183,6 +282,10 @@ def _pointer_child(value, token):
 
 
 def _record_group(tokens):
+    if (len(tokens) == 4 and tokens[:2] == ("retained_acceptance", "claims")
+            and re.fullmatch(r"0|[1-9][0-9]*", tokens[2])):
+        return {"baseline_behavior": ("behaviors",),
+                "baseline_binding": ("plan_contract", "bindings")}.get(tokens[3])
     if not tokens or tokens[0] not in {"before", "candidate"}:
         return None
     path = tokens[1:]
@@ -218,6 +321,11 @@ def _string_schema_position(schema, tokens):
 def _text_position(location):
     if location == ("current_input",):
         return True
+    if (len(location) > 4 and location[:2] == ("retained_acceptance", "claims")
+            and re.fullmatch(r"0|[1-9][0-9]*", location[2])):
+        path = {"baseline_behavior": ("behaviors", "0"),
+                "baseline_binding": ("plan_contract", "bindings", "0")}.get(location[3])
+        return bool(path and _string_schema_position(_PROJECT_SCHEMA, (*path, *location[4:])))
     if (len(location) < 2 or location[0] not in {"before", "candidate"}
             or location[1] not in _SNAPSHOT_FIELDS):
         return False
@@ -270,11 +378,14 @@ def resolve_packet_pointer(packet, pointer):
         encoding = packet.get("record_encoding")
         valid_encoding = (encoding == _RECORD_ENCODING
                           or (group not in _RECORD_FIELDS and encoding == _LEGACY_RECORD_ENCODING))
-        if (location[0] != "before" or set(value) != {_ALIAS_KEY}
+        retained = location[0] == "retained_acceptance"
+        if (retained and set(value) != {_ALIAS_KEY, "sha256"}) or (not retained and set(value) != {_ALIAS_KEY}):
+            raise ValueError("评审记录别名字段非法")
+        if (location[0] not in {"before", "retained_acceptance"}
                 or not valid_encoding):
             raise ValueError("评审记录别名格式或位置非法")
         target = _pointer_tokens(value[_ALIAS_KEY])
-        if target[0] != "candidate" or _record_group(target) != group:
+        if target[0] not in ({"before", "candidate"} if retained else {"candidate"}) or _record_group(target) != group:
             raise ValueError("评审别名必须指向候选中的同类完整记录或字段")
         result = packet
         for token in target:
@@ -291,6 +402,12 @@ def resolve_packet_pointer(packet, pointer):
                 raise ValueError("评审字段别名必须指向同一行为身份的完整同类字符串")
         elif not isinstance(result, dict) or _ALIAS_KEY in result:
             raise ValueError("评审记录别名不能链接别名或非记录值")
+        if retained:
+            from ..domain.plan_harness import content_hash
+            # Hash expanded records, preserving existing field-level aliases.
+            exact = resolve_packet_pointer(packet, value[_ALIAS_KEY])
+            if content_hash(exact) != value["sha256"]:
+                raise ValueError("retained acceptance record alias hash changed")
         return result, target
 
     def expand(value, location):
@@ -433,6 +550,27 @@ def _deduplicate_before_records(packet):
                     record[field] = alias
     if _json(resolve_packet_pointer(packet, "/before")) != original:
         raise ValueError("评审记录去重未完整保留原始快照")
+
+
+def _deduplicate_retained_records(packet):
+    from ..domain.plan_harness import content_hash
+    for row in packet["retained_acceptance"]["claims"]:
+        for field, group in (("baseline_behavior", "behaviors"),
+                             ("baseline_binding", "plan_contract/bindings")):
+            original = row[field]
+            for side in ("candidate", "before"):
+                records = resolve_packet_pointer(packet, f"/{side}/{group}")
+                physical = packet[side]
+                for part in group.split("/"):
+                    physical = physical[part]
+                index = next((i for i, item in enumerate(records)
+                              if item == original and _ALIAS_KEY not in physical[i]), None)
+                if index is not None:
+                    row[field] = {_ALIAS_KEY: f"/{side}/{group}/{index}", "sha256": content_hash(original)}
+                    break
+    for i, row in enumerate(packet["retained_acceptance"]["claims"]):
+        for field in ("baseline_behavior", "baseline_binding"):
+            resolve_packet_pointer(packet, f"/retained_acceptance/claims/{i}/{field}")
 
 
 def _snapshot(project):
@@ -650,12 +788,16 @@ def _evidence_catalog(packet):
 
 
 def batch_review_packet(before, candidate, record):
+    # Historical packet bytes remain readable, but current policy does not
+    # recertify their missing retained scope. New attempts use current checker.
+    retained_enabled = ("retained_acceptance" in record
+                        or record.get("checker_version", CHECKER_VERSION) == CHECKER_VERSION)
     packet = {
         "candidate_id": record["id"], "candidate_hash": candidate_hash(candidate),
         "planning_fingerprint": planning_fingerprint(candidate),
         "base_revision": record["base_revision"], "candidate_revision": candidate.revision,
         "snapshot_base_revision": before.revision,
-        "checker_version": CHECKER_VERSION, "review_protocol": BATCH_VERSION,
+        "checker_version": CHECKER_VERSION if retained_enabled else record["checker_version"], "review_protocol": review_protocol(record),
         "baseline": candidate.baseline.model_dump() if candidate.baseline else None,
         "current_input": record["input"], "reference_context": record.get("reference_context", {}),
         # Preserve historical model explanations and their original versions;
@@ -665,6 +807,10 @@ def batch_review_packet(before, candidate, record):
         "required_subjects": review_subjects(candidate),
         "available_execution_evidence": eligible_execution_evidence(candidate), "complete": True,
     }
+    from .retained_acceptance import projection, subjects
+    if retained_enabled:
+        packet["retained_acceptance"] = projection(before, candidate, record)
+        packet["required_subjects"] += subjects(packet["retained_acceptance"])
     packet["contract_delta"] = {
         "schema_version": "contract-delta-refs/v2", "project_id": candidate.id,
         "base_revision": before.revision, "candidate_revision": candidate.revision,
@@ -678,7 +824,12 @@ def batch_review_packet(before, candidate, record):
     packet["capability_coverage"] = _capability_coverage(before, candidate, record, packet)
     packet["slice_availability"] = _slice_availability(candidate, packet)
     packet["evidence_catalog"] = _evidence_catalog(packet)
+    if retained_enabled:
+        packet["evidence_catalog"] += ["/retained_acceptance/pins"] + [
+            f"/retained_acceptance/claims/{i}" for i in range(len(packet["retained_acceptance"]["claims"]))]
     _deduplicate_before_records(packet)
+    if retained_enabled:
+        _deduplicate_retained_records(packet)
     _pool_review_text(packet)
     refs = packet["evidence_catalog"]
     packet["evidence_catalog"] = _compact_catalogue(refs)
@@ -732,6 +883,12 @@ def _validate_materiality(candidate, packet, issue, catalog):
     obligation = resolve_packet_pointer(packet, evidence.obligation_ref)
     if not isinstance(obligation, str) or evidence.obligation_excerpt not in obligation:
         raise ValueError("实质问题的义务摘录必须逐字存在于引用文本")
+    mechanism = re.fullmatch(r"(/retained_acceptance/claims/[0-9]+)/baseline_binding/mechanism", evidence.obligation_ref)
+    if mechanism and not any(
+            ref == mechanism[1] + "/baseline_behavior/statement"
+            or re.fullmatch(r"/candidate/plan_contract/sources/[0-9]+/text", ref)
+            for ref in evidence.boundary_refs):
+        raise ValueError("retained mechanism materiality requires original statement or user-source boundary")
     requirement = re.fullmatch(r"/candidate/plan_contract/requirements/([0-9]+)/quote",
                                evidence.obligation_ref)
     if requirement:
@@ -769,17 +926,23 @@ def _validate_materiality(candidate, packet, issue, catalog):
 
 
 def normalize_batch_review(candidate, packet, batch):
-    batch = BatchSemanticReview.model_validate(batch.model_dump())
+    batch = _review_model(packet).model_validate(batch.model_dump())
     if batch.candidate_hash != candidate_hash(candidate) or batch.review_scope_hash != packet["review_scope_hash"]:
         raise ValueError("批量评审引用了过期候选或评审范围")
-    statuses = {}
-    for verdict, subjects in batch.statuses.model_dump().items():
-        for subject in subjects:
-            if subject in statuses:
-                raise ValueError("批量评审的检查身份或状态重复")
-            statuses[subject] = verdict
+    if isinstance(batch, ScopedBatchSemanticReview):
+        statuses = dict(batch.coverage)
+    else:
+        statuses = {}
+        for verdict, subjects in batch.statuses.model_dump().items():
+            for subject in subjects:
+                if subject in statuses:
+                    raise ValueError("批量评审的检查身份或状态重复")
+                statuses[subject] = verdict
     required = packet["required_subjects"]
-    if len(required) != len(set(required)) or set(statuses) != set(required) or required != review_subjects(candidate):
+    from .retained_acceptance import subjects
+    expected_subjects = review_subjects(candidate) + (subjects(packet["retained_acceptance"])
+        if "retained_acceptance" in packet else [])
+    if len(required) != len(set(required)) or set(statuses) != set(required) or required != expected_subjects:
         raise ValueError("批量评审未精确覆盖所有要求的检查项")
     issues, ids = {}, set()
     catalog = set(_expanded_evidence_catalog(packet))
@@ -816,7 +979,9 @@ def normalize_batch_review(candidate, packet, batch):
         if issue is None:
             checks.append({
                 "subject": subject, "verdict": "supported", "basis": "model_inference",
-                "reason": "批量模型未报告此项问题（服务端格式归一说明，非逐项论证）",
+                "reason": ("批量模型明确标记此项 supported（服务端格式归一说明，非逐项论证）"
+                           if isinstance(batch, ScopedBatchSemanticReview) else
+                           "批量模型未报告此项问题（服务端格式归一说明，非逐项论证）"),
                 "counterexample": "批量协议未提供此项的单独反例；不代表已执行验收",
                 "execution_evidence_ids": [],
             })
@@ -827,12 +992,13 @@ def normalize_batch_review(candidate, packet, batch):
                 "basis": issue.basis, "execution_evidence_ids": issue.execution_evidence_ids,
             })
     review = SemanticReview(candidate_hash=batch.candidate_hash, summary=batch.summary, checks=checks)
-    validate_semantic_review(candidate, review)
+    validate_semantic_review(candidate, review, required_subjects=required)
     return review
 
 
 def batch_review_certificate(raw, batch):
-    return {"schema_version": BATCH_VERSION, "raw_arguments": raw, "batch": batch.model_dump(),
+    version = SCOPED_BATCH_VERSION if isinstance(batch, ScopedBatchSemanticReview) else BATCH_VERSION
+    return {"schema_version": version, "raw_arguments": raw, "batch": batch.model_dump(),
             "normalization": "Supported-row reason/counterexample are server-authored disclosure placeholders. "
                              "Materiality evidence and advisory observations remain in the exact batch audit; "
                              "the compatible SemanticReview projection contains verdict checks only."}
@@ -846,11 +1012,11 @@ def validate_batch_certificate(before, candidate, record):
     if not record.get("review_inputs") or record["review_inputs"][-1] != packet:
         raise ValueError("评审依据与当前候选或交付范围不一致")
     certificates = record.get("batch_reviews", [])
-    if not certificates or certificates[-1].get("schema_version") != BATCH_VERSION:
+    if not certificates:
         raise ValueError("候选缺少当前批量评审证书")
     certificate = certificates[-1]
-    batch = BatchSemanticReview.model_validate_json(certificate["raw_arguments"])
-    if batch.model_dump() != certificate.get("batch") or certificate["batch"] != record["report"].get("semantic_batch"):
+    batch = parse_batch_certificate(packet, certificate)
+    if certificate["batch"] != record["report"].get("semantic_batch"):
         raise ValueError("批量评审原始结果与保存结果不一致")
     review = normalize_batch_review(candidate, packet, batch)
     if review.model_dump() != record["report"].get("semantic") or not record.get("reviews") or review.model_dump() != record["reviews"][-1]:

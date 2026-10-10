@@ -231,7 +231,7 @@ def _references(kind, value):
     return result
 
 
-def _manifest_rows(args, project=None):
+def _manifest_rows(args, project=None, record=None):
     rows = [c.model_dump() for c in args.changes]
     objects = _objects(project) if project is not None else None
     seen = set()
@@ -249,7 +249,10 @@ def _manifest_rows(args, project=None):
         if key in seen or len(row["fields"]) != len(set(row["fields"])):
             raise ValueError("manifest contains duplicate identity or field: " + key)
         seen.add(key)
-        _validate_manifest_change(row, new=objects is not None and key not in objects)
+        from .retained_acceptance import disposition_only_contract
+        metadata_only = bool(project is not None and kind == "contract" and disposition_only_contract(
+            record, project, identity, row["fields"]))
+        _validate_manifest_change(row, new=objects is not None and key not in objects and not metadata_only)
         row["change_id"] = key
     return rows
 
@@ -687,7 +690,7 @@ def schedule_plan_changes(ctx, args):
     if not getattr(db, "is_candidate", False):
         raise ValueError("work units require a planning candidate")
     project = db.get(ctx.project_id)
-    rows = _manifest_rows(args, project)
+    rows = _manifest_rows(args, project, db.record)
     manifest_hash = _hash(rows)
     old = db.record.get("work_units")
     if _valid_schedule(db.record, project, db.source_id) and old["manifest_hash"] == manifest_hash and not schedule_findings(db.record, project):
@@ -736,7 +739,8 @@ def initial_unit_context(db, *, include_prior_pending=False):
         prior = prior_pending_intent_context(db.record, project.id)
         if prior is not None:
             result["prior_work_units"] = prior
-    return result
+    from .retained_acceptance import project_router_retained_context
+    return project_router_retained_context(result, db.record.get("retained_acceptance"))
 
 
 def carry_review_findings(previous):
@@ -802,6 +806,9 @@ def _architecture_context(architecture, full=None):
 
 
 def _initial_unit_context(db, project, objects):
+    from .retained_acceptance import generation_context
+    unit = _next(db.record["work_units"]) if _valid_schedule(db.record, project, db.source_id) else None
+    assigned = {row["id"] for row in unit["changes"] if row["kind"] in {"contract", "remove_contract"}} if unit else None
     inactive = {}
     active_keys = {key.split(":", 1)[1] for key in objects if key.startswith("contract:")}
     for behavior in project.behaviors:
@@ -831,6 +838,7 @@ def _initial_unit_context(db, project, objects):
     if not responsibilities_included:
         components = [{"id": value["id"], "label": value["label"]} for value in components]
     return {"project_id": project.id, "revision": project.revision, "candidate_hash": candidate_hash(project),
+            "retained_acceptance": generation_context(db.record, project, assigned),
             "manifest_field_catalog": manifest_field_catalog(),
             "manifest_field_note": "Use only this PlanDelta catalog, not rich Project/UI fields. Required_new applies only to new IDs; existing omissions retain data. source_id is an exact source anchor, not a uses graph reference.",
             "sources": _context_sources(project),
@@ -1054,6 +1062,8 @@ def _delta_rows(delta, *, fragmented=False):
         if _key("contract", key) not in by_id:
             raise ValueError("restoration requires a contract in the current unit")
         by_id[_key("contract", key)]["fields"].add("restore")
+    if set(raw.get("removal_acceptance_changes", {})) - set(raw.get("remove_contract_keys", [])):
+        raise ValueError("removal acceptance metadata needs its exact remove_contract identity")
     return raw, by_id
 
 
@@ -1076,7 +1086,12 @@ def validate_unit_delta(db, args):
     if schedule.get("version") == BATCH_UNIT_VERSION:
         from .plan_batch_policy import validate_batch_delta
         validate_batch_delta(schedule, pin, raw, actual)
+    from .retained_acceptance import validate_metadata_scope
+    validate_metadata_scope(db.record, project, raw)
     if pin.get("accepted_delta_hash"):
+        if any(c.get("acceptance_only") and c["unit_id"] == pin["unit_id"]
+               for c in schedule.get("checkpoints", [])):
+            raise ValueError("acceptance-only unit already completed; identical resubmission is not progress")
         if pin["accepted_delta_hash"] != _hash(raw) or not _valid_schedule(db.record, project, db.source_id):
             raise ValueError("this request already completed its unit; it cannot write the next unseen unit")
         return True
@@ -1119,7 +1134,8 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
     # Recheck the actual compiler audit inside the transaction, not only the
     # earlier handler guard. No model-supplied completion flag can advance it.
     from types import SimpleNamespace
-    proxy = SimpleNamespace(project=old_project, record=result, source_id=source_id,
+    prior_record = {**result, "compilations": result.get("compilations", [])[:-1]}
+    proxy = SimpleNamespace(project=old_project, record=prior_record, source_id=source_id,
                             get=lambda project_id: old_project)
     validate_unit_delta(proxy, raw)
     digest = _hash(raw)
@@ -1132,8 +1148,13 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
         return result
     if pin["revision"] != old_project.revision or pin["planning_fingerprint"] != _identity(old_project):
         raise ValueError("unit checkpoint base is stale")
+    acceptance_only = False
     if _identity(old_project) == _identity(new_project):
-        raise ValueError("pending unit promised a change but produced NO_PROGRESS; it cannot be marked complete")
+        from .retained_acceptance import changed_disposition_only
+        acceptance_only = (old_project == new_project and schedule["version"] == UNIT_VERSION
+                           and changed_disposition_only(result, old_project, raw, unit))
+        if not acceptance_only:
+            raise ValueError("pending unit promised a change but produced NO_PROGRESS; it cannot be marked complete")
     unit["state"] = "completed"
     pin["accepted_delta_hash"] = digest
     schedule["completed_ids"].append(unit["id"])
@@ -1145,7 +1166,8 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
         "change_ids": [r["change_id"] for r in unit["changes"]],
         "submitted_fields": {key: sorted(row["fields"]) for key, row in _delta_rows(
             PlanDelta.model_validate(raw), fragmented=schedule.get("version") in FIELD_UNIT_VERSIONS)[1].items()},
-        "changed": _identity(old_project) != _identity(new_project)})
+        "changed": _identity(old_project) != _identity(new_project),
+        **({"acceptance_only": True} if acceptance_only else {})})
     if schedule.get("version") == BATCH_UNIT_VERSION:
         from .plan_batch_policy import batch_checkpoint_provenance, batch_record_errors
         schedule["checkpoints"][-1].update(
@@ -1168,6 +1190,9 @@ def advance_unit_checkpoint(record, old_project, new_project, compiler_audit):
 
 
 def all_units_complete(record):
+    from .plan_complete_change import complete, is_complete_change
+    if is_complete_change(record):
+        return complete(record)
     schedule = record.get("work_units")
     if not isinstance(schedule, dict) or not schedule.get("units") or not schedule.get("manifest"):
         return False

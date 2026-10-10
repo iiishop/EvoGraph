@@ -241,9 +241,41 @@ test('planning job controls override global full-width inputs and retain scrolla
     assert.equal(style('.planning-job-heading').flexShrink, '0');
     assert.equal(style('.planning-job-actions').flexShrink, '0');
     assert.match(dock.template.content, /<span>本次使用有界规划作业/);
-    assert.match(dock.template.content, /<span\s*>\s*确认按以上总额度/);
+    assert.match(dock.template.content, /<span v-else\s*>\s*确认按以上总额度/);
   } finally {
     fixture.remove();
     styles.remove();
+  }
+});
+
+
+test('complete-change panel shows one generation and full review without exposing chunks or Continue', async () => {
+  const ui = mount({
+    mode: 'bounded-complete-change/v1',
+    limits: { max_phases: 1, max_calls: 2, max_input_bytes: 393216 },
+    spend: { calls: 1, input_bytes: 123456, tokens: 0, usage_complete: false },
+  });
+  try {
+    const text = ui.root.textContent;
+    assert.match(text, /完整变更 · 已暂停/);
+    assert.match(text, /最多一次生成 \+ 一次完整评审/);
+    assert.match(text, /163,840 B 输入、98,304 B 输出，180 秒超时/);
+    assert.match(text, /累计调用 1 \/ 已授权 2 · 累计输入 123,456 \/ 已授权 393,216 B/);
+    assert.doesNotMatch(text, /生成单元|检查点|阶段 1|剩余调用数下界/);
+    assert.equal(button(ui.root, '在已授权额度内继续'), undefined, 'even stale paused/can_continue flags cannot expose Continue');
+    for (const reason of ['invalid_tool_output', 'review_not_accepted']) {
+      ui.job.status = 'stopped';
+      ui.job.stop_reason = reason;
+      await tick();
+      assert.equal(button(ui.root, '在已授权额度内继续'), undefined);
+      assert.equal(button(ui.root, '取消作业'), undefined);
+      assert.match(ui.root.textContent, /需要新授权；不会自动增加额度/);
+      button(ui.root, '查看新作业授权').click();
+      await tick();
+    }
+    assert.equal(ui.authorizations(), 2);
+    assert.equal(env.calls.length, 0, 'new authorization only opens native composer consent');
+  } finally {
+    ui.close();
   }
 });

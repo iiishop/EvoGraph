@@ -48,6 +48,7 @@ const harnessCheckNames: Record<string, string> = {
   design_consistency: '架构结构与绑定',
   declared_availability: '前置声明可用性',
   typed_capability_flow: '验收调用可用性',
+  retained_acceptance: '既有验收保留',
   semantic_review: '语义评审',
 };
 
@@ -112,7 +113,9 @@ function harnessCheckDisclosure(
           ? '模型未发现问题'
           : check.id === 'typed_capability_flow'
             ? '已声明动作检查通过；未声明范围未覆盖'
-            : '程序检查通过',
+            : check.id === 'retained_acceptance'
+              ? '结构覆盖检查通过；语义保留仍需独立评审'
+              : '程序检查通过',
       block: check.kind === 'model_opinion' ? '模型指出阻断项' : '发现阻断项',
       unknown: '尚无法判断',
       not_applicable: '未覆盖 · 此可选检查不适用',
