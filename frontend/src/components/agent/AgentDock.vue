@@ -664,49 +664,52 @@ function choose(option: string) {
       >
       <fieldset v-if="boundedJob" :disabled="Boolean(operationBlocker)">
         <legend>本次作业总额度</legend>
-        <div class="planning-job-limits">
-          <label
-            >最多阶段<input
-              v-model.number="jobLimits.max_phases"
-              type="number"
-              min="1"
-              max="3"
-              step="1"
-          /></label>
-          <label
-            >最多模型调用<input
-              v-model.number="jobLimits.max_calls"
-              type="number"
-              min="1"
-              :max="Math.min(12, 5 * jobLimits.max_phases)"
-              step="1"
-          /></label>
-          <label
-            >累计输入字节（B）<input
-              v-model.number="jobLimits.max_input_bytes"
-              type="number"
-              min="1"
-              :max="Math.min(1179648, 393216 * jobLimits.max_phases)"
-              step="1"
-          /></label>
-        </div>
-        <p>
-          每阶段仍最多 5 次调用、393,216 B 输入；本原型总授权最多 3 阶段、12 次调用、1,179,648
-          B。不会自动扩额；token 用量可能不完整。
+        <p class="planning-job-cap-summary">
+          本次上限：{{ jobLimits.max_phases }} 阶段 · {{ jobLimits.max_calls }} 次模型调用 ·
+          {{ jobLimits.max_input_bytes.toLocaleString('en-US') }} B 累计输入
         </p>
+        <p>到达上限就停止，不会自动增加额度。</p>
         <label class="planning-job-opt-in"
           ><input
             v-model="jobConfirmed"
             type="checkbox"
             :disabled="!jobLimitsValid || !jobSupported"
           />
-          <span
-            >确认按以上总额度自动推进这次输入，允许最多 {{ jobLimits.max_phases }} 阶段、{{
-              jobLimits.max_calls
-            }}
-            次调用和 {{ jobLimits.max_input_bytes }} B 累计输入</span
-          ></label
+          <span>确认按以上总额度自动推进这次输入</span></label
         >
+        <details class="planning-job-advanced">
+          <summary>高级设置 · 调整本次额度</summary>
+          <div class="planning-job-limits">
+            <label
+              >最多阶段<input
+                v-model.number="jobLimits.max_phases"
+                type="number"
+                min="1"
+                max="3"
+                step="1"
+            /></label>
+            <label
+              >最多模型调用<input
+                v-model.number="jobLimits.max_calls"
+                type="number"
+                min="1"
+                :max="Math.min(12, 5 * jobLimits.max_phases)"
+                step="1"
+            /></label>
+            <label
+              >累计输入字节（B）<input
+                v-model.number="jobLimits.max_input_bytes"
+                type="number"
+                min="1"
+                :max="Math.min(1179648, 393216 * jobLimits.max_phases)"
+                step="1"
+            /></label>
+          </div>
+          <p>
+            每阶段仍最多 5 次调用、393,216 B 输入；本原型总授权最多 3 阶段、12 次调用、1,179,648
+            B。不会自动扩额；token 用量可能不完整。
+          </p>
+        </details>
       </fieldset>
       <p v-if="jobBlocker" class="agent-blocker" role="status">{{ jobBlocker }}</p>
     </div>
@@ -814,6 +817,25 @@ function choose(option: string) {
 }
 .planning-job-authorization p {
   margin: 7px 0;
+}
+.planning-job-cap-summary {
+  font-weight: 600;
+}
+.planning-job-advanced {
+  margin-top: 10px;
+}
+.planning-job-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 3px 0;
+}
+.planning-job-advanced summary:focus-visible {
+  outline: 2px solid var(--green, #198b71);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.planning-job-advanced[open] summary {
+  margin-bottom: 8px;
 }
 .planning-job-limits {
   display: flex;

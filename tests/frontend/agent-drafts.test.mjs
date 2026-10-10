@@ -1812,11 +1812,36 @@ async function boundedComposer(h) {
   };
 }
 
+test('a supported project still sends an ordinary request until bounded mode is explicitly selected', async () => {
+  const h = await harness();
+  try {
+    h.workspace.state.project.unified_planning = true;
+    h.workspace.state.project.planning_job_start_pins = { base_hash: 'base-1' };
+    await h.input('Ordinary request');
+    const optIn = all(h.root).find(node => node.tag === 'input' && node.type === 'checkbox');
+    assert.equal(optIn.checked, false);
+    assert.equal(all(h.root).find(node => node.class === 'planning-job-advanced'), undefined);
+    assert.equal(h.env.calls.length, 0);
+    await h.submit();
+    assert.equal(h.env.calls.length, 1);
+    assert.equal(h.env.planningRequests[0], undefined);
+    assert.equal(h.env.calls[0][1], 'Ordinary request');
+    assert.deepEqual(h.env.calls[0][5], { version: 1, parts: [{ type: 'text', text: 'Ordinary request' }] });
+  } finally { h.dispose(); }
+});
+
 test('planning job composer defaults conservative and requires explicit confirmation before send', async () => {
   const h = await harness();
   try {
     const ui = await boundedComposer(h);
     assert.deepEqual(ui.limits().map(node => node.value), [1, 5, 393216]);
+    const advanced = all(h.root).find(node => node.class === 'planning-job-advanced');
+    assert.equal(Boolean(advanced.open), false);
+    assert.equal(advanced.children[0].tag, 'summary', 'native disclosure stays keyboard accessible');
+    assert.deepEqual(all(advanced).filter(node => node.type === 'number'), ui.limits());
+    assert.equal(all(advanced).some(node => node.type === 'checkbox'), false, 'confirmation stays outside the collapsed details');
+    assert.match(textOf(all(h.root).find(node => node.class === 'planning-job-cap-summary')), /1 阶段 · 5 次模型调用 · 393,216 B/);
+    assert.equal(h.env.calls.length, 0, 'opting in never sends automatically');
     await h.submit();
     assert.equal(h.env.calls.length, 0);
     assert.match(textOf(h.root), /确认本次作业的总额度/);
@@ -1844,6 +1869,8 @@ test('planning job edits invalidate consent and higher limits are sent only afte
     ui.limits()[1]['onUpdate:modelValue'](12);
     ui.limits()[2]['onUpdate:modelValue'](1179648);
     await tick();
+    assert.match(textOf(all(h.root).find(node => node.class === 'planning-job-cap-summary')), /3 阶段 · 12 次模型调用 · 1,179,648 B/);
+    assert.equal(ui.inputs().filter(node => node.type === 'checkbox').at(-1).checked, false);
     await h.submit();
     assert.equal(h.env.calls.length, 0);
     await ui.confirm();
@@ -1949,5 +1976,28 @@ test('planning job composer rejects aggregate allowances exceeding the authorize
     await h.submit();
     assert.equal(h.env.calls.length, 1);
     assert.deepEqual(h.env.planningRequests[0].limits, { max_phases: 2, max_calls: 10, max_input_bytes: 786432 });
+  } finally { h.dispose(); }
+});
+
+
+test('switching projects clears bounded opt-in, edited limits and confirmation', async () => {
+  const h = await harness();
+  try {
+    const ui = await boundedComposer(h);
+    ui.limits()[0]['onUpdate:modelValue'](2);
+    ui.limits()[1]['onUpdate:modelValue'](10);
+    await tick();
+    await ui.confirm();
+    await h.workspace.selectProject('B');
+    h.workspace.state.project.unified_planning = true;
+    h.workspace.state.project.planning_job_start_pins = { base_hash: 'base-B' };
+    await tick();
+    assert.equal(ui.inputs().find(node => node.type === 'checkbox').checked, false);
+    assert.equal(ui.limits().length, 0);
+    const next = await boundedComposer(h);
+    assert.deepEqual(next.limits().map(node => node.value), [1, 5, 393216]);
+    assert.equal(next.inputs().filter(node => node.type === 'checkbox').at(-1).checked, false);
+    await h.submit();
+    assert.equal(h.env.calls.length, 0);
   } finally { h.dispose(); }
 });

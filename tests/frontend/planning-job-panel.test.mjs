@@ -112,6 +112,44 @@ test('planning job panel shows saved progress, two distinct budgets and honest u
   }
 });
 
+test('collapsed technical details keep the outcome and actions visible without starting requests', async () => {
+  const ui = mount();
+  try {
+    const details = ui.root.querySelector('details');
+    const summary = ui.root.querySelector('.planning-job-summary');
+    const actions = ui.root.querySelector('.planning-job-actions');
+    assert.equal(details.open, false);
+    assert.match(summary.textContent, /本阶段额度已用完/);
+    assert.match(summary.textContent, /保留 3 · 新增 2/);
+    assert.match(summary.textContent, /不代表代码实现或验收完成/);
+    assert.equal(summary.getAttribute('aria-live'), 'polite');
+    assert.doesNotMatch(summary.textContent, /job-1|source-1|phase_budget_boundary|生成单元|token|390,000/i);
+    assert.equal(details.contains(summary), false);
+    assert.equal(details.contains(actions), false);
+    assert.ok(button(actions, '在已授权额度内继续'));
+    assert.ok(button(actions, '取消作业'));
+    details.querySelector('summary').click();
+    await tick();
+    assert.equal(details.open, true);
+    assert.match(details.textContent, /job-1.*source-1/);
+    assert.match(details.textContent, /原因代码：phase_budget_boundary/);
+    details.querySelector('summary').click();
+    await tick();
+    assert.equal(details.open, false);
+    assert.equal(env.calls.length, 0);
+    ui.job.status = 'applied';
+    ui.job.stop_reason = 'applied';
+    ui.job.can_continue = false;
+    await tick();
+    assert.match(summary.textContent, /方案已应用/);
+    assert.equal(button(actions, '在已授权额度内继续'), undefined);
+    assert.equal(button(actions, '取消作业'), undefined);
+    assert.equal(env.calls.length, 0);
+  } finally {
+    ui.close();
+  }
+});
+
 test('planning job panel repeats neither continued input nor continuation clicks', async () => {
   const ui = mount();
   let release;
@@ -145,7 +183,8 @@ test('planning job panel repeats neither continued input nor continuation clicks
     assert.equal(ui.authorizations(), 1);
     assert.equal(env.calls.length, 1, 'authorization link itself must never send');
     assert.match(ui.root.textContent, /需要新授权；不会自动增加额度/);
-    assert.match(ui.root.textContent, /已达总调用上限（aggregate_call_limit）/);
+    assert.match(ui.root.querySelector('.planning-job-summary').textContent, /已达总调用上限/);
+    assert.match(ui.root.querySelector('details').textContent, /原因代码：aggregate_call_limit/);
   } finally {
     release?.();
     ui.close();
@@ -222,7 +261,7 @@ test('planning job controls override global full-width inputs and retain scrolla
   document.head.append(styles);
   const fixture = document.createElement('div');
   fixture.innerHTML =
-    '<div class="planning-job-authorization"><label class="planning-job-opt-in"><input type="checkbox"><span>确认本次有界规划作业</span></label><fieldset></fieldset></div><section class="planning-job-panel"><div class="planning-job-heading"></div><div class="planning-job-progress"></div><div class="planning-job-actions"></div></section>';
+    '<div class="planning-job-authorization"><label class="planning-job-opt-in"><input type="checkbox"><span>确认本次有界规划作业</span></label><fieldset></fieldset></div><section class="planning-job-panel"><div class="planning-job-heading"></div><div class="planning-job-summary"></div><div class="planning-job-actions"></div><details class="planning-job-details"><div class="planning-job-progress"></div></details></section>';
   document.body.append(fixture);
   try {
     const style = (selector) => window.getComputedStyle(fixture.querySelector(selector));
@@ -237,7 +276,8 @@ test('planning job controls override global full-width inputs and retain scrolla
     assert.equal(style('.planning-job-panel').minHeight, '112px');
     assert.equal(style('.planning-job-panel').overflow, 'hidden');
     assert.equal(parseFloat(style('.planning-job-progress').minHeight), 0);
-    assert.equal(style('.planning-job-progress').overflowY, 'auto');
+    assert.equal(style('.planning-job-details').overflowY, 'auto');
+    assert.equal(style('.planning-job-summary').flexShrink, '0');
     assert.equal(style('.planning-job-heading').flexShrink, '0');
     assert.equal(style('.planning-job-actions').flexShrink, '0');
     assert.match(dock.template.content, /<span>本次使用有界规划作业/);

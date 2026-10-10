@@ -93,45 +93,15 @@ async function refresh() {
         {{ refreshing ? '刷新中…' : '刷新状态' }}
       </button>
     </div>
-    <small class="planning-job-id">{{ job.id }} · 来源 {{ job.source_id }}</small>
-    <div class="planning-job-progress" aria-live="polite" aria-atomic="true">
+    <div class="planning-job-summary" aria-live="polite" aria-atomic="true">
+      <p v-if="job.stop_reason" class="planning-job-stop">
+        {{ stopLabels[job.stop_reason] || '作业已停止，可展开详情查看原因' }}
+      </p>
       <p>
         已保存检查点：保留 {{ number(job.progress.retained_checkpoints) }} · 新增
         {{ number(job.progress.new_checkpoints) }}
       </p>
-      <p>
-        生成单元：已完成 {{ number(job.progress.completed_units) }} · 可执行
-        {{ number(job.progress.runnable_units) }} · 暂缓 {{ number(job.progress.held_units) }} ·
-        剩余 {{ number(job.progress.remaining_units) }}
-      </p>
-      <small>以上为规划传输的生成单元进度，不代表编码里程碑完成</small>
-      <p>
-        阶段 {{ number(job.phase_number) }} / {{ number(job.limits.max_phases) }} · 本阶段调用
-        {{ number(job.phase_spend.calls) }} / {{ number(job.phase_limits.max_calls) }} · 输入
-        {{ number(job.phase_spend.input_bytes) }} /
-        {{ number(job.phase_limits.max_total_input_bytes) }} B
-      </p>
-      <p>
-        累计调用 {{ number(job.spend.calls) }} / 已授权 {{ number(job.limits.max_calls) }} ·
-        累计输入 {{ number(job.spend.input_bytes) }} / 已授权
-        {{ number(job.limits.max_input_bytes) }} B
-      </p>
-      <p v-if="job.spend.usage_complete">已报告 token：{{ number(job.spend.tokens) }}</p>
-      <p v-else>
-        Token 用量未完整报告（已报告 {{ number(job.spend.tokens) }}），不能据此推断完整用量或费用
-      </p>
-      <p>
-        剩余调用数下界：{{
-          job.progress.remaining_call_lower_bound === null
-            ? '未知'
-            : number(job.progress.remaining_call_lower_bound)
-        }}<small> · 下界不是完成保证</small>
-      </p>
-      <p v-if="job.stop_reason" class="planning-job-stop">
-        停止原因：{{ stopLabels[job.stop_reason] || '作业已停止，请检查原因' }}（{{
-          job.stop_reason
-        }}）
-      </p>
+      <small>规划进展不代表代码实现或验收完成</small>
       <p v-if="job.authorization_needed" class="planning-job-stop">
         需要新授权；不会自动增加额度。请确认当前状态和新的实质输入后再启动。
       </p>
@@ -165,6 +135,41 @@ async function refresh() {
         {{ agent.state.cancellingJobId === job.id ? '正在取消…' : '取消作业' }}
       </button>
     </div>
+    <details class="planning-job-details">
+      <summary>查看额度与技术详情</summary>
+      <div class="planning-job-progress" tabindex="0" aria-label="作业技术详情">
+        <small class="planning-job-id">作业 {{ job.id }} · 来源 {{ job.source_id }}</small>
+        <p>
+          生成单元：已完成 {{ number(job.progress.completed_units) }} · 可执行
+          {{ number(job.progress.runnable_units) }} · 暂缓 {{ number(job.progress.held_units) }} ·
+          剩余 {{ number(job.progress.remaining_units) }}
+        </p>
+        <small>以上为规划传输的生成单元进度，不代表编码里程碑完成</small>
+        <p>
+          阶段 {{ number(job.phase_number) }} / {{ number(job.limits.max_phases) }} · 本阶段调用
+          {{ number(job.phase_spend.calls) }} / {{ number(job.phase_limits.max_calls) }} · 输入
+          {{ number(job.phase_spend.input_bytes) }} /
+          {{ number(job.phase_limits.max_total_input_bytes) }} B
+        </p>
+        <p>
+          累计调用 {{ number(job.spend.calls) }} / 已授权 {{ number(job.limits.max_calls) }} ·
+          累计输入 {{ number(job.spend.input_bytes) }} / 已授权
+          {{ number(job.limits.max_input_bytes) }} B
+        </p>
+        <p v-if="job.spend.usage_complete">已报告 token：{{ number(job.spend.tokens) }}</p>
+        <p v-else>
+          Token 用量未完整报告（已报告 {{ number(job.spend.tokens) }}），不能据此推断完整用量或费用
+        </p>
+        <p>
+          剩余调用数下界：{{
+            job.progress.remaining_call_lower_bound === null
+              ? '未知'
+              : number(job.progress.remaining_call_lower_bound)
+          }}<small> · 下界不是完成保证</small>
+        </p>
+        <p v-if="job.stop_reason">原因代码：{{ job.stop_reason }}</p>
+      </div>
+    </details>
   </section>
 </template>
 
@@ -177,10 +182,10 @@ async function refresh() {
   font-size: 12px;
   display: flex;
   flex-direction: column;
-  flex: 0 1 190px;
+  flex: 0 1 auto;
   min-width: 0;
   min-height: 112px;
-  max-height: min(240px, 30dvh);
+  max-height: min(320px, 40dvh);
   overflow: hidden;
 }
 .planning-job-heading,
@@ -200,16 +205,36 @@ async function refresh() {
   overflow-wrap: anywhere;
   color: var(--muted);
 }
-.planning-job-progress {
-  flex: 1 1 auto;
-  min-height: 0;
+.planning-job-summary {
+  flex-shrink: 0;
+}
+.planning-job-details {
+  min-height: 24px;
+  margin-top: 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.planning-job-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 3px 0;
+}
+.planning-job-details summary:focus-visible,
+.planning-job-progress:focus-visible {
+  outline: 2px solid var(--green, #198b71);
+  outline-offset: -2px;
+  border-radius: 3px;
+}
+.planning-job-progress {
+  min-height: 0;
+  padding-top: 6px;
+}
+.planning-job-summary p,
 .planning-job-progress p {
   margin: 5px 0;
   overflow-wrap: anywhere;
 }
+.planning-job-summary small,
 .planning-job-progress small {
   color: var(--muted);
 }
