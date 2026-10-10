@@ -1,8 +1,8 @@
 import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
-import ELK from 'elkjs/lib/elk.bundled.js';
+import { createLazyElk } from './lazyElk';
 import type { Diagram } from '../types';
 
-const elk = new ELK();
+const elk = createLazyElk();
 const options = {
   'elk.algorithm': 'layered',
   'elk.direction': 'RIGHT',
@@ -15,6 +15,8 @@ const options = {
 
 /** Layout the contents first, then arrange semantic boundaries by their relations. */
 export async function layoutArchitecture(diagram: Diagram) {
+  if (!diagram.nodes.length && !diagram.edges.length && !diagram.groups?.length)
+    return new Map<string, { x: number; y: number }>();
   const assigned = new Set(diagram.groups?.flatMap((g) => g.member_node_ids) ?? []);
   const groups = [
     ...(diagram.groups ?? []).map((g) => ({ id: `group:${g.id}`, ids: g.member_node_ids })),

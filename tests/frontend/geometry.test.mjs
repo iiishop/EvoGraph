@@ -1,20 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
+import { resolveLayoutImports } from './helpers/layout-module.mjs';
 
-const require = createRequire(import.meta.url);
 async function load(path) {
-  const code = ts
-    .transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
+  const code = resolveLayoutImports(
+    ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-    })
-    .outputText.replaceAll(
-      'elkjs/lib/elk.bundled.js',
-      pathToFileURL(require.resolve('elkjs/lib/elk.bundled.js')).href,
-    );
+    }).outputText,
+  );
   return import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 }
 const { separateBoxes, routeAroundBoxes } = await load('../../frontend/src/lib/graphGeometry.ts');

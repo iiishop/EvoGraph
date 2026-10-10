@@ -1,7 +1,7 @@
 import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
-import ELK from 'elkjs/lib/elk.bundled.js';
+import { createLazyElk } from '../lib/lazyElk';
 import type { Milestone } from '../types';
-const elk = new ELK();
+const elk = createLazyElk();
 export const NODE_WIDTH = 236,
   NODE_HEIGHT = 150;
 export interface Point {
@@ -18,6 +18,7 @@ export async function layout(
   milestones: Pick<Milestone, 'id' | 'dependencies'>[],
 ): Promise<LayoutResult> {
   const direction = 'RIGHT' as const;
+  if (!milestones.length) return { direction, positions: new Map(), routes: new Map() };
   const vertical = false;
   const result = await elk.layout<ElkNode>({
     id: 'root',

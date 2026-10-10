@@ -1,23 +1,18 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
-const require = createRequire(import.meta.url);
+import { resolveLayoutImports } from './helpers/layout-module.mjs';
 const load = async (file) =>
   import(
     'data:text/javascript;base64,' +
       Buffer.from(
-        ts
-          .transpileModule(
+        resolveLayoutImports(
+          ts.transpileModule(
             readFileSync(new URL(`../../frontend/src/lib/${file}`, import.meta.url), 'utf8'),
             { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
-          )
-          .outputText.replaceAll(
-            'elkjs/lib/elk.bundled.js',
-            pathToFileURL(require.resolve('elkjs/lib/elk.bundled.js')).href,
-          ),
+          ).outputText,
+        ),
       ).toString('base64')
   );
 const {
