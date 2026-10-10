@@ -4,7 +4,11 @@ import type { Project, Milestone } from '../../types';
 import { command } from '../../api/client';
 import { useWorkspace } from '../../composables/useWorkspace';
 import { useAgent } from '../../composables/useAgent';
-import { workflowDrafts, runWorkflowAction } from '../../composables/useWorkflowDrafts';
+import {
+  workflowDrafts,
+  runWorkflowAction,
+  savedPromptFreshness,
+} from '../../composables/useWorkflowDrafts';
 import { copyText } from '../../lib/copyText';
 import ObligationItem from './ObligationItem.vue';
 const props = defineProps<{ project: Project; milestone: Milestone }>();
@@ -38,6 +42,16 @@ const ready = computed(
 const blocked = computed(
   () => state.busy || Boolean(draft.value?.pending || draft.value?.syncError),
 );
+const promptFreshness = computed(() => savedPromptFreshness(draft.value, props.project.revision));
+const promptLabel = computed(() => {
+  const kind =
+    draft.value?.promptKind === 'implementation'
+      ? '制作提示词'
+      : draft.value?.promptKind === 'verification'
+        ? '验收提示词'
+        : '提示词（类型未知）';
+  return `${promptFreshness.value === 'older_revision' ? '历史' : promptFreshness.value === 'unknown' ? '未核对的' : '已保存的'}${kind}`;
+});
 const basisChanged = computed(() =>
   Boolean(
     props.milestone.pinned_baseline &&
@@ -93,11 +107,18 @@ async function run(action: string) {
     const outcome = await runWorkflowAction({
       store: workflowDrafts,
       attempt,
-      mutate: () => command<{ prompt?: string; result?: string }>(action, params),
+      mutate: () =>
+        command<{ prompt?: string; project_revision?: number; result?: string }>(action, params),
       refresh,
       confirmed: (result, entry) => {
         if (result.prompt) {
           entry.prompt = result.prompt;
+          entry.promptKind = action === 'verification.export' ? 'verification' : 'implementation';
+          // The export owns this provenance; a later refresh may already be a newer version.
+          entry.promptProjectRevision =
+            Number.isSafeInteger(result.project_revision) && result.project_revision! >= 0
+              ? result.project_revision!
+              : null;
           entry.notice =
             action === 'verification.export'
               ? `「${title}」验收请求已生成`
@@ -113,6 +134,8 @@ async function run(action: string) {
             entry.revision++;
           }
           entry.prompt = '';
+          entry.promptKind = null;
+          entry.promptProjectRevision = null;
         } else {
           entry.notice =
             action === 'milestone.start'
@@ -124,7 +147,13 @@ async function run(action: string) {
       },
     });
     // Never start a delayed clipboard write after leaving the originating inspector.
-    if (outcome.confirmed && outcome.current && outcome.result.prompt && origin()) {
+    if (
+      outcome.confirmed &&
+      outcome.current &&
+      outcome.result.prompt &&
+      origin() &&
+      savedPromptFreshness(attempt.entry, state.project?.revision) === 'same_revision'
+    ) {
       attempt.entry.copied = copyText(outcome.result.prompt);
       if (!attempt.entry.copied)
         attempt.entry.error = '自动复制未成功，请使用下方复制按钮，或选择提示词后手动复制。';
@@ -256,15 +285,26 @@ function investigate() {
       <button class="button secondary" :disabled="state.busy" @click="sync">刷新状态</button>
     </div>
     <details v-if="draft?.prompt" open class="handoff-prompt">
-      <summary>{{ draft?.copied ? '已复制提示词' : '外部 Agent 提示词' }}</summary>
+      <summary>{{ promptLabel }}{{ draft?.copied ? ' · 已复制' : '' }}</summary>
+      <p v-if="promptFreshness === 'older_revision'" class="workflow-basis" role="status">
+        生成后项目已更新（生成版本 {{ draft.promptProjectRevision }}，当前显示版本
+        {{ project.revision }}）。此处保留原文；再次交接前请核对，或使用上方按钮明确重新生成。
+      </p>
+      <p v-else-if="promptFreshness === 'unknown'" class="muted" role="status">
+        生成版本未记录，或当前项目状态尚未同步，无法核对这份提示词。使用前请重新核对。
+      </p>
+      <p v-else class="muted">
+        生成版本 {{ draft.promptProjectRevision }} 与当前显示的项目版本一致。
+      </p>
+      <small>这里只对照已显示的项目版本，不代表已检查仓库现状或内容正确。</small>
       <button class="button secondary" :disabled="blocked" @click="copySavedPrompt">
-        复制已生成提示词
+        复制{{ promptLabel }}
       </button>
       <textarea
         :value="draft?.prompt"
         readonly
         rows="7"
-        aria-label="外部 Agent 提示词"
+        :aria-label="promptLabel"
         @focus="($event.target as HTMLTextAreaElement).select()"
       />
     </details>

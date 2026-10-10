@@ -20,7 +20,10 @@ class AcceptanceService:
         m = p.milestone(milestone_id)
         if not m.lease_active:
             raise ValueError("请先检查前置条件并领取任务")
-        return {"prompt": self._implementation_prompt(p, m)}
+        return {
+            "prompt": self._implementation_prompt(p, m),
+            "project_revision": p.revision,
+        }
 
     @classmethod
     def _implementation_prompt(cls, p, m) -> str:
@@ -186,6 +189,7 @@ class AcceptanceService:
         return {
             "request_id": request.id,
             "prompt": self._acceptance_prompt(p, m, request, template),
+            "project_revision": p.revision,
         }
 
     def import_report(self, project_id: str, milestone_id: str, report: AcceptanceReport):

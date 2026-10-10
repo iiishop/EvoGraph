@@ -4,6 +4,8 @@ export type WorkflowDraft = {
   report: string;
   revision: number;
   prompt: string;
+  promptKind: 'implementation' | 'verification' | null;
+  promptProjectRevision: number | null;
   error: string;
   notice: string;
   syncError: string;
@@ -38,6 +40,8 @@ export function createWorkflowDrafts() {
         report: '',
         revision: 0,
         prompt: '',
+        promptKind: null,
+        promptProjectRevision: null,
         error: '',
         notice: '',
         syncError: '',
@@ -100,6 +104,24 @@ export function createWorkflowDrafts() {
   };
 }
 export const workflowDrafts = createWorkflowDrafts();
+
+/** Compare only saved project versions, never repository freshness or semantic validity. */
+export function savedPromptFreshness(draft: WorkflowDraft | undefined, displayedRevision?: number) {
+  const generated = draft?.promptProjectRevision;
+  if (
+    !draft?.promptKind ||
+    draft.syncError ||
+    !Number.isSafeInteger(generated) ||
+    generated === null ||
+    generated === undefined ||
+    generated < 0 ||
+    !Number.isSafeInteger(displayedRevision) ||
+    displayedRevision === undefined ||
+    displayedRevision < generated
+  )
+    return 'unknown';
+  return displayedRevision === generated ? 'same_revision' : 'older_revision';
+}
 
 /** A confirmed mutation is still successful when the following read fails. */
 export async function runWorkflowAction<T>(options: {

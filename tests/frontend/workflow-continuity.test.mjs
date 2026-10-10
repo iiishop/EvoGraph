@@ -44,6 +44,7 @@ const imports = {
   '../../composables/useWorkspace': envUrl,
   '../../composables/useAgent': envUrl,
   '../../composables/useWorkflowDrafts': draftsUrl,
+  '../../lib/copyText': url(compile(read('lib/copyText.ts'))),
   './ObligationItem.vue': url('export default { render() { return null; } };'),
 };
 const { descriptor } = parse(read('components/graph/TaskWorkflow.vue'));
@@ -89,6 +90,7 @@ function harness() {
   const projectId = `P${++sequence}`;
   const project = {
     id: projectId,
+    revision: 4,
     readiness: {
       A: { safe_to_execute: true, blockers: [] },
       B: { safe_to_execute: true, blockers: [] },
@@ -102,10 +104,11 @@ function harness() {
   env.mutate = async () => ({});
   env.sync = async () => {};
   const copied = [];
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: { writeText: async (value) => copied.push(value) },
-  });
+  document.execCommand = (command) => {
+    assert.equal(command, 'copy');
+    copied.push(document.activeElement.value);
+    return true;
+  };
   let app, root;
   function mount() {
     root = document.createElement('div');
@@ -178,7 +181,7 @@ test('late handoff stores its original prompt after unmount without clipboard or
   click(view, '重新生成验收提示词');
   await flush();
   view.unmount();
-  action.resolve({ prompt: 'Original A prompt' });
+  action.resolve({ prompt: 'Original A prompt', project_revision: 4 });
   await flush();
   assert.equal(view.draft().prompt, 'Original A prompt');
   assert.deepEqual(view.copied, []);
@@ -201,7 +204,7 @@ test('A to B to A navigation invalidates old clipboard intent even if component 
   await view.select('B');
   await input(view, 'new B');
   await view.select('A');
-  action.resolve({ prompt: 'A prompt' });
+  action.resolve({ prompt: 'A prompt', project_revision: 4 });
   await flush();
   assert.deepEqual(view.copied, []);
   assert.equal(view.draft('B').report, 'new B');
@@ -414,4 +417,216 @@ test('newer unsubmitted report stays visible after a confirmed import changes th
     assert.match(view.root.textContent, /未随上一份报告提交/);
     view.unmount();
   }
+});
+
+test('both export kinds keep exact response provenance and only matching displayed revisions auto-copy', async () => {
+  for (const kind of ['implementation', 'verification']) {
+    const view = harness();
+    const prompt = '  exact prompt\n<script>literal reference</script>\n  ';
+    if (kind === 'implementation') view.current.milestone.status = 'IN_PROGRESS';
+    env.mutate = async () => ({ prompt, project_revision: 7 });
+    env.sync = async () => {
+      view.current.project.revision = 7;
+    };
+    await flush();
+    click(view, kind === 'implementation' ? '复制制作提示词' : '重新生成验收提示词');
+    await flush();
+    assert.equal(view.draft().promptKind, kind);
+    assert.equal(
+      view.draft().promptProjectRevision,
+      7,
+      'use export response, not pre-export revision',
+    );
+    assert.equal(view.draft().prompt, prompt);
+    assert.equal(view.root.querySelector('.handoff-prompt textarea').value, prompt);
+    assert.equal(view.root.querySelector('.handoff-prompt script'), null);
+    assert.match(
+      view.root.querySelector('.handoff-prompt').textContent,
+      /生成版本 7 与当前显示的项目版本一致/,
+    );
+    assert.match(
+      view.root.querySelector('.handoff-prompt').textContent,
+      /不代表已检查仓库现状或内容正确/,
+    );
+    assert.deepEqual(view.copied, [prompt]);
+    assert.deepEqual(
+      env.calls.map((call) => call.action),
+      [`${kind}.export`],
+    );
+    view.unmount();
+  }
+});
+
+test('later project changes label preserved prompts historical without regenerating or changing reports', async () => {
+  for (const kind of ['implementation', 'verification']) {
+    const view = harness();
+    const kindLabel = kind === 'implementation' ? '制作' : '验收';
+    Object.assign(view.draft(), {
+      prompt: ' exact saved prompt\n ',
+      promptKind: kind,
+      promptProjectRevision: 4,
+      report: ' exact saved report\n ',
+      copied: true,
+    });
+    view.current.project.revision = 6;
+    await flush();
+    assert.match(view.root.querySelector('.handoff-prompt').textContent, /生成后项目已更新/);
+    assert.match(
+      view.root.querySelector('.handoff-prompt').textContent,
+      /生成版本 4，当前显示版本 6/,
+    );
+    assert.equal(
+      view.root.querySelector('.handoff-prompt summary').textContent,
+      `历史${kindLabel}提示词 · 已复制`,
+    );
+    click(view, `复制历史${kindLabel}提示词`);
+    await flush();
+    assert.deepEqual(view.copied, [' exact saved prompt\n ']);
+    assert.equal(view.draft().report, ' exact saved report\n ');
+    assert.equal(view.draft().promptProjectRevision, 4);
+    assert.deepEqual(
+      env.calls,
+      [],
+      'historical copying must never re-export or invalidate requests',
+    );
+    view.unmount();
+    view.mount();
+    assert.equal(
+      view.root.querySelector('.handoff-prompt textarea').value,
+      ' exact saved prompt\n ',
+    );
+    assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /历史/);
+    view.unmount();
+  }
+});
+
+test('a newer refresh cannot relabel an older export as current or silently copy it', async () => {
+  const view = harness();
+  env.mutate = async () => ({ prompt: 'exported from version 5', project_revision: 5 });
+  env.sync = async () => {
+    view.current.project.revision = 6;
+  };
+  click(view, '重新生成验收提示词');
+  await flush();
+  assert.equal(view.draft().promptProjectRevision, 5);
+  assert.equal(view.draft().prompt, 'exported from version 5');
+  assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /历史验收提示词/);
+  assert.deepEqual(view.copied, []);
+  assert.equal(env.calls.length, 1);
+  view.unmount();
+});
+
+test('legacy and malformed provenance remain explicitly unknown without discarding prompt text', async () => {
+  for (const project_revision of [undefined, null, -1, 4.5, '4']) {
+    const view = harness();
+    env.mutate = async () => ({ prompt: 'legacy result', project_revision });
+    click(view, '重新生成验收提示词');
+    await flush();
+    assert.equal(view.draft().promptProjectRevision, null);
+    assert.match(
+      view.root.querySelector('.handoff-prompt summary').textContent,
+      /未核对的验收提示词/,
+    );
+    assert.match(view.root.querySelector('.handoff-prompt').textContent, /无法核对这份提示词/);
+    assert.deepEqual(view.copied, []);
+    click(view, '复制未核对的验收提示词');
+    await flush();
+    assert.deepEqual(view.copied, ['legacy result']);
+    assert.equal(env.calls.length, 1);
+    view.unmount();
+  }
+  const view = harness();
+  view.draft().prompt = 'older session prompt';
+  delete view.draft().promptKind;
+  delete view.draft().promptProjectRevision;
+  await flush();
+  assert.match(
+    view.root.querySelector('.handoff-prompt summary').textContent,
+    /未核对的提示词（类型未知）/,
+  );
+  click(view, '复制未核对的提示词（类型未知）');
+  await flush();
+  assert.deepEqual(view.copied, ['older session prompt']);
+  assert.deepEqual(env.calls, []);
+  view.unmount();
+});
+
+test('confirmed export with failed refresh keeps result and provenance, blocks repeat export, and does not auto-copy', async () => {
+  const view = harness();
+  await input(view, 'unsent exact report');
+  env.mutate = async () => ({ prompt: 'confirmed acceptance request', project_revision: 5 });
+  env.sync = async () => {
+    throw new Error('refresh failed');
+  };
+  click(view, '重新生成验收提示词');
+  await flush();
+  assert.equal(view.draft().prompt, 'confirmed acceptance request');
+  assert.equal(view.draft().promptProjectRevision, 5);
+  assert.equal(view.draft().report, 'unsent exact report');
+  assert.match(view.draft().notice, /验收请求已生成/);
+  assert.match(view.draft().syncError, /操作已保存/);
+  assert.equal(view.draft().error, '');
+  assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /未核对/);
+  assert.deepEqual(view.copied, []);
+  click(view, '重新生成验收提示词');
+  await flush();
+  assert.equal(env.calls.length, 1);
+  env.sync = async () => {
+    view.current.project.revision = 6;
+  };
+  click(view, '刷新状态');
+  await flush();
+  assert.equal(view.draft().syncError, '');
+  assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /历史验收提示词/);
+  assert.equal(view.draft().promptProjectRevision, 5);
+  assert.deepEqual(view.copied, []);
+  assert.equal(env.calls.length, 1);
+  view.unmount();
+});
+
+test('display behind the export result remains unconfirmed until the saved version is shown', async () => {
+  const view = harness();
+  env.mutate = async () => ({ prompt: 'new request', project_revision: 5 });
+  click(view, '重新生成验收提示词');
+  await flush();
+  assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /未核对/);
+  assert.deepEqual(view.copied, []);
+  view.current.project.revision = 5;
+  await flush();
+  assert.match(
+    view.root.querySelector('.handoff-prompt summary').textContent,
+    /已保存的验收提示词/,
+  );
+  assert.deepEqual(view.copied, [], 'a later state update must not invent a clipboard intent');
+  view.unmount();
+});
+
+test('late export provenance stays with the originating project even when milestone IDs match', async () => {
+  const view = harness(),
+    action = deferred();
+  const firstProject = view.current.project;
+  env.mutate = () => action.promise;
+  click(view, '重新生成验收提示词');
+  await flush();
+  const other = { ...firstProject, id: `${view.projectId}-other`, revision: 4 };
+  view.current.project = other;
+  env.state.project = other;
+  await flush();
+  const otherDraft = workflowDrafts.entry(other.id, 'A');
+  otherDraft.report = 'other project report';
+  action.resolve({ prompt: 'first project prompt', project_revision: 4 });
+  await flush();
+  assert.equal(view.draft().prompt, 'first project prompt');
+  assert.equal(view.draft().promptKind, 'verification');
+  assert.equal(view.draft().promptProjectRevision, 4);
+  assert.equal(otherDraft.prompt, '');
+  assert.equal(otherDraft.promptProjectRevision, null);
+  assert.equal(otherDraft.report, 'other project report');
+  assert.deepEqual(view.copied, []);
+  view.current.project = firstProject;
+  env.state.project = firstProject;
+  firstProject.revision = 6;
+  await flush();
+  assert.match(view.root.querySelector('.handoff-prompt summary').textContent, /历史验收提示词/);
+  view.unmount();
 });
