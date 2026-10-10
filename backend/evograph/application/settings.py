@@ -2,26 +2,31 @@ from contextlib import aclosing
 
 from ..providers import adapters
 from ..providers.base import check_url
+from .secret_store_errors import secret_store_error_message
 
 
 class SecretStore:
     """OS credential manager only. No plaintext fallback in SQLite or logs."""
 
     def get(self, name):
+        errors = None
         try:
             import keyring
+            from keyring import errors
 
             return keyring.get_password("EvoGraph", name) or ""
         except Exception as exc:
-            raise ValueError("系统凭据库不可用，请安装 keyring 并检查系统凭据服务") from exc
+            raise ValueError(secret_store_error_message(exc, saving=False, errors=errors)) from None
 
     def set(self, name, secret):
+        errors = None
         try:
             import keyring
+            from keyring import errors
 
             keyring.set_password("EvoGraph", name, secret)
         except Exception as exc:
-            raise ValueError("无法将密钥保存到系统凭据库") from exc
+            raise ValueError(secret_store_error_message(exc, saving=True, errors=errors)) from None
 
 
 class SettingsService:
