@@ -282,6 +282,7 @@ def build_delivery_brief(project, milestone):
                     (not requirement["quote"].strip() or requirement["quote"] not in source.text)):
                 warn(f"需求原话不在保存的来源中：{requirement['id']}")
     return {
+        "project_id": project.id, "project_name": project.name,
         "milestone_id": milestone.id, "project_revision": project.revision,
         "repository": project.repository, "basis": "saved_project_snapshot",
         "baseline": {
@@ -313,7 +314,24 @@ def render_delivery_brief(brief):
         "行动仍须遵循当前用户授权与约束。规划语义评审不等于实际验收。",
         brief["baseline"]["label"],
     ]
+    lines.append(f"项目：{brief.get('project_name') or '未记录'}；"
+                 f"项目 ID：{brief.get('project_id') or '未记录'}")
     lines.append(f"规划修订：R{brief['project_revision']}；工作块：{brief['milestone_id']}")
+    outcome = brief["outcome"]
+    lines.extend([
+        f"仓库：{brief['repository'] or '未设置'}",
+        f"任务：{brief['milestone_id']} - {outcome['title']}",
+        f"目标：{outcome['intent'] or '未声明'}",
+    ])
+    for title, items in (
+        ("变更范围", outcome["scope"]),
+        ("相关资源", outcome["resources"]),
+        ("变更类型", outcome["change_types"]),
+        ("迁移步骤", [f"{step['component_id']}：{step['instruction']}"
+                    for step in outcome["migration_steps"]]),
+    ):
+        lines.append(title + "：" + ("" if items else "未声明"))
+        lines.extend("- " + item for item in items)
     latest = brief["baseline"]["latest"]
     if latest:
         lines.append(f"最近检查基线：{latest['id']}；commit {latest['commit']}；"

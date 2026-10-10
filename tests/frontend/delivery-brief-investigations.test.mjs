@@ -15,6 +15,7 @@ const { createApp, h, nextTick, reactive } = await import(vue);
 const imports = {
   vue,
   'lucide-vue-next': import.meta.resolve('lucide-vue-next'),
+  '../../lib/copyText': moduleUrl(compile(source('lib/copyText.ts'))),
 };
 function component(path, dependencies) {
   const { descriptor } = parse(source(path));
@@ -314,7 +315,11 @@ test('revision reload hides old investigations while loading and ignores superse
 });
 
 test('mismatched revision or milestone blocks record display and a read-only retry can recover', async () => {
-  for (const mismatch of [{ project_revision: 3 }, { milestone_id: 'M-other' }]) {
+  for (const mismatch of [
+    { project_revision: 3 },
+    { milestone_id: 'M-other' },
+    { project_id: 'other-project' },
+  ]) {
     const ui = await mount(() =>
       brief({ ...mismatch, investigations: [investigation({ note: '错误快照的记录' })] }),
     );
@@ -335,5 +340,253 @@ test('mismatched revision or milestone blocks record display and a read-only ret
     } finally {
       ui.close();
     }
+  }
+});
+
+const copyButton = (root) => root.querySelector('.brief-copy button');
+const exactText =
+  '交付说明（只描述保存的规划与证据，不执行仓库代码）\n' +
+  '  范围与前置原文\n\t调查尚未完成\n阻塞：仓库未连接\n' +
+  '<script>window.copiedBriefExecuted = true</script>\n' +
+  'https://example.test/source?a=1&b=2\n' +
+  '完整来源、历史记录与验收状态\n'.repeat(300) +
+  '末尾空格  \n';
+
+test('planning copy writes the exact shared text without a repository, lease, or another API action', async () => {
+  const writes = [];
+  document.execCommand = (action) => {
+    assert.equal(action, 'copy');
+    writes.push(document.activeElement.value);
+    return true;
+  };
+  const payload = brief({
+    project_id: 'project',
+    project_name: '示例项目',
+    plain_text: exactText,
+    readiness: { blockers: ['仓库未连接'] },
+  });
+  const before = structuredClone(payload);
+  const ui = await mount(() => payload);
+  try {
+    await tick();
+    const button = copyButton(ui.root);
+    assert.equal(button.textContent.trim(), '复制规划说明');
+    assert.equal(button.disabled, false);
+    assert.deepEqual(writes, [], 'opening the dialog must not write to the clipboard');
+    button.focus();
+    button.click();
+    await tick();
+    assert.deepEqual(writes, [exactText]);
+    assert.equal(document.activeElement, button);
+    assert.equal(ui.root.querySelector('[role="status"]').textContent, '已复制规划说明');
+    assert.match(ui.root.textContent, /不会领取任务、执行实现或生成验收结果/);
+    assert.equal(ui.root.querySelector('textarea'), null);
+    assert.deepEqual(ui.env.calls, [
+      ['implementation.brief', { project_id: 'project', milestone_id: 'M-current' }],
+    ]);
+    assert.deepEqual(payload, before);
+  } finally {
+    ui.close();
+    delete document.execCommand;
+  }
+});
+
+test('clipboard failure offers selectable exact text and retries only on an explicit click', async () => {
+  for (const throws of [false, true]) {
+    let attempts = 0;
+    document.execCommand = () => {
+      attempts++;
+      if (throws) throw new Error('Clipboard unavailable');
+      return false;
+    };
+    const ui = await mount(() => brief({ plain_text: exactText }));
+    try {
+      await tick();
+      copyButton(ui.root).click();
+      await tick();
+      assert.equal(attempts, 1);
+      assert.match(ui.root.querySelector('[role="alert"]').textContent, /剪贴板不可用/);
+      const field = ui.root.querySelector('textarea');
+      assert.equal(field.value, exactText);
+      assert.equal(field.readOnly, true);
+      assert.equal(field.getAttribute('aria-label'), '完整规划说明（手动复制）');
+      field.focus();
+      assert.equal(field.selectionStart, 0);
+      assert.equal(field.selectionEnd, exactText.length);
+      assert.equal(ui.root.querySelectorAll('script, img, iframe').length, 0);
+      assert.equal(dom.window.copiedBriefExecuted, undefined);
+      await tick();
+      assert.equal(attempts, 1, 'rendering and selecting fallback text must not retry copying');
+      document.execCommand = () => {
+        attempts++;
+        return true;
+      };
+      copyButton(ui.root).click();
+      await tick();
+      assert.equal(attempts, 2);
+      assert.equal(ui.root.querySelector('textarea'), null);
+      assert.equal(ui.root.querySelector('[role="status"]').textContent, '已复制规划说明');
+      assert.equal(ui.env.calls.length, 1);
+    } finally {
+      ui.close();
+      delete document.execCommand;
+    }
+  }
+});
+
+test('legacy absent or empty text has an honest disabled fallback without frontend reconstruction', async () => {
+  let writes = 0;
+  document.execCommand = () => {
+    writes++;
+    return true;
+  };
+  try {
+    for (const plain_text of [undefined, '', ' \n\t ', null]) {
+      const ui = await mount(() => brief({ plain_text }));
+      try {
+        await tick();
+        assert.equal(copyButton(ui.root).disabled, true);
+        assert.match(ui.root.textContent, /未提供完整规划文本，暂不能复制/);
+        copyButton(ui.root).click();
+        await tick();
+        assert.equal(ui.root.querySelector('textarea'), null);
+        assert.equal(ui.env.calls.length, 1);
+      } finally {
+        ui.close();
+      }
+    }
+    assert.equal(writes, 0);
+  } finally {
+    delete document.execCommand;
+  }
+});
+
+test('copy blocks same-tick project, revision, and milestone changes and clears previous feedback', async () => {
+  const changes = [
+    (ui) => {
+      ui.project.id = 'project-next';
+    },
+    (ui) => {
+      ui.project.revision = 5;
+    },
+    (ui) => {
+      ui.milestone.id = 'M-next';
+    },
+  ];
+  for (const change of changes) {
+    const writes = [];
+    document.execCommand = () => {
+      writes.push(document.activeElement.value);
+      return false;
+    };
+    const ui = await mount(() => brief({ plain_text: 'Previous brief' }));
+    try {
+      await tick();
+      const previousButton = copyButton(ui.root);
+      previousButton.click();
+      await tick();
+      assert.equal(ui.root.querySelector('textarea').value, 'Previous brief');
+      const pending = deferred();
+      ui.env.handler = () => pending.promise;
+      change(ui);
+      previousButton.click(); // Before the watcher or DOM can update.
+      assert.deepEqual(writes, ['Previous brief']);
+      await tick();
+      assert.equal(copyButton(ui.root), null);
+      assert.equal(ui.root.querySelector('textarea'), null);
+      pending.resolve(
+        brief({
+          project_revision: ui.project.revision,
+          milestone_id: ui.milestone.id,
+          plain_text: 'Current brief',
+        }),
+      );
+      await tick();
+      assert.equal(ui.root.querySelector('textarea'), null);
+      assert.equal(ui.root.querySelector('[role="alert"]'), null);
+      assert.equal(ui.root.querySelector('[role="status"]'), null);
+      copyButton(ui.root).click();
+      await tick();
+      assert.deepEqual(writes, ['Previous brief', 'Current brief']);
+      assert.equal(ui.root.querySelector('textarea').value, 'Current brief');
+    } finally {
+      ui.close();
+      delete document.execCommand;
+    }
+  }
+});
+
+test('superseded project responses with identical milestone and revision cannot replace copy text', async () => {
+  for (const oldFails of [false, true]) {
+    const old = deferred();
+    const current = deferred();
+    const writes = [];
+    document.execCommand = () => {
+      writes.push(document.activeElement.value);
+      return true;
+    };
+    const ui = await mount(() => old.promise);
+    try {
+      await tick();
+      ui.env.handler = () => current.promise;
+      ui.project.id = 'another-project';
+      await tick();
+      current.resolve(brief({ plain_text: 'Another project brief' }));
+      await tick();
+      if (oldFails) old.reject(new Error('Previous project read failed'));
+      else old.resolve(brief({ plain_text: 'Previous project brief' }));
+      await tick();
+      copyButton(ui.root).click();
+      await tick();
+      assert.deepEqual(writes, ['Another project brief']);
+      assert.equal(ui.root.querySelector('[role="alert"]'), null);
+      assert.equal(ui.env.calls.length, 2);
+    } finally {
+      ui.close();
+      delete document.execCommand;
+    }
+  }
+});
+
+test('error, mismatched responses, closing, and unmount cannot leave a usable stale copy action', async () => {
+  const writes = [];
+  document.execCommand = () => {
+    writes.push(document.activeElement.value);
+    return true;
+  };
+  try {
+    for (const outcome of [
+      new Error('Read failed'),
+      { project_revision: 3 },
+      { milestone_id: 'wrong' },
+    ]) {
+      const ui = await mount(() => {
+        if (outcome instanceof Error) throw outcome;
+        return brief({ ...outcome, plain_text: 'Wrong snapshot' });
+      });
+      try {
+        await tick();
+        assert.equal(copyButton(ui.root), null);
+        assert.ok(ui.root.querySelector('[role="alert"]'));
+        assert.equal(ui.root.querySelector('textarea'), null);
+      } finally {
+        ui.close();
+      }
+    }
+    for (const dismiss of [
+      (ui) => ui.root.querySelector('[aria-label="关闭"]').click(),
+      (ui) => ui.close(),
+    ]) {
+      const ui = await mount(() => brief({ plain_text: exactText }));
+      await tick();
+      const oldButton = copyButton(ui.root);
+      dismiss(ui);
+      oldButton.click();
+      await tick();
+      if (ui.root.isConnected) ui.close();
+    }
+    assert.deepEqual(writes, []);
+  } finally {
+    delete document.execCommand;
   }
 });

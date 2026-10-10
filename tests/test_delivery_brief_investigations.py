@@ -51,6 +51,8 @@ class DeliveryBriefInvestigationsTests(unittest.TestCase):
     def test_own_and_transitive_prerequisite_records_keep_all_saved_fields_and_order(self):
         project, own = fixture()
         brief = build_delivery_brief(project, own)
+        self.assertEqual(brief["project_id"], project.id)
+        self.assertEqual(brief["project_name"], project.name)
         records = brief["investigations"]
         expected = [(own, item) for item in own.obligations]
         expected += [(project.milestone(mid), item) for mid in ("M0", "M1")

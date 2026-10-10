@@ -2,12 +2,27 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { DeliveryBrief, Milestone, Project } from '../../types';
 import { command } from '../../api/client';
+import { copyText } from '../../lib/copyText';
 import AppModal from '../ui/AppModal.vue';
 const props = defineProps<{ project: Project; milestone: Milestone }>();
 const emit = defineEmits<{ close: []; locate: [id: string] }>();
-const brief = ref<DeliveryBrief | null>(null);
+// Legacy responses have no project ID; retain the request's origin as well.
+const snapshot = ref<{ projectId: string; brief: DeliveryBrief } | null>(null);
+const brief = computed(() => {
+  const saved = snapshot.value;
+  return saved?.projectId === props.project.id &&
+    saved.brief.project_revision === props.project.revision &&
+    saved.brief.milestone_id === props.milestone.id
+    ? saved.brief
+    : null;
+});
 const loading = ref(false);
 const error = ref('');
+const copyState = ref<'idle' | 'copied' | 'failed'>('idle');
+const plainText = computed(() => {
+  const text = brief.value?.plain_text;
+  return typeof text === 'string' && text.trim() ? text : '';
+});
 let request = 0;
 const own = computed(() => brief.value?.contracts.filter((item) => item.relation === 'own') ?? []);
 const required = computed(
@@ -27,7 +42,13 @@ async function load() {
   const projectId = props.project.id;
   const milestoneId = props.milestone.id;
   const revision = props.project.revision;
-  brief.value = null;
+  const isCurrent = () =>
+    token === request &&
+    props.project.id === projectId &&
+    props.project.revision === revision &&
+    props.milestone.id === milestoneId;
+  snapshot.value = null;
+  copyState.value = 'idle';
   error.value = '';
   loading.value = true;
   try {
@@ -35,29 +56,43 @@ async function load() {
       project_id: projectId,
       milestone_id: milestoneId,
     });
-    if (token !== request) return;
-    if (result.project_revision !== revision || result.milestone_id !== milestoneId) {
+    if (!isCurrent()) return;
+    if (
+      (result.project_id !== undefined && result.project_id !== projectId) ||
+      result.project_revision !== revision ||
+      result.milestone_id !== milestoneId
+    ) {
       error.value = '项目已更新，当前说明未展示。请关闭后刷新项目，再重新打开。';
       return;
     }
-    brief.value = result;
+    snapshot.value = { projectId, brief: result };
   } catch (cause) {
-    if (token === request)
-      error.value = cause instanceof Error ? cause.message : '交付说明读取失败';
+    if (isCurrent()) error.value = cause instanceof Error ? cause.message : '交付说明读取失败';
   } finally {
-    if (token === request) loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
+}
+function copyBrief() {
+  if (loading.value || error.value || !plainText.value) return;
+  copyState.value = copyText(plainText.value) ? 'copied' : 'failed';
+}
+function close() {
+  request++;
+  snapshot.value = null;
+  copyState.value = 'idle';
+  emit('close');
 }
 watch(() => [props.project.id, props.project.revision, props.milestone.id], load, {
   immediate: true,
 });
 onBeforeUnmount(() => {
   request++;
+  snapshot.value = null;
 });
 const date = (value: string) => new Date(value).toLocaleString();
 </script>
 <template>
-  <AppModal title="里程碑交付说明" wide @close="emit('close')">
+  <AppModal title="里程碑交付说明" wide @close="close">
     <div class="delivery-brief" aria-label="单次 Agent 任务的交付说明" :aria-busy="loading">
       <p v-if="loading" class="muted" role="status">正在读取本步范围与完整前置依据…</p>
       <div v-else-if="error" class="brief-warning" role="alert">
@@ -79,6 +114,27 @@ const date = (value: string) => new Date(value).toLocaleString();
             ><span>规划与依据 · 未运行实现</span>
           </div>
         </header>
+        <section class="brief-copy" aria-label="复制规划说明">
+          <button class="button secondary" :disabled="!plainText" @click="copyBrief">
+            复制规划说明
+          </button>
+          <p class="brief-note">用于讨论与交接；复制不会领取任务、执行实现或生成验收结果。</p>
+          <p v-if="!plainText" class="muted">
+            当前响应未提供完整规划文本，暂不能复制；仍可查看本页说明。
+          </p>
+          <p v-else-if="copyState === 'copied'" role="status">已复制规划说明</p>
+          <template v-else-if="copyState === 'failed'">
+            <p role="alert">剪贴板不可用，请从下方选择并手动复制完整规划说明。</p>
+            <textarea
+              :value="plainText"
+              readonly
+              rows="10"
+              spellcheck="false"
+              aria-label="完整规划说明（手动复制）"
+              @focus="($event.target as HTMLTextAreaElement).select()"
+            />
+          </template>
+        </section>
         <section class="brief-basis">
           <h4>起点与状态</h4>
           <p>{{ brief.baseline.label }}</p>
@@ -315,6 +371,12 @@ const date = (value: string) => new Date(value).toLocaleString();
 .brief-counts span + span::before {
   content: '·';
   margin-right: 14px;
+}
+.brief-copy textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
 }
 .brief-basis,
 .brief-warning {

@@ -13,7 +13,8 @@ class AcceptanceService:
 
     def brief(self, project_id: str, milestone_id: str):
         p = self.db.get(project_id)
-        return build_delivery_brief(p, p.milestone(milestone_id))
+        brief = build_delivery_brief(p, p.milestone(milestone_id))
+        return {**brief, "plain_text": render_delivery_brief(brief)}
 
     def implementation(self, project_id: str, milestone_id: str):
         p = self.db.get(project_id)
@@ -43,20 +44,6 @@ class AcceptanceService:
             "只实现本任务需要的最小闭环；不要重写项目结构，不要替 EvoGraph 修改计划图，"
             "不要编造验收结果。正式验收会由另一个外部验收 Agent 完成。",
             "",
-            f"项目：{p.name}",
-            f"仓库：{p.repository or '未设置'}",
-            f"任务：{m.id} - {m.title}",
-            f"目标：{m.intent}",
-            cls._list("变更范围", m.scope),
-            cls._list("相关资源", m.resources),
-            cls._list("变更类型", m.change_types),
-            cls._list(
-                "迁移步骤",
-                [
-                    f"{step.component_id}：{step.instruction}"
-                    for step in m.migration_steps
-                ],
-            ),
             cls._contract_brief(p, m),
             cls._architecture_brief(architecture, components, technologies),
             cls._list(
@@ -115,9 +102,6 @@ class AcceptanceService:
             "选择有代表性的自动化、人工或视觉检查。不要修改产品代码；如果必须修复才能通过，"
             "本次返回 FAIL，并说明原因。未检查、受阻或证据不足的条目不得 PASS。",
             "",
-            f"项目：{p.name}",
-            f"仓库：{p.repository or '未设置'}",
-            f"任务：{m.id} - {m.title}",
             f"验收目标：{m.intent}",
             f"验收请求：{request.id}",
             AcceptanceService._list("验收范围", m.scope),

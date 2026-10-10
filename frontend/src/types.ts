@@ -287,6 +287,9 @@ export interface PlanProcessConstraint {
   rule: 'planning_only' | 'no_external_research' | 'other';
 }
 export interface DeliveryBrief {
+  plain_text?: string;
+  project_id?: string;
+  project_name?: string;
   milestone_id: string;
   project_revision: number;
   repository: string;
