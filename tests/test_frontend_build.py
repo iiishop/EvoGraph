@@ -351,6 +351,7 @@ def test_conflicting_cli_flags_fail_before_build_or_state(monkeypatch, capsys):
 @pytest.mark.parametrize("name", [
     "frontend/src/main.ts", "frontend/index.html", "frontend/public/logo.svg",
     "package-lock.json", "package.json", "tsconfig.json", "vite.config.ts",
+    "tools/check_frontend_dependencies.mjs",
     "tools/frontend_provenance.mjs", "tools/frontend_provenance.d.mts",
 ])
 def test_content_change_is_stale_even_with_preserved_or_older_timestamp(tmp_path, name):

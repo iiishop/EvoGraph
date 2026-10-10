@@ -10,6 +10,7 @@ const sourcePaths = [
   'package-lock.json',
   'tsconfig.json',
   'vite.config.ts',
+  'tools/check_frontend_dependencies.mjs',
   'tools/frontend_provenance.mjs',
   'tools/frontend_provenance.d.mts',
 ];
@@ -23,7 +24,7 @@ function exists(path) {
   }
 }
 
-function verifyDependencies(root) {
+export function verifyDependencies(root) {
   const read = (path) => JSON.parse(readFileSync(join(root, path), 'utf8'));
   const manifest = read('package.json');
   const hasLock = exists(join(root, 'package-lock.json'));

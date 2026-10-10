@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "node tools/check_frontend_dependencies.mjs && vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "format:check": "prettier --check frontend/src",
     "test": "node --test tests/frontend/*.test.mjs"

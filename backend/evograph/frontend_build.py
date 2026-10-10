@@ -24,6 +24,7 @@ WATCHED_PATHS = (
     "package-lock.json",
     "tsconfig.json",
     "vite.config.ts",
+    "tools/check_frontend_dependencies.mjs",
     "tools/frontend_provenance.mjs",
     "tools/frontend_provenance.d.mts",
 )
